@@ -5,7 +5,9 @@ pub const Image = @import("Image.zig");
 pub const Interpreter = @import("Interpreter.zig");
 pub const Module = @import("Module.zig");
 pub const State = @import("State.zig");
+
 const opcode = @import("opcode.zig");
+const spv_data = @import("spv_data.zig");
 
 pub const SpvVoid = void;
 pub const SpvByte = u8;
@@ -18,4 +20,5 @@ test {
     std.testing.refAllDecls(Module);
     std.testing.refAllDecls(State);
     std.testing.refAllDecls(opcode);
+    std.testing.refAllDecls(spv_data);
 }
