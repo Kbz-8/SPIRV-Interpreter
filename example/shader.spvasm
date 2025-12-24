@@ -1,0 +1,242 @@
+; SPIR-V
+; Version: 1.5
+; Generator: Zig Software Foundation Zig Compiler; 2048
+; Bound: 126
+; Schema: 0
+               OpCapability Shader
+               OpCapability Matrix
+               OpCapability Int8
+               OpCapability Int16
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint Fragment %105 "main" %frag_color
+               OpExecutionMode %105 OriginUpperLeft
+          %5 = OpString "shader.zig"
+         %26 = OpString "gpu.zig"
+               OpSourceExtension "zig_errors:"
+               OpSource Zig 2048
+               OpName %void "void"
+               OpName %f32 "f32"
+               OpName %u32 "u32"
+               OpName %shader_main "shader.main"
+               OpName %gpu_location__anon_545 "gpu.location__anon_545"
+               OpName %initializer_of_builtin_zig_backend "initializer of builtin.zig_backend"
+               OpName %u8 "u8"
+               OpName %initializer_of_start_simplified_logic "initializer of start.simplified_logic"
+               OpName %initializer_of_builtin_output_mode "initializer of builtin.output_mode"
+               OpName %frag_color "frag_color"
+               OpMemberName %Target_Cpu_Feature_Set 0 "ints"
+               OpName %Target_Cpu_Feature_Set "Target.Cpu.Feature.Set"
+               OpName %Target_Cpu_Feature_Set "Target.Cpu.Feature.Set"
+               OpName %Target_Cpu_Feature_Set "Target.Cpu.Feature.Set"
+               OpName %initializer_of_Target_Cpu_Feature_Set_empty "initializer of Target.Cpu.Feature.Set.empty"
+               OpMemberName %_struct_57 0 "ptr"
+               OpMemberName %_struct_57 1 "len"
+               OpName %Target_Cpu_Feature_Set "Target.Cpu.Feature.Set"
+               OpMemberName %Target_Cpu_Model 0 "name"
+               OpMemberName %Target_Cpu_Model 1 "llvm_name"
+               OpMemberName %Target_Cpu_Model 2 "features"
+               OpName %Target_Cpu_Model "Target.Cpu.Model"
+               OpName %Target_Cpu_Feature_Set "Target.Cpu.Feature.Set"
+               OpMemberName %Target_Cpu 0 "arch"
+               OpMemberName %Target_Cpu 1 "model"
+               OpMemberName %Target_Cpu 2 "features"
+               OpName %Target_Cpu "Target.Cpu"
+               OpName %Target_Cpu_Feature_Set "Target.Cpu.Feature.Set"
+               OpName %Target_Cpu_Model "Target.Cpu.Model"
+               OpName %Target_Cpu_Feature_Set "Target.Cpu.Feature.Set"
+               OpName %Target_Cpu "Target.Cpu"
+               OpName %Target_Cpu_Feature_Set "Target.Cpu.Feature.Set"
+               OpName %Target_Cpu_Model "Target.Cpu.Model"
+               OpName %Target_Cpu_Feature_Set "Target.Cpu.Feature.Set"
+               OpName %Target_Cpu_Model "Target.Cpu.Model"
+               OpName %Target_Cpu_Feature_Set "Target.Cpu.Feature.Set"
+               OpName %Target_Cpu_Model "Target.Cpu.Model"
+               OpName %Target_Cpu_Feature_Set "Target.Cpu.Feature.Set"
+               OpName %Target_Cpu_Feature_Set "Target.Cpu.Feature.Set"
+               OpName %Target_Cpu_Feature_Set "Target.Cpu.Feature.Set"
+               OpName %Target_Cpu_Model "Target.Cpu.Model"
+               OpName %Target_Cpu_Feature_Set "Target.Cpu.Feature.Set"
+               OpName %Target_Cpu "Target.Cpu"
+               OpName %initializer_of_builtin_cpu "initializer of builtin.cpu"
+               OpMemberName %Target_DynamicLinker 0 "buffer"
+               OpMemberName %Target_DynamicLinker 1 "len"
+               OpName %Target_DynamicLinker "Target.DynamicLinker"
+               OpName %Target_DynamicLinker "Target.DynamicLinker"
+               OpName %Target_DynamicLinker "Target.DynamicLinker"
+               OpName %initializer_of_Target_DynamicLinker_none "initializer of Target.DynamicLinker.none"
+               OpName %Target_Cpu_Feature_Set "Target.Cpu.Feature.Set"
+               OpName %Target_Cpu_Model "Target.Cpu.Model"
+               OpName %Target_Cpu_Feature_Set "Target.Cpu.Feature.Set"
+               OpName %Target_Cpu_Model "Target.Cpu.Model"
+               OpName %initializer_of___anon_1004 "initializer of __anon_1004"
+               OpName %Target_Cpu_Feature_Set "Target.Cpu.Feature.Set"
+               OpName %Target_Cpu_Feature_Set "Target.Cpu.Feature.Set"
+               OpName %Target_Cpu_Feature_Set "Target.Cpu.Feature.Set"
+               OpName %Target_Cpu_Model "Target.Cpu.Model"
+               OpName %initializer_of_Target_spirv_cpu_vulkan_v1_2 "initializer of Target.spirv.cpu.vulkan_v1_2"
+               OpDecorate %frag_color Location 0
+               OpDecorate %_ptr_Output_v4f32 ArrayStride 16
+               OpDecorate %_arr_u32_u32_10 ArrayStride 4
+               OpMemberDecorate %Target_Cpu_Feature_Set 0 Offset 0
+               OpMemberDecorate %Target_Cpu_Model 0 Offset 0
+               OpMemberDecorate %Target_Cpu_Model 1 Offset 8
+               OpMemberDecorate %Target_Cpu_Model 2 Offset 16
+               OpMemberDecorate %Target_Cpu 0 Offset 0
+               OpMemberDecorate %Target_Cpu 1 Offset 4
+               OpMemberDecorate %Target_Cpu 2 Offset 8
+               OpDecorate %_arr_u8_u32_255 ArrayStride 1
+               OpMemberDecorate %Target_DynamicLinker 0 Offset 0
+               OpMemberDecorate %Target_DynamicLinker 1 Offset 255
+               OpDecorate %_arr_u8_u32_12 ArrayStride 1
+       %void = OpTypeVoid
+        %f32 = OpTypeFloat 32
+%_ptr_Output_f32 = OpTypePointer Output %f32
+      %v4f32 = OpTypeVector %f32 4
+%_ptr_Output_v4f32 = OpTypePointer Output %v4f32
+        %u32 = OpTypeInt 32 0
+      %u32_0 = OpConstant %u32 0
+      %f32_1 = OpConstant %f32 1
+      %u32_1 = OpConstant %u32 1
+      %u32_2 = OpConstant %u32 2
+      %u32_3 = OpConstant %u32 3
+         %24 = OpUndef %u32
+         %28 = OpUndef %u32
+%_arr_u32_u32_2 = OpTypeArray %u32 %u32_2
+%_ptr_Function__arr_u32_u32_2 = OpTypePointer Function %_arr_u32_u32_2
+     %u32_11 = OpConstant %u32 11
+         %u8 = OpTypeInt 8 0
+%_ptr_Function_u8 = OpTypePointer Function %u8
+       %u8_1 = OpConstant %u8 1
+       %u8_2 = OpConstant %u8 2
+ %frag_color = OpVariable %_ptr_Output_v4f32 Output
+     %u32_10 = OpConstant %u32 10
+%_arr_u32_u32_10 = OpTypeArray %u32 %u32_10
+%Target_Cpu_Feature_Set = OpTypeStruct %_arr_u32_u32_10
+%_ptr_Function_Target_Cpu_Feature_Set = OpTypePointer Function %Target_Cpu_Feature_Set
+ %_struct_57 = OpTypeStruct %_ptr_Function_u8 %u32
+%Target_Cpu_Model = OpTypeStruct %_struct_57 %_struct_57 %Target_Cpu_Feature_Set
+%_ptr_Function_Target_Cpu_Model = OpTypePointer Function %Target_Cpu_Model
+ %Target_Cpu = OpTypeStruct %u8 %_ptr_Function_Target_Cpu_Model %Target_Cpu_Feature_Set
+%_ptr_Function_Target_Cpu = OpTypePointer Function %Target_Cpu
+      %u8_45 = OpConstant %u8 45
+   %u32_4032 = OpConstant %u32 4032
+    %u32_255 = OpConstant %u32 255
+%_arr_u8_u32_255 = OpTypeArray %u8 %u32_255
+%Target_DynamicLinker = OpTypeStruct %_arr_u8_u32_255 %u8
+%_ptr_Function_Target_DynamicLinker = OpTypePointer Function %Target_DynamicLinker
+         %77 = OpUndef %_arr_u8_u32_255
+       %u8_0 = OpConstant %u8 0
+     %u32_12 = OpConstant %u32 12
+%_arr_u8_u32_12 = OpTypeArray %u8 %u32_12
+%_ptr_Function__arr_u8_u32_12 = OpTypePointer Function %_arr_u8_u32_12
+     %u8_118 = OpConstant %u8 118
+     %u8_117 = OpConstant %u8 117
+     %u8_108 = OpConstant %u8 108
+     %u8_107 = OpConstant %u8 107
+      %u8_97 = OpConstant %u8 97
+     %u8_110 = OpConstant %u8 110
+      %u8_95 = OpConstant %u8 95
+      %u8_49 = OpConstant %u8 49
+      %u8_50 = OpConstant %u8 50
+        %100 = OpConstantNull %_struct_57
+   %u32_2048 = OpConstant %u32 2048
+        %106 = OpTypeFunction %void
+        %107 = OpTypeFunction %void %_ptr_Function__arr_u32_u32_2
+        %109 = OpTypeFunction %void %_ptr_Function_u8
+        %112 = OpTypeFunction %void %_ptr_Function_Target_Cpu_Feature_Set
+        %114 = OpTypeFunction %void %_ptr_Function_Target_Cpu_Model %_ptr_Function_Target_Cpu
+        %117 = OpTypeFunction %void %_ptr_Function_Target_DynamicLinker
+        %119 = OpTypeFunction %void %_ptr_Function__arr_u8_u32_12
+        %121 = OpTypeFunction %void %_ptr_Function__arr_u8_u32_12 %_ptr_Function_Target_Cpu_Model
+%shader_main = OpFunction %void None %106
+          %4 = OpLabel
+               OpLine %5 7 17
+          %6 = OpFunctionCall %void %gpu_location__anon_545
+               OpLine %5 8 5
+         %15 = OpInBoundsAccessChain %_ptr_Output_f32 %frag_color %u32_0
+               OpStore %15 %f32_1 None
+         %18 = OpInBoundsAccessChain %_ptr_Output_f32 %frag_color %u32_1
+               OpStore %18 %f32_1 None
+         %20 = OpInBoundsAccessChain %_ptr_Output_f32 %frag_color %u32_2
+               OpStore %20 %f32_1 None
+         %22 = OpInBoundsAccessChain %_ptr_Output_f32 %frag_color %u32_3
+               OpStore %22 %f32_1 None
+               OpReturn
+         %23 = OpLabel
+               OpUnreachable
+               OpFunctionEnd
+%gpu_location__anon_545 = OpFunction %void None %106
+         %25 = OpLabel
+               OpLine %26 26 5
+               OpReturn
+         %27 = OpLabel
+               OpUnreachable
+               OpFunctionEnd
+%initializer_of_builtin_zig_backend = OpFunction %void None %107
+        %108 = OpFunctionParameter %_ptr_Function__arr_u32_u32_2
+         %33 = OpLabel
+         %35 = OpCompositeConstruct %_arr_u32_u32_2 %u32_11 %u32_0
+               OpStore %108 %35
+               OpReturn
+               OpFunctionEnd
+%initializer_of_start_simplified_logic = OpFunction %void None %109
+        %110 = OpFunctionParameter %_ptr_Function_u8
+         %41 = OpLabel
+               OpStore %110 %u8_1
+               OpReturn
+               OpFunctionEnd
+%initializer_of_builtin_output_mode = OpFunction %void None %109
+        %111 = OpFunctionParameter %_ptr_Function_u8
+         %45 = OpLabel
+               OpStore %111 %u8_2
+               OpReturn
+               OpFunctionEnd
+%initializer_of_Target_Cpu_Feature_Set_empty = OpFunction %void None %112
+        %113 = OpFunctionParameter %_ptr_Function_Target_Cpu_Feature_Set
+         %53 = OpLabel
+         %54 = OpCompositeConstruct %_arr_u32_u32_10 %u32_0 %u32_0 %u32_0 %u32_0 %u32_0 %u32_0 %u32_0 %u32_0 %u32_0 %u32_0
+         %55 = OpCompositeConstruct %Target_Cpu_Feature_Set %54
+               OpStore %113 %55
+               OpReturn
+               OpFunctionEnd
+%initializer_of_builtin_cpu = OpFunction %void None %114
+        %115 = OpFunctionParameter %_ptr_Function_Target_Cpu_Model
+        %116 = OpFunctionParameter %_ptr_Function_Target_Cpu
+         %63 = OpLabel
+         %67 = OpCompositeConstruct %_arr_u32_u32_10 %u32_4032 %u32_0 %u32_0 %u32_0 %u32_0 %u32_0 %u32_0 %u32_0 %u32_0 %u32_0
+         %68 = OpCompositeConstruct %Target_Cpu_Feature_Set %67
+         %69 = OpCompositeConstruct %Target_Cpu %u8_45 %115 %68
+               OpStore %116 %69
+               OpReturn
+               OpFunctionEnd
+%initializer_of_Target_DynamicLinker_none = OpFunction %void None %117
+        %118 = OpFunctionParameter %_ptr_Function_Target_DynamicLinker
+         %76 = OpLabel
+         %79 = OpCompositeConstruct %Target_DynamicLinker %77 %u8_0
+               OpStore %118 %79
+               OpReturn
+               OpFunctionEnd
+%initializer_of___anon_1004 = OpFunction %void None %119
+        %120 = OpFunctionParameter %_ptr_Function__arr_u8_u32_12
+         %87 = OpLabel
+         %97 = OpCompositeConstruct %_arr_u8_u32_12 %u8_118 %u8_117 %u8_108 %u8_107 %u8_97 %u8_110 %u8_95 %u8_118 %u8_49 %u8_95 %u8_50 %u8_0
+               OpStore %120 %97
+               OpReturn
+               OpFunctionEnd
+%initializer_of_Target_spirv_cpu_vulkan_v1_2 = OpFunction %void None %121
+        %122 = OpFunctionParameter %_ptr_Function__arr_u8_u32_12
+        %123 = OpFunctionParameter %_ptr_Function_Target_Cpu_Model
+         %81 = OpLabel
+         %98 = OpBitcast %_ptr_Function_u8 %122
+         %99 = OpCompositeConstruct %_struct_57 %98 %u32_11
+        %102 = OpCompositeConstruct %_arr_u32_u32_10 %u32_2048 %u32_0 %u32_0 %u32_0 %u32_0 %u32_0 %u32_0 %u32_0 %u32_0 %u32_0
+        %103 = OpCompositeConstruct %Target_Cpu_Feature_Set %102
+        %104 = OpCompositeConstruct %Target_Cpu_Model %99 %100 %103
+               OpStore %123 %104
+               OpReturn
+               OpFunctionEnd
+        %105 = OpFunction %void None %106
+        %124 = OpLabel
+        %125 = OpFunctionCall %void %shader_main
+               OpReturn
+               OpFunctionEnd

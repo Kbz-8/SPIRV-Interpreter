@@ -1,6 +1,6 @@
-const lib = @import("lib.zig");
+const spv = @import("spv.zig");
 
-const SpvWord = lib.SpvWord;
+const SpvWord = spv.SpvWord;
 
 const Self = @This();
 

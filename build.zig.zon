@@ -1,12 +1,7 @@
 .{
     .name = .SPIRV_Interpreter,
     .version = "0.0.1",
-    .dependencies = .{
-        .spirv_headers = .{
-            .url = "git+https://github.com/KhronosGroup/SPIRV-Headers#0a7f626a6ae86284a413d105b47a6fb413bf6c92",
-            .hash = "N-V-__8AAGOhPABkbhEc-SenlpOzOI4ppi0CDXVSteii5ywV",
-        },
-    },
+    .dependencies = .{},
     .minimum_zig_version = "0.15.2",
     .paths = .{
         "build.zig",

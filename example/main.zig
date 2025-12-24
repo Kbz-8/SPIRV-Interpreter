@@ -10,11 +10,13 @@ pub fn main() !void {
 
         const allocator = gpa.allocator();
 
-        const ctx = try spv.Interpreter.init();
-        defer ctx.deinit();
-
-        const module = try spv.Module.init(allocator, &ctx, @ptrCast(@alignCast(shader_source)));
+        var module = try spv.Module.init(allocator, @ptrCast(@alignCast(shader_source)));
         defer module.deinit(allocator);
+
+        var rt = try spv.Runtime.init(&module);
+        defer rt.deinit();
+
+        try rt.callEntryPoint(0);
     }
     std.log.info("Successfully executed", .{});
 }

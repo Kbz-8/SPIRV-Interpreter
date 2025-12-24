@@ -10,9 +10,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const spirv_headers = b.dependency("spirv_headers", .{});
-    mod.addSystemIncludePath(spirv_headers.path("include/spirv/unified1"));
-
     const lib = b.addLibrary(.{
         .name = "spirv_interpreter",
         .root_module = mod,
