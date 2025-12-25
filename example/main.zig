@@ -1,7 +1,7 @@
 const std = @import("std");
 const spv = @import("spv");
 
-const shader_source = @embedFile("shader");
+const shader_source = @embedFile("shader.spv");
 
 pub fn main() !void {
     {

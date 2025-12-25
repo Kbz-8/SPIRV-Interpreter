@@ -20,8 +20,7 @@ const SpvEntryPoint = struct {
     exec_model: spv.SpvExecutionModel,
     id: SpvWord,
     name: []const u8,
-    globals_count: SpvWord,
-    globals: []const SpvWord,
+    globals: []SpvWord,
 };
 
 const ModuleError = error{
@@ -46,8 +45,8 @@ code: []const SpvWord,
 addressing: spv.SpvAddressingModel,
 memory_model: spv.SpvMemoryModel,
 
-entry_point_count: SpvWord,
-entry_points: []const SpvEntryPoint,
+entry_points: std.ArrayList(SpvEntryPoint),
+capabilities: std.EnumSet(spv.SpvCapability),
 
 local_size_x: SpvWord,
 local_size_y: SpvWord,
@@ -61,6 +60,8 @@ push_constants: []SpvMember,
 pub fn init(allocator: std.mem.Allocator, source: []const SpvWord) ModuleError!Self {
     var self: Self = std.mem.zeroInit(Self, .{
         .code = allocator.dupe(SpvWord, source) catch return ModuleError.OutOfMemory,
+        .entry_points = std.ArrayList(SpvEntryPoint).empty,
+        .capabilities = std.EnumSet(spv.SpvCapability).initEmpty(),
         .local_size_x = 1,
         .local_size_y = 1,
         .local_size_z = 1,
@@ -92,24 +93,36 @@ pub fn init(allocator: std.mem.Allocator, source: []const SpvWord) ModuleError!S
 
     _ = self.it.skip(); // Skip schema
 
-    while (self.it.next()) |opcode| {
+    const it_save = self.it;
+    while (self.it.next()) |opcode_data| {
+        const word_count = ((opcode_data & (~spv.SpvOpCodeMask)) >> spv.SpvWordCountShift) - 1;
+        const opcode = (opcode_data & spv.SpvOpCodeMask);
+
+        var it_tmp = self.it; // Save because operations may iter on this iterator
         if (std.enums.fromInt(spv.SpvOp, opcode)) |spv_op| {
             if (op.SetupDispatcher.get(spv_op)) |pfn| {
-                pfn(0, &self);
+                pfn(allocator, word_count, &self) catch {};
             }
         }
+        _ = it_tmp.skipN(word_count);
+        self.it = it_tmp;
     }
+    self.it = it_save;
 
     std.log.scoped(.SPIRV_Interpreter).debug(
         \\Loaded shader module with infos:
-        \\    SPIR-V version: {d}.{d}
-        \\    Generator:      {s} (ID {d}), encoded version 0x{X}
+        \\    SPIR-V version:     {d}.{d}
+        \\    Generator:          {s} (ID {d}), encoded version 0x{X}
+        \\    Capabilities count: {d}
+        \\    Entry points count: {d}
     , .{
         self.version_major,
         self.version_minor,
         spv.vendorName(self.generator_id),
         self.generator_id,
         self.generator_version,
+        self.capabilities.count(),
+        self.entry_points.items.len,
     });
 
     return self;
@@ -131,4 +144,9 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
     self.input_locations.deinit();
     self.output_locations.deinit();
     self.bindings.deinit();
+    for (self.entry_points.items) |entry| {
+        allocator.free(entry.name);
+        allocator.free(entry.globals);
+    }
+    self.entry_points.deinit(allocator);
 }

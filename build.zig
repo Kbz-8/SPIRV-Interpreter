@@ -31,24 +31,6 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    const spirv_target = b.resolveTargetQuery(.{
-        .cpu_arch = .spirv32,
-        .cpu_model = .{ .explicit = &std.Target.spirv.cpu.vulkan_v1_2 },
-        .os_tag = .vulkan,
-        .ofmt = .spirv,
-    });
-
-    const shader = b.addObject(.{
-        .name = "shader.zig",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("example/shader.zig"),
-            .target = spirv_target,
-        }),
-        .use_llvm = false,
-    });
-
-    example_exe.root_module.addAnonymousImport("shader", .{ .root_source_file = shader.getEmittedBin() });
-
     const example_install = b.addInstallArtifact(example_exe, .{});
     example_install.step.dependOn(&lib_install.step);
 

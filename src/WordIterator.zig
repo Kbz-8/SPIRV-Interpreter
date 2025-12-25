@@ -31,3 +31,11 @@ pub fn skip(self: *Self) bool {
     self.index += 1;
     return true;
 }
+
+pub fn skipN(self: *Self, count: usize) bool {
+    if (self.index >= self.buffer.len) {
+        return false;
+    }
+    self.index += count;
+    return true;
+}
