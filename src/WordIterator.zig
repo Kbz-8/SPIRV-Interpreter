@@ -1,3 +1,4 @@
+const std = @import("std");
 const spv = @import("spv.zig");
 
 const SpvWord = spv.SpvWord;
@@ -18,6 +19,12 @@ pub fn next(self: *Self) ?SpvWord {
     const word = self.peek() orelse return null;
     self.index += 1;
     return word;
+}
+
+pub fn nextAs(self: *Self, comptime E: type) ?E {
+    const word = self.peek() orelse return null;
+    self.index += 1;
+    return std.enums.fromInt(E, word);
 }
 
 pub fn peek(self: *const Self) ?SpvWord {
