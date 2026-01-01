@@ -14,15 +14,8 @@ const SpvWord = spv.SpvWord;
 const SpvBool = spv.SpvBool;
 
 // DUMB INDEV OPCODES TODO :
-//     OpDecorate           X
-//     OpMemberDecorate     X
-//     OpTypeVoid           X
 //     OpTypeFunction       X
-//     OpTypeFloat          X
-//     OpTypeVector         X
-//     OpTypePointer        X
 //     OpTypeStruct         X
-//     OpTypeInt            X
 //     OpConstant           X
 //     OpVariable           X
 //     OpFunction           X
@@ -41,26 +34,90 @@ pub const SetupDispatcher = block: {
     @setEvalBranchQuota(65535);
     break :block std.EnumMap(spv.SpvOp, OpCodeFunc).init(.{
         .Capability = opCapability,
+        .Decorate = opDecorate,
         .EntryPoint = opEntryPoint,
         .ExecutionMode = opExecutionMode,
-        .MemoryModel = opMemoryModel,
+        .MemberDecorate = opDecorateMember,
         .MemberName = opMemberName,
+        .MemoryModel = opMemoryModel,
         .Name = opName,
         .Source = opSource,
         .SourceExtension = opSourceExtension,
+        .TypeVoid = opTypeVoid,
+        .TypeBool = opTypeBool,
+        .TypeInt = opTypeInt,
+        .TypeFloat = opTypeFloat,
+        .TypeVector = opTypeVector,
+        .TypeMatrix = opTypeMatrix,
+        .TypePointer = opTypePointer,
     });
 };
 
 fn opCapability(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
-    if (rt.it.nextAs(spv.SpvCapability)) |capability| {
-        rt.mod.capabilities.insert(capability);
+    rt.mod.capabilities.insert(try rt.it.nextAs(spv.SpvCapability));
+}
+
+fn addDecoration(allocator: std.mem.Allocator, rt: *Runtime, target: SpvWord, decoration_type: spv.SpvDecoration, member: ?SpvWord) RuntimeError!void {
+    var decoration = rt.mod.results.items[target].decorations.addOne(allocator) catch return RuntimeError.OutOfMemory;
+    decoration.rtype = decoration_type;
+    decoration.index = if (member) |memb| memb else 0;
+
+    switch (decoration_type) {
+        .SpecId,
+        .ArrayStride,
+        .MatrixStride,
+        .BuiltIn,
+        .UniformId,
+        .Stream,
+        .Location,
+        .Component,
+        .Index,
+        .Binding,
+        .DescriptorSet,
+        .Offset,
+        .XfbBuffer,
+        .XfbStride,
+        .FuncParamAttr,
+        .FPRoundingMode,
+        .FPFastMathMode,
+        .InputAttachmentIndex,
+        .Alignment,
+        .MaxByteOffset,
+        .AlignmentId,
+        .MaxByteOffsetId,
+        .SecondaryViewportRelativeNV,
+        .CounterBuffer,
+        .UserSemantic,
+        .UserTypeGOOGLE,
+        => {
+            decoration.literal_1 = try rt.it.next();
+            decoration.literal_2 = null;
+        },
+        .LinkageAttributes => {
+            decoration.literal_1 = try rt.it.next();
+            decoration.literal_2 = try rt.it.next();
+        },
+        else => {},
     }
+}
+
+fn opDecorate(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const target = try rt.it.next();
+    const decoration_type = try rt.it.nextAs(spv.SpvDecoration);
+    try addDecoration(allocator, rt, target, decoration_type, null);
+}
+
+fn opDecorateMember(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const target = try rt.it.next();
+    const member = try rt.it.next();
+    const decoration_type = try rt.it.nextAs(spv.SpvDecoration);
+    try addDecoration(allocator, rt, target, decoration_type, member);
 }
 
 fn opEntryPoint(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
     const entry = rt.mod.entry_points.addOne(allocator) catch return RuntimeError.OutOfMemory;
-    entry.exec_model = rt.it.nextAs(spv.SpvExecutionModel) orelse return RuntimeError.InvalidSpirV;
-    entry.id = rt.it.next() orelse return RuntimeError.InvalidSpirV;
+    entry.exec_model = try rt.it.nextAs(spv.SpvExecutionModel);
+    entry.id = try rt.it.next();
     entry.name = try readString(allocator, &rt.it);
 
     var interface_count = word_count - @divExact(entry.name.len, 4) - 2;
@@ -68,7 +125,7 @@ fn opEntryPoint(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime)
     if (interface_count != 0) {
         var interface_index: u32 = 0;
         while (interface_count != 0) {
-            entry.globals[interface_index] = rt.it.next() orelse return RuntimeError.InvalidSpirV;
+            entry.globals[interface_index] = try rt.it.next();
             interface_index += 1;
             interface_count -= 1;
         }
@@ -77,16 +134,16 @@ fn opEntryPoint(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime)
 
 fn opExecutionMode(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     _ = rt.it.skip();
-    const mode = rt.it.nextAs(spv.SpvExecutionMode) orelse return RuntimeError.InvalidSpirV;
+    const mode = try rt.it.nextAs(spv.SpvExecutionMode);
 
     switch (mode) {
         .LocalSize => {
-            rt.mod.local_size_x = rt.it.next() orelse return RuntimeError.InvalidSpirV;
-            rt.mod.local_size_y = rt.it.next() orelse return RuntimeError.InvalidSpirV;
-            rt.mod.local_size_z = rt.it.next() orelse return RuntimeError.InvalidSpirV;
+            rt.mod.local_size_x = try rt.it.next();
+            rt.mod.local_size_y = try rt.it.next();
+            rt.mod.local_size_z = try rt.it.next();
         },
-        .Invocations => rt.mod.geometry_invocations = rt.it.next() orelse return RuntimeError.InvalidSpirV,
-        .OutputVertices => rt.mod.geometry_output_count = rt.it.next() orelse return RuntimeError.InvalidSpirV,
+        .Invocations => rt.mod.geometry_invocations = try rt.it.next(),
+        .OutputVertices => rt.mod.geometry_output_count = try rt.it.next(),
         .InputPoints, .InputLines, .Triangles, .InputLinesAdjacency, .InputTrianglesAdjacency => rt.mod.geometry_input = @intFromEnum(mode),
         .OutputPoints, .OutputLineStrip, .OutputTriangleStrip => rt.mod.geometry_output = @intFromEnum(mode),
         else => {},
@@ -94,8 +151,8 @@ fn opExecutionMode(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!
 }
 
 fn opMemberName(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
-    const id = rt.it.next() orelse return RuntimeError.InvalidSpirV;
-    const memb = rt.it.next() orelse return RuntimeError.InvalidSpirV;
+    const id = try rt.it.next();
+    const memb = try rt.it.next();
 
     var result = &rt.mod.results.items[id];
 
@@ -108,12 +165,12 @@ fn opMemberName(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime)
 }
 
 fn opMemoryModel(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
-    rt.mod.addressing = rt.it.nextAs(spv.SpvAddressingModel) orelse return RuntimeError.InvalidSpirV;
-    rt.mod.memory_model = rt.it.nextAs(spv.SpvMemoryModel) orelse return RuntimeError.InvalidSpirV;
+    rt.mod.addressing = try rt.it.nextAs(spv.SpvAddressingModel);
+    rt.mod.memory_model = try rt.it.nextAs(spv.SpvMemoryModel);
 }
 
 fn opName(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
-    const id = rt.it.next() orelse return RuntimeError.InvalidSpirV;
+    const id = try rt.it.next();
     if (id >= rt.mod.results.items.len) return RuntimeError.InvalidSpirV;
     var result = &rt.mod.results.items[id];
     result.* = Result.init();
@@ -122,17 +179,17 @@ fn opName(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) Runti
 
 fn opSource(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
     var file = rt.mod.files.addOne(allocator) catch return RuntimeError.OutOfMemory;
-    file.lang = rt.it.nextAs(spv.SpvSourceLanguage) orelse return RuntimeError.InvalidSpirV;
-    file.lang_version = rt.it.next() orelse return RuntimeError.InvalidSpirV;
+    file.lang = try rt.it.nextAs(spv.SpvSourceLanguage);
+    file.lang_version = try rt.it.next();
     if (word_count > 2) {
-        const id = rt.it.next() orelse return RuntimeError.InvalidSpirV;
+        const id = try rt.it.next();
         if (id >= rt.mod.results.items.len) return RuntimeError.InvalidSpirV;
         if (rt.mod.results.items[id].name) |name| {
             file.file_name = name;
         }
     }
     if (word_count > 3) {
-        const id = rt.it.next() orelse return RuntimeError.InvalidSpirV;
+        const id = try rt.it.next();
         if (id >= rt.mod.results.items.len) return RuntimeError.InvalidSpirV;
         if (rt.mod.results.items[id].name) |name| {
             file.source = name;
@@ -144,9 +201,123 @@ fn opSourceExtension(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Run
     rt.mod.extensions.append(allocator, try readStringN(allocator, &rt.it, word_count)) catch return RuntimeError.OutOfMemory;
 }
 
+fn opTypeVoid(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const id = try rt.it.next();
+    rt.mod.results.items[id].res_type = .Type;
+    rt.mod.results.items[id].type_data = .{
+        .Type = .{
+            .value_type = .Void,
+            .data = .{
+                .Void = .{},
+            },
+        },
+    };
+}
+
+fn opTypeBool(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const id = try rt.it.next();
+    rt.mod.results.items[id].res_type = .Type;
+    rt.mod.results.items[id].type_data = .{
+        .Type = .{
+            .value_type = .Bool,
+            .data = .{
+                .Bool = .{},
+            },
+            .member_count = 1,
+        },
+    };
+}
+
+fn opTypeInt(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const id = try rt.it.next();
+    rt.mod.results.items[id].res_type = .Type;
+    rt.mod.results.items[id].type_data = .{
+        .Type = .{
+            .value_type = .Int,
+            .data = .{
+                .Int = .{
+                    .bit_length = try rt.it.next(),
+                    .is_signed = if (try rt.it.next() != 0) true else false,
+                },
+            },
+            .member_count = 1,
+        },
+    };
+}
+
+fn opTypeFloat(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const id = try rt.it.next();
+    rt.mod.results.items[id].res_type = .Type;
+    rt.mod.results.items[id].type_data = .{
+        .Type = .{
+            .value_type = .Float,
+            .data = .{
+                .Float = .{
+                    .bit_length = try rt.it.next(),
+                },
+            },
+            .member_count = 1,
+        },
+    };
+}
+
+fn opTypeVector(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const id = try rt.it.next();
+    rt.mod.results.items[id].res_type = .Type;
+    rt.mod.results.items[id].type_data = .{
+        .Type = .{
+            .value_type = .Vector,
+            .data = .{
+                .Vector = .{
+                    .components_type = switch (rt.mod.results.items[try rt.it.next()].type_data) {
+                        .Type => |data| data.value_type,
+                        else => return RuntimeError.InvalidSpirV,
+                    },
+                },
+            },
+            .member_count = try rt.it.next(),
+        },
+    };
+}
+
+fn opTypeMatrix(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const id = try rt.it.next();
+    rt.mod.results.items[id].res_type = .Type;
+    rt.mod.results.items[id].type_data = .{
+        .Type = .{
+            .value_type = .Matrix,
+            .data = .{
+                .Matrix = .{
+                    .column_type = switch (rt.mod.results.items[try rt.it.next()].type_data) {
+                        .Type => |data| data.value_type,
+                        else => return RuntimeError.InvalidSpirV,
+                    },
+                },
+            },
+            .member_count = try rt.it.next(),
+        },
+    };
+}
+
+fn opTypePointer(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const id = try rt.it.next();
+    rt.mod.results.items[id].res_type = .Type;
+    rt.mod.results.items[id].type_data = .{
+        .Type = .{
+            .value_type = .Pointer,
+            .data = .{
+                .Pointer = .{
+                    .storage_class = try rt.it.nextAs(spv.SpvStorageClass),
+                },
+            },
+            .id = try rt.it.next(),
+        },
+    };
+}
+
 fn readString(allocator: std.mem.Allocator, it: *WordIterator) RuntimeError![]const u8 {
     var str: std.ArrayList(u8) = .empty;
-    while (it.next()) |word| {
+    while (it.nextOrNull()) |word| {
         (str.addOne(allocator) catch return RuntimeError.OutOfMemory).* = @truncate(word & 0x000000FF);
         (str.addOne(allocator) catch return RuntimeError.OutOfMemory).* = @truncate((word & 0x0000FF00) >> 8);
         (str.addOne(allocator) catch return RuntimeError.OutOfMemory).* = @truncate((word & 0x00FF0000) >> 16);
@@ -161,7 +332,7 @@ fn readString(allocator: std.mem.Allocator, it: *WordIterator) RuntimeError![]co
 fn readStringN(allocator: std.mem.Allocator, it: *WordIterator, n: usize) RuntimeError![]const u8 {
     var str = std.ArrayList(u8).initCapacity(allocator, n * 4) catch return RuntimeError.OutOfMemory;
     for (0..n) |_| {
-        if (it.next()) |word| {
+        if (it.nextOrNull()) |word| {
             str.addOneAssumeCapacity().* = @truncate(word & 0x000000FF);
             str.addOneAssumeCapacity().* = @truncate((word & 0x0000FF00) >> 8);
             str.addOneAssumeCapacity().* = @truncate((word & 0x00FF0000) >> 16);

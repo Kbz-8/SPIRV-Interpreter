@@ -95,7 +95,7 @@ pub fn init(allocator: std.mem.Allocator, source: []const SpvWord) ModuleError!S
 
     self.it = WordIterator.init(self.code);
 
-    const magic = self.it.next() orelse return ModuleError.InvalidSpirV;
+    const magic = self.it.next() catch return ModuleError.InvalidSpirV;
     if (magic != spv.SpvMagicNumber) {
         return ModuleError.InvalidMagic;
     }
@@ -103,15 +103,15 @@ pub fn init(allocator: std.mem.Allocator, source: []const SpvWord) ModuleError!S
         return ModuleError.UnsupportedEndianness;
     }
 
-    const version = self.it.next() orelse return ModuleError.InvalidSpirV;
+    const version = self.it.next() catch return ModuleError.InvalidSpirV;
     self.version_major = @intCast((version & 0x00FF0000) >> 16);
     self.version_minor = @intCast((version & 0x0000FF00) >> 8);
 
-    const generator = self.it.next() orelse return ModuleError.InvalidSpirV;
+    const generator = self.it.next() catch return ModuleError.InvalidSpirV;
     self.generator_id = @intCast((generator & 0xFFFF0000) >> 16);
     self.generator_version = @intCast(generator & 0x0000FFFF);
 
-    self.bound = self.it.next() orelse return ModuleError.InvalidSpirV;
+    self.bound = self.it.next() catch return ModuleError.InvalidSpirV;
     self.results.resize(allocator, self.bound) catch return ModuleError.OutOfMemory;
     for (self.results.items) |*result| {
         result.* = Result.init();
@@ -181,7 +181,7 @@ fn checkEndiannessFromSpvMagic(magic: SpvWord) bool {
 fn pass(self: *Self, allocator: std.mem.Allocator, opcodes: std.EnumSet(spv.SpvOp)) ModuleError!void {
     var rt = Runtime.init(self);
     defer rt.deinit();
-    while (rt.it.next()) |opcode_data| {
+    while (rt.it.nextOrNull()) |opcode_data| {
         const word_count = ((opcode_data & (~spv.SpvOpCodeMask)) >> spv.SpvWordCountShift) - 1;
         const opcode = (opcode_data & spv.SpvOpCodeMask);
 

@@ -1,6 +1,8 @@
 const std = @import("std");
 const spv = @import("spv.zig");
 
+const RuntimeError = @import("Runtime.zig").RuntimeError;
+
 const SpvWord = spv.SpvWord;
 
 const Self = @This();
@@ -15,16 +17,22 @@ pub fn init(buffer: []const SpvWord) Self {
     };
 }
 
-pub fn next(self: *Self) ?SpvWord {
+pub fn nextOrNull(self: *Self) ?SpvWord {
     const word = self.peek() orelse return null;
     self.index += 1;
     return word;
 }
 
-pub fn nextAs(self: *Self, comptime E: type) ?E {
-    const word = self.peek() orelse return null;
-    self.index += 1;
-    return std.enums.fromInt(E, word);
+pub inline fn nextAsOrNull(self: *Self, comptime E: type) ?E {
+    return if (self.nextOrNull()) |word| std.enums.fromInt(E, word) else null;
+}
+
+pub inline fn next(self: *Self) RuntimeError!SpvWord {
+    return self.nextOrNull() orelse return RuntimeError.InvalidSpirV;
+}
+
+pub fn nextAs(self: *Self, comptime E: type) RuntimeError!E {
+    return self.nextAsOrNull(E) orelse return RuntimeError.InvalidSpirV;
 }
 
 pub fn peek(self: *const Self) ?SpvWord {
