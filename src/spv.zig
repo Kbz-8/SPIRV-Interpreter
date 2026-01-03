@@ -68,20 +68,6 @@ pub fn vendorName(id: u32) []const u8 {
     };
 }
 
-pub const SpvMember = struct {
-    type: SpvWord,
-    value: union {
-        boolean: bool,
-        int32: i32,
-        uint32: u32,
-        uint64: u64,
-        float32: f32,
-        float64: f64,
-        // TODO: sampler, image, sampledimage
-    },
-    members: []SpvMember,
-};
-
 pub const SpvBinding = struct {
     set: SpvWord,
     binding: SpvWord,

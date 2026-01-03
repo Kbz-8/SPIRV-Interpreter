@@ -6,11 +6,9 @@ const SpvByte = spv.SpvByte;
 const SpvWord = spv.SpvWord;
 const SpvBool = spv.SpvBool;
 
-const Type = enum {
-    None,
+pub const Variant = enum {
     String,
     Extension,
-    FunctionType,
     Type,
     Variable,
     Constant,
@@ -20,7 +18,7 @@ const Type = enum {
     Label,
 };
 
-const ValueType = enum {
+pub const Type = enum {
     Void,
     Bool,
     Int,
@@ -30,6 +28,7 @@ const ValueType = enum {
     Array,
     RuntimeArray,
     Structure,
+    Function,
     Image,
     Sampler,
     SampledImage,
@@ -53,6 +52,36 @@ const Decoration = struct {
     index: SpvWord,
 };
 
+pub const SpvValue = union(Type) {
+    Void: noreturn,
+    Bool: bool,
+    Int: union {
+        sint8: i8,
+        sint16: i16,
+        sint32: i32,
+        sint64: i64,
+        uint8: u8,
+        uint16: u16,
+        uint32: u32,
+        uint64: u64,
+    },
+    Float: union {
+        float16: f16,
+        float32: f32,
+        float64: f64,
+    },
+    Vector: noreturn,
+    Matrix: noreturn,
+    Array: struct {},
+    RuntimeArray: struct {},
+    Structure: struct {},
+    Function: noreturn,
+    Image: struct {},
+    Sampler: struct {},
+    SampledImage: struct {},
+    Pointer: noreturn,
+};
+
 const Self = @This();
 
 name: ?[]const u8,
@@ -60,55 +89,55 @@ name: ?[]const u8,
 parent: ?*const Self,
 
 member_names: std.ArrayList([]const u8),
-members: std.ArrayList(spv.SpvMember),
 
 decorations: std.ArrayList(Decoration),
 
-res_type: Type,
-type_data: union(Type) {
-    None: struct {},
+variant: ?union(Variant) {
     String: []const u8,
     Extension: struct {},
-    FunctionType: struct {
-        return_type: SpvWord,
-    },
-    Type: struct {
-        value_type: ValueType,
-        data: union(ValueType) {
-            Void: struct {},
-            Bool: struct {},
-            Int: struct {
-                bit_length: SpvWord,
-                is_signed: bool,
-            },
-            Float: struct {
-                bit_length: SpvWord,
-            },
-            Vector: struct {
-                components_type: ValueType,
-            },
-            Matrix: struct {
-                column_type: ValueType,
-            },
-            Array: struct {},
-            RuntimeArray: struct {},
-            Structure: struct {},
-            Image: struct {},
-            Sampler: struct {},
-            SampledImage: struct {},
-            Pointer: struct {
-                storage_class: spv.SpvStorageClass,
-            },
+    Type: union(Type) {
+        Void: struct {},
+        Bool: struct {},
+        Int: struct {
+            bit_length: SpvWord,
+            is_signed: bool,
         },
-        member_count: SpvWord = 0,
-        id: SpvWord = 0,
+        Float: struct {
+            bit_length: SpvWord,
+        },
+        Vector: struct {
+            components_type: Type,
+            member_count: SpvWord,
+        },
+        Matrix: struct {
+            column_type: Type,
+            member_count: SpvWord,
+        },
+        Array: struct {},
+        RuntimeArray: struct {},
+        Structure: struct {
+            /// Allocated array
+            members: []const SpvWord,
+        },
+        Function: struct {
+            return_type: SpvWord,
+            /// Allocated array
+            params: []const SpvWord,
+        },
+        Image: struct {},
+        Sampler: struct {},
+        SampledImage: struct {},
+        Pointer: struct {
+            storage_class: spv.SpvStorageClass,
+            target: SpvWord,
+        },
     },
-    Variable: struct {},
-    Constant: struct {},
-    Function: struct {
-        /// Allocated array
-        params: []SpvWord,
+    Variable: struct {
+        storage_class: spv.SpvStorageClass,
+        value: SpvValue,
     },
+    Constant: SpvValue,
+    Function: struct {},
     AccessChain: struct {},
     FunctionParameter: struct {},
     Label: struct {},
@@ -119,10 +148,8 @@ pub fn init() Self {
         .name = null,
         .parent = null,
         .member_names = .empty,
-        .members = .empty,
         .decorations = .empty,
-        .res_type = .None,
-        .type_data = undefined,
+        .variant = null,
     };
 }
 
@@ -133,12 +160,31 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
     for (self.member_names.items) |name| {
         allocator.free(name);
     }
-    // FIXME
-    //switch (self.type_data) {
-    //    .Function => |data| allocator.free(data.params),
-    //    else => {},
-    //}
+    if (self.variant) |variant| {
+        switch (variant) {
+            .Type => |t| {
+                switch (t) {
+                    .Function => |data| allocator.free(data.params),
+                    .Structure => |data| allocator.free(data.members),
+                    else => {},
+                }
+            },
+            else => {},
+        }
+    }
     self.member_names.deinit(allocator);
-    self.members.deinit(allocator);
     self.decorations.deinit(allocator);
+}
+
+pub fn resolveType(self: *const Self, results: []const Self) *const Self {
+    return if (self.variant) |variant|
+        switch (variant) {
+            .Type => |t| switch (t) {
+                .Pointer => |ptr| &results[ptr.target],
+                else => self,
+            },
+            else => self,
+        }
+    else
+        self;
 }

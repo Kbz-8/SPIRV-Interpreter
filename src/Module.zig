@@ -4,17 +4,20 @@ const lib = @import("lib.zig");
 const spv = @import("spv.zig");
 const op = @import("opcodes.zig");
 
+const pretty = @import("pretty");
+
 const SpvVoid = spv.SpvVoid;
 const SpvByte = spv.SpvByte;
 const SpvWord = spv.SpvWord;
 const SpvBool = spv.SpvBool;
 
-const SpvMember = spv.SpvMember;
 const SpvBinding = spv.SpvBinding;
 
 const Result = @import("Result.zig");
 const Runtime = @import("Runtime.zig");
 const WordIterator = @import("WordIterator.zig");
+
+const SpvValue = Result.SpvValue;
 
 const Self = @This();
 
@@ -71,10 +74,10 @@ geometry_output_count: SpvWord,
 geometry_input: SpvWord,
 geometry_output: SpvWord,
 
-input_locations: std.AutoHashMap(SpvWord, *SpvMember),
-output_locations: std.AutoHashMap(SpvWord, *SpvMember),
-bindings: std.AutoHashMap(SpvBinding, *SpvMember),
-push_constants: []SpvMember,
+input_locations: std.AutoHashMap(SpvWord, *SpvValue),
+output_locations: std.AutoHashMap(SpvWord, *SpvValue),
+bindings: std.AutoHashMap(SpvBinding, *SpvValue),
+push_constants: []SpvValue,
 
 pub fn init(allocator: std.mem.Allocator, source: []const SpvWord) ModuleError!Self {
     var self: Self = std.mem.zeroInit(Self, .{
@@ -87,9 +90,9 @@ pub fn init(allocator: std.mem.Allocator, source: []const SpvWord) ModuleError!S
         .local_size_x = 1,
         .local_size_y = 1,
         .local_size_z = 1,
-        .input_locations = std.AutoHashMap(SpvWord, *SpvMember).init(allocator),
-        .output_locations = std.AutoHashMap(SpvWord, *SpvMember).init(allocator),
-        .bindings = std.AutoHashMap(SpvBinding, *SpvMember).init(allocator),
+        .input_locations = std.AutoHashMap(SpvWord, *SpvValue).init(allocator),
+        .output_locations = std.AutoHashMap(SpvWord, *SpvValue).init(allocator),
+        .bindings = std.AutoHashMap(SpvBinding, *SpvValue).init(allocator),
     });
     errdefer self.deinit(allocator);
 
@@ -162,6 +165,8 @@ pub fn init(allocator: std.mem.Allocator, source: []const SpvWord) ModuleError!S
             capabilities,
             entry_points,
         });
+
+        pretty.print(allocator, self.results, .{ .tab_size = 4, .max_depth = 0 }) catch return ModuleError.OutOfMemory;
     }
 
     return self;

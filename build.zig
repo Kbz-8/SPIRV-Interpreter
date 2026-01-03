@@ -10,6 +10,9 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const pretty = b.dependency("pretty", .{ .target = target, .optimize = optimize });
+    mod.addImport("pretty", pretty.module("pretty"));
+
     const lib = b.addLibrary(.{
         .name = "spirv_interpreter",
         .root_module = mod,

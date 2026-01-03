@@ -15,6 +15,7 @@ const Self = @This();
 
 pub const RuntimeError = error{
     InvalidSpirV,
+    UnsupportedSpirV,
     OutOfMemory,
     Unreachable,
     Killed,
