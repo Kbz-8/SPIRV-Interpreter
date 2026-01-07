@@ -1,6 +1,8 @@
 const std = @import("std");
 const spv = @import("spv.zig");
 
+const RuntimeError = @import("Runtime.zig").RuntimeError;
+
 const SpvVoid = spv.SpvVoid;
 const SpvByte = spv.SpvByte;
 const SpvWord = spv.SpvWord;
@@ -52,7 +54,7 @@ const Decoration = struct {
     index: SpvWord,
 };
 
-pub const SpvValue = union(Type) {
+pub const Value = union(Type) {
     Void: noreturn,
     Bool: bool,
     Int: union {
@@ -70,8 +72,8 @@ pub const SpvValue = union(Type) {
         float32: f32,
         float64: f64,
     },
-    Vector: noreturn,
-    Matrix: noreturn,
+    Vector: []Value,
+    Matrix: []Value,
     Array: struct {},
     RuntimeArray: struct {},
     Structure: struct {},
@@ -134,10 +136,15 @@ variant: ?union(Variant) {
     },
     Variable: struct {
         storage_class: spv.SpvStorageClass,
-        value: SpvValue,
+        value: Value,
     },
-    Constant: SpvValue,
-    Function: struct {},
+    Constant: Value,
+    Function: struct {
+        return_type: SpvWord,
+        function_type: SpvWord,
+        /// Allocated array
+        params: []const SpvWord,
+    },
     AccessChain: struct {},
     FunctionParameter: struct {},
     Label: struct {},
@@ -187,4 +194,19 @@ pub fn resolveType(self: *const Self, results: []const Self) *const Self {
         }
     else
         self;
+}
+
+pub fn initConstantValue(self: *Self, results: []const Self, target: SpvWord) RuntimeError!void {
+    _ = self;
+    const resolved = results[target].resolveType(results);
+    if (resolved.variant) |variant| {
+        switch (variant) {
+            .Type => |t| switch (t) {
+                .Structure => |s|
+                else => return RuntimeError.InvalidSpirV,
+            },
+            else => return RuntimeError.InvalidSpirV,
+        }
+    }
+    return RuntimeError.InvalidSpirV;
 }

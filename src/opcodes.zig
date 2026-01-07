@@ -15,9 +15,6 @@ const SpvBool = spv.SpvBool;
 
 // DUMB INDEV OPCODES TODO :
 //     OpVariable           X
-//     OpFunction           X
-//     OpLabel              X
-//     OpCompositeConstruct X
 //     OpAccessChain        X
 //     OpStore              X
 //     OpLoad               X
@@ -51,6 +48,9 @@ pub const SetupDispatcher = block: {
         .TypeVector = opTypeVector,
         .TypeVoid = opTypeVoid,
         .Variable = opVariable,
+        .Function = opFunction,
+        .Label = opLabel,
+        .CompositeConstruct = opCompositeConstruct,
     });
 };
 
@@ -334,7 +334,7 @@ fn opConstant(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeEr
                         .Int => {
                             break :value if (word_count - 2 != 1) .{
                                 .Int = .{
-                                    .uint64 = try rt.it.next() | (@as(u64, try rt.it.next()) >> 32),
+                                    .uint64 = @as(u64, try rt.it.next()) | (@as(u64, try rt.it.next()) >> 32),
                                 },
                             } else .{
                                 .Int = .{
@@ -380,6 +380,46 @@ fn opVariable(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeEr
             },
         },
     };
+}
+
+fn opFunction(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const return_type = try rt.it.next();
+    const id = try rt.it.next();
+    _ = rt.it.skip(); // Skip function control
+    const function_type_id = try rt.it.next();
+
+    rt.mod.results.items[id].variant = .{
+        .Function = .{
+            .return_type = return_type,
+            .function_type = function_type_id,
+            .params = params: {
+                if (rt.mod.results.items[function_type_id].variant) |variant| {
+                    const params_count = switch (variant) {
+                        .Type => |t| switch (t) {
+                            .Function => |f| f.params.len,
+                            else => return RuntimeError.InvalidSpirV,
+                        },
+                        else => return RuntimeError.InvalidSpirV,
+                    };
+                    break :params allocator.alloc(SpvWord, params_count) catch return RuntimeError.OutOfMemory;
+                }
+                return RuntimeError.InvalidSpirV;
+            },
+        },
+    };
+
+    rt.current_function = &rt.mod.results.items[id];
+}
+
+fn opLabel(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const id = try rt.it.next();
+    rt.mod.results.items[id].variant = .{
+        .Label = .{},
+    };
+}
+
+fn opCompositeConstruct(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    _ = rt;
 }
 
 fn readString(allocator: std.mem.Allocator, it: *WordIterator) RuntimeError![]const u8 {

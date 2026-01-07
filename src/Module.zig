@@ -17,7 +17,7 @@ const Result = @import("Result.zig");
 const Runtime = @import("Runtime.zig");
 const WordIterator = @import("WordIterator.zig");
 
-const SpvValue = Result.SpvValue;
+const Value = Result.Value;
 
 const Self = @This();
 
@@ -74,10 +74,10 @@ geometry_output_count: SpvWord,
 geometry_input: SpvWord,
 geometry_output: SpvWord,
 
-input_locations: std.AutoHashMap(SpvWord, *SpvValue),
-output_locations: std.AutoHashMap(SpvWord, *SpvValue),
-bindings: std.AutoHashMap(SpvBinding, *SpvValue),
-push_constants: []SpvValue,
+input_locations: std.AutoHashMap(SpvWord, *Value),
+output_locations: std.AutoHashMap(SpvWord, *Value),
+bindings: std.AutoHashMap(SpvBinding, *Value),
+push_constants: []Value,
 
 pub fn init(allocator: std.mem.Allocator, source: []const SpvWord) ModuleError!Self {
     var self: Self = std.mem.zeroInit(Self, .{
@@ -90,9 +90,9 @@ pub fn init(allocator: std.mem.Allocator, source: []const SpvWord) ModuleError!S
         .local_size_x = 1,
         .local_size_y = 1,
         .local_size_z = 1,
-        .input_locations = std.AutoHashMap(SpvWord, *SpvValue).init(allocator),
-        .output_locations = std.AutoHashMap(SpvWord, *SpvValue).init(allocator),
-        .bindings = std.AutoHashMap(SpvBinding, *SpvValue).init(allocator),
+        .input_locations = std.AutoHashMap(SpvWord, *Value).init(allocator),
+        .output_locations = std.AutoHashMap(SpvWord, *Value).init(allocator),
+        .bindings = std.AutoHashMap(SpvBinding, *Value).init(allocator),
     });
     errdefer self.deinit(allocator);
 
