@@ -202,7 +202,7 @@ pub fn initConstantValue(self: *Self, results: []const Self, target: SpvWord) Ru
     if (resolved.variant) |variant| {
         switch (variant) {
             .Type => |t| switch (t) {
-                .Structure => |s|
+                //.Structure => |s|
                 else => return RuntimeError.InvalidSpirV,
             },
             else => return RuntimeError.InvalidSpirV,
