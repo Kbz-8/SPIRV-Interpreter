@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos_86_64
+    runs-on: macos_x86_64
     if: "!contains(github.event.head_commit.message, 'ci skip')"
 
     steps:
