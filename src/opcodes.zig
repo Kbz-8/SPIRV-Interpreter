@@ -157,12 +157,30 @@ fn opMemberName(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime)
 
     var result = &rt.mod.results.items[id];
 
-    if (memb + 1 > result.member_names.items.len) {
-        _ = result.member_names.resize(allocator, memb + 1) catch return RuntimeError.OutOfMemory;
+    if (result.variant == null) {
+        result.variant = .{
+            .Type = .{
+                .Structure = .{
+                    .members = undefined,
+                    .member_names = .empty,
+                },
+            },
+        };
     }
 
-    const slen = word_count - 2;
-    result.member_names.items[memb] = try readStringN(allocator, &rt.it, slen);
+    switch (result.variant.?) {
+        .Type => |*t| switch (t.*) {
+            .Structure => |*s| {
+                if (memb + 1 > s.member_names.items.len) {
+                    _ = s.member_names.resize(allocator, memb + 1) catch return RuntimeError.OutOfMemory;
+                }
+                const slen = word_count - 2;
+                s.member_names.items[memb] = try readStringN(allocator, &rt.it, slen);
+            },
+            else => unreachable,
+        },
+        else => unreachable,
+    }
 }
 
 fn opMemoryModel(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
@@ -260,10 +278,12 @@ fn opTypeVector(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!voi
 
 fn opTypeMatrix(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     const id = try rt.it.next();
+    const column_type_word = try rt.it.next();
     rt.mod.results.items[id].variant = .{
         .Type = .{
             .Matrix = .{
-                .column_type = switch (rt.mod.results.items[try rt.it.next()].variant.?) {
+                .column_type_word = column_type_word,
+                .column_type = switch (rt.mod.results.items[column_type_word].variant.?) {
                     .Type => |t| @as(Result.Type, t),
                     else => return RuntimeError.InvalidSpirV,
                 },
@@ -287,20 +307,33 @@ fn opTypePointer(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!vo
 
 fn opTypeStruct(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
     const id = try rt.it.next();
-    rt.mod.results.items[id].variant = .{
-        .Type = .{
-            .Structure = .{
-                .members = blk: {
-                    const members = allocator.alloc(SpvWord, word_count - 1) catch return RuntimeError.OutOfMemory;
-                    errdefer allocator.free(members);
-                    for (members) |*member| {
-                        member.* = try rt.it.next();
-                    }
-                    break :blk members;
+    const members = blk: {
+        const members = allocator.alloc(SpvWord, word_count - 1) catch return RuntimeError.OutOfMemory;
+        errdefer allocator.free(members);
+        for (members) |*member| {
+            member.* = try rt.it.next();
+        }
+        break :blk members;
+    };
+
+    if (rt.mod.results.items[id].variant) |*variant| {
+        switch (variant.*) {
+            .Type => |*t| switch (t.*) {
+                .Structure => |*s| s.members = members,
+                else => unreachable,
+            },
+            else => unreachable,
+        }
+    } else {
+        rt.mod.results.items[id].variant = .{
+            .Type = .{
+                .Structure = .{
+                    .members = members,
+                    .member_names = .empty,
                 },
             },
-        },
-    };
+        };
+    }
 }
 
 fn opTypeFunction(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
@@ -322,45 +355,31 @@ fn opTypeFunction(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtim
     };
 }
 
-fn opConstant(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
+fn opConstant(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
     const var_type = try rt.it.next();
     const id = try rt.it.next();
-    rt.mod.results.items[id].variant = .{
-        .Constant = value: {
-            const resolved = rt.mod.results.items[var_type].resolveType(rt.mod.results.items);
-            if (resolved.variant) |variant| {
-                switch (variant) {
-                    .Type => |t| switch (t) {
-                        .Int => {
-                            break :value if (word_count - 2 != 1) .{
-                                .Int = .{
-                                    .uint64 = @as(u64, try rt.it.next()) | (@as(u64, try rt.it.next()) >> 32),
-                                },
-                            } else .{
-                                .Int = .{
-                                    .uint32 = try rt.it.next(),
-                                },
-                            };
-                        },
-                        .Float => {
-                            break :value if (word_count - 2 != 1) .{
-                                .Float = .{
-                                    .float64 = @bitCast(@as(u64, try rt.it.next()) | (@as(u64, try rt.it.next()) >> 32)),
-                                },
-                            } else .{
-                                .Float = .{
-                                    .float32 = @bitCast(try rt.it.next()),
-                                },
-                            };
-                        },
-                        else => {}, // Will fallback on error,
-                    },
-                    else => {}, // Will fallback on error
-                }
+
+    const target = &rt.mod.results.items[id];
+    try target.initConstantValue(allocator, rt.mod.results.items, var_type);
+
+    // No check on null and sizes, absolute trust in this shit
+    switch (target.variant.?.Constant[0]) {
+        .Int => |*i| {
+            if (word_count - 2 != 1) {
+                i.uint64 = @as(u64, try rt.it.next()) | (@as(u64, try rt.it.next()) >> 32);
+            } else {
+                i.uint32 = try rt.it.next();
             }
-            return RuntimeError.InvalidSpirV;
         },
-    };
+        .Float => |*f| {
+            if (word_count - 2 != 1) {
+                f.float64 = @bitCast(@as(u64, try rt.it.next()) | (@as(u64, try rt.it.next()) >> 32));
+            } else {
+                f.float32 = @bitCast(try rt.it.next());
+            }
+        },
+        else => return RuntimeError.InvalidSpirV,
+    }
 }
 
 fn opVariable(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
@@ -368,18 +387,21 @@ fn opVariable(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeEr
     const id = try rt.it.next();
     const storage_class = try rt.it.nextAs(spv.SpvStorageClass);
     const initializer: ?SpvWord = if (word_count >= 4) try rt.it.next() else null;
+    _ = var_type;
+    _ = id;
+    _ = storage_class;
     _ = initializer;
 
-    rt.mod.results.items[id].variant = .{
-        .Variable = .{
-            .storage_class = storage_class,
-            .value = value: {
-                const resolved = rt.mod.results.items[var_type].resolveType(rt.mod.results.items);
-                _ = resolved;
-                break :value undefined;
-            },
-        },
-    };
+    //rt.mod.results.items[id].variant = .{
+    //    .Variable = .{
+    //        .storage_class = storage_class,
+    //        .value = value: {
+    //            const resolved = rt.mod.results.items[var_type].resolveType(rt.mod.results.items);
+    //            _ = resolved;
+    //            break :value undefined;
+    //        },
+    //    },
+    //};
 }
 
 fn opFunction(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
