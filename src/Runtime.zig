@@ -123,11 +123,18 @@ pub fn callEntryPoint(self: *Self, allocator: std.mem.Allocator, entry_point_ind
         _ = it_tmp.skipN(word_count);
         self.it = it_tmp;
     }
+
+    //@import("pretty").print(allocator, self.results, .{
+    //    .tab_size = 4,
+    //    .max_depth = 0,
+    //    .struct_max_len = 0,
+    //    .array_max_len = 0,
+    //}) catch return RuntimeError.OutOfMemory;
 }
 
 pub fn readOutput(self: *const Self, comptime T: type, output: []T, result: SpvWord) error{NotFound}!void {
-    if (self.mod.output_locations.get(result)) |out| {
-        self.readValue(T, output, &out[0]);
+    if (std.mem.indexOf(SpvWord, self.mod.output_locations.items, &.{result})) |_| {
+        self.readValue(T, output, &self.results[result].variant.?.Variable.value);
     } else {
         return error.NotFound;
     }
@@ -143,6 +150,8 @@ fn readValue(self: *const Self, comptime T: type, output: []T, value: *const Res
         .Bool => |b| {
             if (T == bool) {
                 output[0] = b;
+            } else {
+                unreachable;
             }
         },
         .Int => |i| {

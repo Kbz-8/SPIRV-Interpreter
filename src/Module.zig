@@ -72,9 +72,9 @@ geometry_output_count: SpvWord,
 geometry_input: SpvWord,
 geometry_output: SpvWord,
 
-input_locations: std.AutoHashMap(SpvWord, []Value),
-output_locations: std.AutoHashMap(SpvWord, []Value),
-bindings: std.AutoHashMap(SpvBinding, []Value),
+input_locations: std.ArrayList(SpvWord),
+output_locations: std.ArrayList(SpvWord),
+bindings: std.AutoHashMap(SpvBinding, Value),
 push_constants: []Value,
 
 pub fn init(allocator: std.mem.Allocator, source: []const SpvWord) ModuleError!Self {
@@ -87,9 +87,9 @@ pub fn init(allocator: std.mem.Allocator, source: []const SpvWord) ModuleError!S
         .local_size_x = 1,
         .local_size_y = 1,
         .local_size_z = 1,
-        .input_locations = std.AutoHashMap(SpvWord, []Value).init(allocator),
-        .output_locations = std.AutoHashMap(SpvWord, []Value).init(allocator),
-        .bindings = std.AutoHashMap(SpvBinding, []Value).init(allocator),
+        .input_locations = std.ArrayList(SpvWord).empty,
+        .output_locations = std.ArrayList(SpvWord).empty,
+        .bindings = std.AutoHashMap(SpvBinding, Value).init(allocator),
     });
     errdefer self.deinit(allocator);
 
@@ -120,7 +120,7 @@ pub fn init(allocator: std.mem.Allocator, source: []const SpvWord) ModuleError!S
     _ = self.it.skip(); // Skip schema
 
     try self.pass(allocator); // Setup pass
-    try self.populateMaps();
+    try self.populateMaps(allocator);
 
     if (std.process.hasEnvVarConstant("SPIRV_INTERPRETER_DEBUG_LOGS")) {
         var capability_set_names: std.ArrayList([]const u8) = .empty;
@@ -196,13 +196,12 @@ fn pass(self: *Self, allocator: std.mem.Allocator) ModuleError!void {
     }
 }
 
-fn populateMaps(self: *Self) ModuleError!void {
+fn populateMaps(self: *Self, allocator: std.mem.Allocator) ModuleError!void {
     for (self.results, 0..) |result, id| {
         if (result.variant == null or std.meta.activeTag(result.variant.?) != .Variable) continue;
-        const variable = result.variant.?.Variable;
-        switch (variable.storage_class) {
+        switch (result.variant.?.Variable.storage_class) {
             .Output => for (result.decorations.items) |decoration| switch (decoration.rtype) {
-                .Location => self.output_locations.put(@intCast(id), variable.values) catch return ModuleError.OutOfMemory,
+                .Location => self.output_locations.append(allocator, @intCast(id)) catch return ModuleError.OutOfMemory,
                 else => {},
             },
             else => {},
@@ -212,8 +211,8 @@ fn populateMaps(self: *Self) ModuleError!void {
 
 pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
     allocator.free(self.code);
-    self.input_locations.deinit();
-    self.output_locations.deinit();
+    self.input_locations.deinit(allocator);
+    self.output_locations.deinit(allocator);
     self.bindings.deinit();
     for (self.entry_points.items) |entry| {
         allocator.free(entry.name);

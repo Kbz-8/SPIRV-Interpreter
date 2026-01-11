@@ -2,9 +2,9 @@
     .name = .SPIRV_Interpreter,
     .version = "0.0.1",
     .dependencies = .{
-        .pretty = .{
-            .url = "https://github.com/timfayz/pretty/archive/refs/heads/main.tar.gz",
-            .hash = "pretty-0.10.6-Tm65r6lPAQCBxgwzehYPeqsCXQDT9kt2ktJuO-2tRfE6",
+        .pretty = .{ // For debugging purposes
+            .url = "git+https://github.com/Kbz-8/pretty#117674465efd4d07d5ae9d9d8ca59c2c323a65ba",
+            .hash = "pretty-0.10.6-Tm65r99UAQDEJMgZysD10qE8dinBHr064fPM6YkxVPfB",
         },
     },
     .minimum_zig_version = "0.15.2",

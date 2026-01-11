@@ -10,6 +10,6 @@ struct FragOut
 fn main() -> FragOut
 {
     let output: FragOut;
-    output.color = vec4[f32](1.0, 1.0, 1.0, 1.0);
+    output.color = vec4[f32](4.0, 3.0, 2.0, 1.0);
     return output;
 }

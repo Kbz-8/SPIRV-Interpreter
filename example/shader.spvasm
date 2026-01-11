@@ -1,7 +1,7 @@
 ; SPIR-V
 ; Version: 1.0
 ; Generator: SirLynix Nazara ShaderLang Compiler; 4226
-; Bound: 20
+; Bound: 23
 ; Schema: 0
                OpCapability Shader
                OpMemoryModel Logical GLSL450
@@ -24,17 +24,20 @@
 %_ptr_Function_FragOut = OpTypePointer Function %FragOut
         %int = OpTypeInt 32 1
       %int_0 = OpConstant %int 0
+    %float_4 = OpConstant %float 4
+    %float_3 = OpConstant %float 3
+    %float_2 = OpConstant %float 2
     %float_1 = OpConstant %float 1
 %_ptr_Function_v4float = OpTypePointer Function %v4float
       %color = OpVariable %_ptr_Output_v4float Output
        %main = OpFunction %void None %2
-         %13 = OpLabel
-         %14 = OpVariable %_ptr_Function_FragOut Function
-         %15 = OpCompositeConstruct %v4float %float_1 %float_1 %float_1 %float_1
-         %16 = OpAccessChain %_ptr_Function_v4float %14 %int_0
-               OpStore %16 %15
-         %18 = OpLoad %FragOut %14
-         %19 = OpCompositeExtract %v4float %18 0
-               OpStore %color %19
+         %16 = OpLabel
+         %17 = OpVariable %_ptr_Function_FragOut Function
+         %18 = OpCompositeConstruct %v4float %float_4 %float_3 %float_2 %float_1
+         %19 = OpAccessChain %_ptr_Function_v4float %17 %int_0
+               OpStore %19 %18
+         %21 = OpLoad %FragOut %17
+         %22 = OpCompositeExtract %v4float %21 0
+               OpStore %color %22
                OpReturn
                OpFunctionEnd

@@ -17,7 +17,7 @@ pub fn build(b: *std.Build) void {
         .name = "spirv_interpreter",
         .root_module = mod,
         .linkage = .dynamic,
-        //.use_llvm = true,
+        .use_llvm = true,
     });
     const lib_install = b.addInstallArtifact(lib, .{});
 
