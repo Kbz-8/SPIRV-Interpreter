@@ -55,7 +55,7 @@ const Decoration = struct {
 };
 
 pub const Value = union(Type) {
-    Void,
+    Void: struct {},
     Bool: bool,
     Int: extern union {
         sint8: i8,
@@ -77,11 +77,11 @@ pub const Value = union(Type) {
     Array: struct {},
     RuntimeArray: struct {},
     Structure: []Value,
-    Function,
+    Function: struct {},
     Image: struct {},
     Sampler: struct {},
     SampledImage: struct {},
-    Pointer,
+    Pointer: struct {},
 
     fn initMembers(self: *Value, allocator: std.mem.Allocator, results: []const Self, target: SpvWord) RuntimeError!void {
         const resolved = results[target].resolveType(results);
@@ -91,16 +91,19 @@ pub const Value = union(Type) {
             .Type => |t| switch (t) {
                 .Bool, .Int, .Float => std.debug.assert(member_count == 1),
                 .Structure => |s| {
-                    _ = s;
-                    //self.Structure = allocator.alloc(Value, member_count) catch return RuntimeError.OutOfMemory;
-                    //for (self.Structure, s.members) |*value, member_id| {
-                    //    value.* = switch (results[member_id].variant.?.Type) { // wtf ?
-                    //        inline else => |tag| @unionInit(Value, @tagName(tag), undefined),
-                    //    };
-                    //}
+                    self.* = .{
+                        .Structure = allocator.alloc(Value, member_count) catch return RuntimeError.OutOfMemory,
+                    };
+                    for (self.Structure, s.members) |*value, member| {
+                        value.* = switch (member) {
+                            inline else => |tag| @unionInit(Value, @tagName(tag), undefined),
+                        };
+                    }
                 },
                 .Matrix => |m| {
-                    self.Matrix = allocator.alloc(Value, member_count) catch return RuntimeError.OutOfMemory;
+                    self.* = .{
+                        .Matrix = allocator.alloc(Value, member_count) catch return RuntimeError.OutOfMemory,
+                    };
                     for (self.Matrix) |*value| {
                         value.* = switch (m.column_type) {
                             inline else => |tag| @unionInit(Value, @tagName(tag), undefined),
@@ -111,7 +114,9 @@ pub const Value = union(Type) {
                     _ = a;
                 },
                 .Vector => |v| {
-                    self.Vector = allocator.alloc(Value, member_count) catch return RuntimeError.OutOfMemory;
+                    self.* = .{
+                        .Vector = allocator.alloc(Value, member_count) catch return RuntimeError.OutOfMemory,
+                    };
                     for (self.Vector) |*value| {
                         value.* = switch (v.components_type) {
                             inline else => |tag| @unionInit(Value, @tagName(tag), undefined),
@@ -123,47 +128,32 @@ pub const Value = union(Type) {
             else => {},
         }
     }
-};
 
-//void spvm_member_allocate_typed_value(spvm_member_t val, spvm_result* results, spvm_word type)
-//{
-//    spvm_result_t type_info = spvm_state_get_type_info(results, &results[type]);
-//    assert(type != 0);
-//
-//    if (type_info->value_type == spvm_value_type_void ||
-//                    type_info->value_type == spvm_value_type_int ||
-//                    type_info->value_type == spvm_value_type_float ||
-//                    type_info->value_type == spvm_value_type_bool) {
-//            assert(type_info->member_count == 1u);
-//    } else {
-//            spvm_member_allocate_value(val, type_info->member_count);
-//    }
-//
-//    val->type = type;
-//
-//    if (type_info->value_type == spvm_value_type_struct) {
-//            for (spvm_word i = 0; i < val->member_count; i++) {
-//                    spvm_member_allocate_typed_value(&val->members[i], results, type_info->params[i]);
-//            }
-//    }
-//    else if (type_info->value_type == spvm_value_type_matrix) {
-//            for (spvm_word i = 0; i < val->member_count; i++)
-//                    spvm_member_allocate_typed_value(&val->members[i], results, type_info->pointer);
-//    }
-//    else if (type_info->value_type == spvm_value_type_array) {
-//            if (results[type_info->pointer].member_count > 0)
-//                    for (spvm_word i = 0; i < val->member_count; i++)
-//                            spvm_member_allocate_typed_value(&val->members[i], results, type_info->pointer);
-//    } else if (type_info->value_type == spvm_value_type_vector) {
-//            for (spvm_word i = 0; i < val->member_count; ++i)
-//                    val->members[i].type = type_info->pointer;
-//    } else {
-//            // having nested images/samplers is not supported
-//            assert(type_info->value_type != spvm_value_type_sampled_image);
-//            assert(type_info->value_type != spvm_value_type_image);
-//            assert(type_info->value_type != spvm_value_type_sampler);
-//    }
-//}
+    /// Performs a deep copy
+    fn dupe(self: *const Value, allocator: std.mem.Allocator) RuntimeError!Value {
+        return switch (self.*) {
+            .Vector => |v| .{
+                .Vector = allocator.dupe(Value, v) catch return RuntimeError.OutOfMemory,
+            },
+            .Matrix => |m| .{
+                .Matrix = allocator.dupe(Value, m) catch return RuntimeError.OutOfMemory,
+            },
+            .Structure => |s| .{
+                .Structure = allocator.dupe(Value, s) catch return RuntimeError.OutOfMemory,
+            },
+            else => self.*,
+        };
+    }
+
+    fn deinit(self: *Value, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .Structure => |values| allocator.free(values),
+            .Matrix => |values| allocator.free(values),
+            .Vector => |values| allocator.free(values),
+            else => {},
+        }
+    }
+};
 
 const Self = @This();
 
@@ -187,6 +177,7 @@ variant: ?union(Variant) {
             bit_length: SpvWord,
         },
         Vector: struct {
+            components_type_word: SpvWord,
             components_type: Type,
             member_count: SpvWord,
         },
@@ -198,10 +189,12 @@ variant: ?union(Variant) {
         Array: struct {},
         RuntimeArray: struct {},
         Structure: struct {
-            members: []const SpvWord,
+            members_type_word: []const SpvWord,
+            members: []Type,
             member_names: std.ArrayList([]const u8),
         },
         Function: struct {
+            source_location: usize,
             return_type: SpvWord,
             params: []const SpvWord,
         },
@@ -219,13 +212,19 @@ variant: ?union(Variant) {
     },
     Constant: []Value,
     Function: struct {
+        source_location: usize,
         return_type: SpvWord,
         function_type: SpvWord,
         params: []const SpvWord,
     },
-    AccessChain: struct {},
+    AccessChain: struct {
+        target: SpvWord,
+        values: []Value,
+    },
     FunctionParameter: struct {},
-    Label: struct {},
+    Label: struct {
+        source_location: usize,
+    },
 },
 
 pub fn init() Self {
@@ -246,6 +245,7 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
             .Type => |*t| switch (t.*) {
                 .Function => |data| allocator.free(data.params),
                 .Structure => |*data| {
+                    allocator.free(data.members_type_word);
                     allocator.free(data.members);
                     for (data.member_names.items) |name| {
                         allocator.free(name);
@@ -254,11 +254,95 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
                 },
                 else => {},
             },
-            .Constant => |values| allocator.free(values),
+            .Constant => |values| {
+                for (values) |*value| value.deinit(allocator);
+                allocator.free(values);
+            },
+            .Variable => |v| {
+                for (v.values) |*value| value.deinit(allocator);
+                allocator.free(v.values);
+            },
             else => {},
         }
     }
     self.decorations.deinit(allocator);
+}
+
+/// Performs a deep copy
+pub fn dupe(self: *const Self, allocator: std.mem.Allocator) RuntimeError!Self {
+    return .{
+        .name = if (self.name) |name| allocator.dupe(u8, name) catch return RuntimeError.OutOfMemory else null,
+        .decorations = self.decorations.clone(allocator) catch return RuntimeError.OutOfMemory,
+        .parent = self.parent,
+        .variant = blk: {
+            if (self.variant) |variant| {
+                switch (variant) {
+                    .String => |s| break :blk .{
+                        .String = allocator.dupe(u8, s) catch return RuntimeError.OutOfMemory,
+                    },
+                    .Type => |t| switch (t) {
+                        .Structure => |s| break :blk .{
+                            .Type = .{
+                                .Structure = .{
+                                    .members_type_word = allocator.dupe(SpvWord, s.members_type_word) catch return RuntimeError.OutOfMemory,
+                                    .members = allocator.dupe(Type, s.members) catch return RuntimeError.OutOfMemory,
+                                    .member_names = blk2: {
+                                        const member_names = s.member_names.clone(allocator) catch return RuntimeError.OutOfMemory;
+                                        for (member_names.items, s.member_names.items) |*new_name, name| {
+                                            new_name.* = allocator.dupe(u8, name) catch return RuntimeError.OutOfMemory;
+                                        }
+                                        break :blk2 member_names;
+                                    },
+                                },
+                            },
+                        },
+                        .Function => |f| break :blk .{
+                            .Type = .{
+                                .Function = .{
+                                    .source_location = f.source_location,
+                                    .return_type = f.return_type,
+                                    .params = allocator.dupe(SpvWord, f.params) catch return RuntimeError.OutOfMemory,
+                                },
+                            },
+                        },
+                        else => {},
+                    },
+                    .Variable => |v| break :blk .{
+                        .Variable = .{
+                            .storage_class = v.storage_class,
+                            .values = blk2: {
+                                const values = allocator.dupe(Value, v.values) catch return RuntimeError.OutOfMemory;
+                                for (values, v.values) |*new_value, value| {
+                                    new_value.* = try value.dupe(allocator);
+                                }
+                                break :blk2 values;
+                            },
+                        },
+                    },
+                    .Constant => |c| break :blk .{
+                        .Constant = blk2: {
+                            const values = allocator.dupe(Value, c) catch return RuntimeError.OutOfMemory;
+                            for (values, c) |*new_value, value| {
+                                new_value.* = try value.dupe(allocator);
+                            }
+                            break :blk2 values;
+                        },
+                    },
+                    .Function => |f| break :blk .{
+                        .Function = .{
+                            .source_location = f.source_location,
+                            .return_type = f.return_type,
+                            .function_type = f.function_type,
+                            .params = allocator.dupe(SpvWord, f.params) catch return RuntimeError.OutOfMemory,
+                        },
+                    },
+                    else => {},
+                }
+                break :blk variant;
+            }
+            break :blk null;
+        },
+    };
 }
 
 pub fn resolveType(self: *const Self, results: []const Self) *const Self {
@@ -292,19 +376,7 @@ pub fn getMemberCounts(self: *const Self) usize {
     return 0;
 }
 
-pub fn initConstantValue(self: *Self, allocator: std.mem.Allocator, results: []const Self, target: SpvWord) RuntimeError!void {
-    const resolved = results[target].resolveType(results);
-    const member_count = resolved.getMemberCounts();
-
-    if (member_count == 0) return;
-
-    self.variant = .{ .Constant = allocator.alloc(Value, member_count) catch return RuntimeError.OutOfMemory };
-    errdefer switch (self.variant.?) {
-        .Constant => |c| allocator.free(c),
-        else => unreachable,
-    };
-    const values = self.variant.?.Constant;
-
+pub fn initValues(allocator: std.mem.Allocator, values: []Value, results: []const Self, resolved: *const Self) RuntimeError!void {
     switch (resolved.variant.?) {
         .Type => |t| switch (t) {
             .Bool => values[0] = .{ .Bool = undefined },
@@ -322,17 +394,17 @@ pub fn initConstantValue(self: *Self, allocator: std.mem.Allocator, results: []c
                     try value.initMembers(allocator, results, m.column_type_word);
                 }
             },
-            .Array => |a| {
+            .Array => |a| { // TODO
                 _ = a;
             },
             .Structure => |s| {
-                for (values, s.members) |*value, member_type| {
-                    try value.initMembers(allocator, results, member_type);
+                for (values, s.members_type_word) |*value, member_type_word| {
+                    try value.initMembers(allocator, results, member_type_word);
                 }
             },
-            .Image => {},
+            .Image => {}, // TODO
             .Sampler => {}, // No op
-            .SampledImage => {},
+            .SampledImage => {}, // TODO
             else => return RuntimeError.InvalidSpirV,
         },
         else => return RuntimeError.InvalidSpirV,

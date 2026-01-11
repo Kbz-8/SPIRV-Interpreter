@@ -54,3 +54,17 @@ pub fn skipN(self: *Self, count: usize) bool {
     self.index += count;
     return true;
 }
+
+pub fn skipToEnd(self: *Self) void {
+    self.index = self.buffer.len;
+}
+
+pub inline fn emitSourceLocation(self: *const Self) usize {
+    return self.index;
+}
+
+pub inline fn jumpToSourceLocation(self: *Self, source_location: usize) bool {
+    if (source_location > self.buffer.len) return false;
+    self.index = source_location;
+    return true;
+}

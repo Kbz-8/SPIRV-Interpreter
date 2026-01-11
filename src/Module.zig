@@ -4,8 +4,6 @@ const lib = @import("lib.zig");
 const spv = @import("spv.zig");
 const op = @import("opcodes.zig");
 
-const pretty = @import("pretty");
-
 const SpvVoid = spv.SpvVoid;
 const SpvByte = spv.SpvByte;
 const SpvWord = spv.SpvWord;
@@ -60,7 +58,7 @@ memory_model: spv.SpvMemoryModel,
 files: std.ArrayList(SpvSource),
 extensions: std.ArrayList([]const u8),
 
-results: std.ArrayList(Result),
+results: []Result,
 
 entry_points: std.ArrayList(SpvEntryPoint),
 capabilities: std.EnumSet(spv.SpvCapability),
@@ -74,9 +72,9 @@ geometry_output_count: SpvWord,
 geometry_input: SpvWord,
 geometry_output: SpvWord,
 
-input_locations: std.AutoHashMap(SpvWord, *Value),
-output_locations: std.AutoHashMap(SpvWord, *Value),
-bindings: std.AutoHashMap(SpvBinding, *Value),
+input_locations: std.AutoHashMap(SpvWord, []Value),
+output_locations: std.AutoHashMap(SpvWord, []Value),
+bindings: std.AutoHashMap(SpvBinding, []Value),
 push_constants: []Value,
 
 pub fn init(allocator: std.mem.Allocator, source: []const SpvWord) ModuleError!Self {
@@ -84,15 +82,14 @@ pub fn init(allocator: std.mem.Allocator, source: []const SpvWord) ModuleError!S
         .code = allocator.dupe(SpvWord, source) catch return ModuleError.OutOfMemory,
         .files = std.ArrayList(SpvSource).empty,
         .extensions = std.ArrayList([]const u8).empty,
-        .results = std.ArrayList(Result).empty,
         .entry_points = std.ArrayList(SpvEntryPoint).empty,
         .capabilities = std.EnumSet(spv.SpvCapability).initEmpty(),
         .local_size_x = 1,
         .local_size_y = 1,
         .local_size_z = 1,
-        .input_locations = std.AutoHashMap(SpvWord, *Value).init(allocator),
-        .output_locations = std.AutoHashMap(SpvWord, *Value).init(allocator),
-        .bindings = std.AutoHashMap(SpvBinding, *Value).init(allocator),
+        .input_locations = std.AutoHashMap(SpvWord, []Value).init(allocator),
+        .output_locations = std.AutoHashMap(SpvWord, []Value).init(allocator),
+        .bindings = std.AutoHashMap(SpvBinding, []Value).init(allocator),
     });
     errdefer self.deinit(allocator);
 
@@ -115,18 +112,15 @@ pub fn init(allocator: std.mem.Allocator, source: []const SpvWord) ModuleError!S
     self.generator_version = @intCast(generator & 0x0000FFFF);
 
     self.bound = self.it.next() catch return ModuleError.InvalidSpirV;
-    self.results.resize(allocator, self.bound) catch return ModuleError.OutOfMemory;
-    for (self.results.items) |*result| {
+    self.results = allocator.alloc(Result, self.bound) catch return ModuleError.OutOfMemory;
+    for (self.results) |*result| {
         result.* = Result.init();
     }
 
     _ = self.it.skip(); // Skip schema
 
-    const prepassOps = std.EnumSet(spv.SpvOp).initMany(&[_]spv.SpvOp{
-        spv.SpvOp.Name,
-    });
-    try self.pass(allocator, prepassOps); // Pre-pass
-    try self.pass(allocator, prepassOps.complement()); // Setup pass
+    try self.pass(allocator); // Setup pass
+    try self.populateMaps();
 
     if (std.process.hasEnvVarConstant("SPIRV_INTERPRETER_DEBUG_LOGS")) {
         var capability_set_names: std.ArrayList([]const u8) = .empty;
@@ -166,7 +160,7 @@ pub fn init(allocator: std.mem.Allocator, source: []const SpvWord) ModuleError!S
             entry_points,
         });
 
-        pretty.print(allocator, self.results, .{ .tab_size = 4, .max_depth = 0 }) catch return ModuleError.OutOfMemory;
+        //@import("pretty").print(allocator, self.results, .{ .tab_size = 4, .max_depth = 0 }) catch return ModuleError.OutOfMemory;
     }
 
     return self;
@@ -183,23 +177,36 @@ fn checkEndiannessFromSpvMagic(magic: SpvWord) bool {
     return false;
 }
 
-fn pass(self: *Self, allocator: std.mem.Allocator, opcodes: std.EnumSet(spv.SpvOp)) ModuleError!void {
-    var rt = Runtime.init(self);
-    defer rt.deinit();
+fn pass(self: *Self, allocator: std.mem.Allocator) ModuleError!void {
+    var rt = Runtime.init(allocator, self) catch return ModuleError.OutOfMemory;
+    defer rt.deinit(allocator);
+
     while (rt.it.nextOrNull()) |opcode_data| {
         const word_count = ((opcode_data & (~spv.SpvOpCodeMask)) >> spv.SpvWordCountShift) - 1;
         const opcode = (opcode_data & spv.SpvOpCodeMask);
 
         var it_tmp = rt.it; // Save because operations may iter on this iterator
         if (std.enums.fromInt(spv.SpvOp, opcode)) |spv_op| {
-            if (opcodes.contains(spv_op)) {
-                if (op.SetupDispatcher.get(spv_op)) |pfn| {
-                    pfn(allocator, word_count, &rt) catch return ModuleError.InvalidSpirV;
-                }
+            if (op.SetupDispatcher.get(spv_op)) |pfn| {
+                pfn(allocator, word_count, &rt) catch return ModuleError.InvalidSpirV;
             }
         }
         _ = it_tmp.skipN(word_count);
         rt.it = it_tmp;
+    }
+}
+
+fn populateMaps(self: *Self) ModuleError!void {
+    for (self.results, 0..) |result, id| {
+        if (result.variant == null or std.meta.activeTag(result.variant.?) != .Variable) continue;
+        const variable = result.variant.?.Variable;
+        switch (variable.storage_class) {
+            .Output => for (result.decorations.items) |decoration| switch (decoration.rtype) {
+                .Location => self.output_locations.put(@intCast(id), variable.values) catch return ModuleError.OutOfMemory,
+                else => {},
+            },
+            else => {},
+        }
     }
 }
 
@@ -220,8 +227,8 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
     }
     self.extensions.deinit(allocator);
 
-    for (self.results.items) |*result| {
+    for (self.results) |*result| {
         result.deinit(allocator);
     }
-    self.results.deinit(allocator);
+    allocator.free(self.results);
 }
