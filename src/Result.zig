@@ -293,6 +293,14 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
     self.decorations.deinit(allocator);
 }
 
+pub fn getValue(self: *Self) RuntimeError!*Value {
+    return switch (self.variant orelse return RuntimeError.InvalidSpirV) {
+        .Variable => |*v| &v.value,
+        .Constant => |*v| v,
+        else => RuntimeError.InvalidSpirV,
+    };
+}
+
 /// Performs a deep copy
 pub fn dupe(self: *const Self, allocator: std.mem.Allocator) RuntimeError!Self {
     return .{
@@ -330,7 +338,7 @@ pub fn dupe(self: *const Self, allocator: std.mem.Allocator) RuntimeError!Self {
                                 },
                             },
                         },
-                        else => {},
+                        else => break :blk .{ .Type = t },
                     },
                     .Variable => |v| break :blk .{
                         .Variable = .{

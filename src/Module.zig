@@ -160,7 +160,12 @@ pub fn init(allocator: std.mem.Allocator, source: []const SpvWord) ModuleError!S
             entry_points,
         });
 
-        //@import("pretty").print(allocator, self.results, .{ .tab_size = 4, .max_depth = 0 }) catch return ModuleError.OutOfMemory;
+        //@import("pretty").print(allocator, self.results, .{
+        //    .tab_size = 4,
+        //    .max_depth = 0,
+        //    .struct_max_len = 0,
+        //    .array_max_len = 0,
+        //}) catch return ModuleError.OutOfMemory;
     }
 
     return self;

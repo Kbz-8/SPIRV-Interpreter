@@ -9,7 +9,9 @@ struct FragOut
 [entry(frag)]
 fn main() -> FragOut
 {
+	let ratio = vec4[f32](2.0, 2.0, 8.0, 0.25);
+
     let output: FragOut;
-    output.color = vec4[f32](4.0, 3.0, 2.0, 1.0);
+    output.color = vec4[f32](4.0, 3.0, 2.0, 1.0) * ratio;
     return output;
 }

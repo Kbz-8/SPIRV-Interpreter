@@ -19,7 +19,7 @@ pub const SetupDispatcher = block: {
     @setEvalBranchQuota(65535);
     break :block std.EnumMap(spv.SpvOp, OpCodeFunc).init(.{
         .Capability = opCapability,
-        .CompositeConstruct = opCompositeConstructSetup,
+        .CompositeConstruct = autoSetupConstant,
         .Constant = opConstant,
         .Decorate = opDecorate,
         .EntryPoint = opEntryPoint,
@@ -27,7 +27,7 @@ pub const SetupDispatcher = block: {
         .Function = opFunction,
         .FunctionEnd = opFunctionEnd,
         .Label = opLabel,
-        .Load = opLoadSetup,
+        .Load = autoSetupConstant,
         .MemberDecorate = opDecorateMember,
         .MemberName = opMemberName,
         .MemoryModel = opMemoryModel,
@@ -44,6 +44,7 @@ pub const SetupDispatcher = block: {
         .TypeVector = opTypeVector,
         .TypeVoid = opTypeVoid,
         .Variable = opVariable,
+        .FMul = autoSetupConstant,
     });
 };
 
@@ -56,6 +57,7 @@ pub const RuntimeDispatcher = block: {
         .Load = opLoad,
         .Return = opReturn,
         .Store = opStore,
+        .FMul = opFMul,
     });
 };
 
@@ -272,7 +274,7 @@ fn opTypeVector(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!voi
         .Type = .{
             .Vector = .{
                 .components_type_word = components_type_word,
-                .components_type = switch (rt.mod.results[components_type_word].variant.?) {
+                .components_type = switch (rt.mod.results[components_type_word].variant orelse return RuntimeError.InvalidSpirV) {
                     .Type => |t| @as(Result.Type, t),
                     else => return RuntimeError.InvalidSpirV,
                 },
@@ -289,7 +291,7 @@ fn opTypeMatrix(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!voi
         .Type = .{
             .Matrix = .{
                 .column_type_word = column_type_word,
-                .column_type = switch (rt.mod.results[column_type_word].variant.?) {
+                .column_type = switch (rt.mod.results[column_type_word].variant orelse return RuntimeError.InvalidSpirV) {
                     .Type => |t| @as(Result.Type, t),
                     else => return RuntimeError.InvalidSpirV,
                 },
@@ -459,10 +461,6 @@ fn opLabel(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     };
 }
 
-fn opCompositeConstructSetup(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
-    _ = try setupConstant(allocator, rt);
-}
-
 fn opCompositeConstruct(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
     _ = rt.it.skip();
     const id = try rt.it.next();
@@ -501,16 +499,7 @@ fn opAccessChain(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) Runtim
     const base_id = try rt.it.next();
 
     const base = &rt.results[base_id];
-    var value_ptr = blk: {
-        if (base.variant) |variant| {
-            switch (variant) {
-                .Variable => |v| break :blk &v.value,
-                .Constant => |v| break :blk &v,
-                else => {},
-            }
-        }
-        return RuntimeError.InvalidSpirV;
-    };
+    var value_ptr = try base.getValue();
 
     const index_count = word_count - 3;
     for (0..index_count) |_| {
@@ -570,10 +559,6 @@ fn opStore(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     );
 }
 
-fn opLoadSetup(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
-    _ = try setupConstant(allocator, rt);
-}
-
 fn opLoad(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     _ = rt.it.skip();
     const id = try rt.it.next();
@@ -605,6 +590,48 @@ fn opReturn(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     }
 }
 
+fn opFMul(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const res_type = try rt.it.next();
+    const id = try rt.it.next();
+    const op1 = try rt.it.next();
+    const op2 = try rt.it.next();
+
+    const target_type = (rt.results[res_type].variant orelse return RuntimeError.InvalidSpirV).Type;
+
+    const target = &rt.results[id];
+    const value = try target.getValue();
+
+    const op1_target = &rt.results[op1];
+    const op1_value = try op1_target.getValue();
+
+    const op2_target = &rt.results[op2];
+    const op2_value = try op2_target.getValue();
+
+    const float_size = sw: switch (target_type) {
+        .Vector => |v| continue :sw (rt.results[v.components_type_word].variant orelse return RuntimeError.InvalidSpirV).Type,
+        .Float => |f| f.bit_length,
+        else => return RuntimeError.InvalidSpirV,
+    };
+
+    switch (value.*) {
+        .Float => switch (float_size) {
+            16 => value.Float.float16 = op1_value.Float.float16 * op2_value.Float.float16,
+            32 => value.Float.float32 = op1_value.Float.float32 * op2_value.Float.float32,
+            64 => value.Float.float64 = op1_value.Float.float64 * op2_value.Float.float64,
+            else => return RuntimeError.InvalidSpirV,
+        },
+        .Vector => |vec| for (vec, op1_value.Vector, op2_value.Vector) |*val, op1_v, op2_v| {
+            switch (float_size) {
+                16 => val.Float.float16 = op1_v.Float.float16 * op2_v.Float.float16,
+                32 => val.Float.float32 = op1_v.Float.float32 * op2_v.Float.float32,
+                64 => val.Float.float64 = op1_v.Float.float64 * op2_v.Float.float64,
+                else => return RuntimeError.InvalidSpirV,
+            }
+        },
+        else => return RuntimeError.InvalidSpirV,
+    }
+}
+
 fn setupConstant(allocator: std.mem.Allocator, rt: *Runtime) RuntimeError!*Result {
     const res_type = try rt.it.next();
     const id = try rt.it.next();
@@ -617,6 +644,10 @@ fn setupConstant(allocator: std.mem.Allocator, rt: *Runtime) RuntimeError!*Resul
     }
     target.variant = .{ .Constant = try Result.initValue(allocator, member_count, rt.mod.results, resolved) };
     return target;
+}
+
+fn autoSetupConstant(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    _ = try setupConstant(allocator, rt);
 }
 
 fn readString(allocator: std.mem.Allocator, it: *WordIterator) RuntimeError![]const u8 {
