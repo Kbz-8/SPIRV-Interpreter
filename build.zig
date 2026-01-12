@@ -46,7 +46,17 @@ pub fn build(b: *std.Build) void {
 
     // Zig unit tests setup
 
-    const lib_tests = b.addTest(.{ .root_module = mod });
+    const nzsl = b.lazyDependency("NZSL", .{}) orelse return;
+    const test_mod = b.createModule(.{
+        .root_source_file = b.path("test/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "spv", .module = mod },
+            .{ .name = "nzsl", .module = nzsl.module("nzigsl") },
+        },
+    });
+    const lib_tests = b.addTest(.{ .root_module = test_mod });
     const run_tests = b.addRunArtifact(lib_tests);
     const test_step = b.step("test", "Run Zig unit tests");
     test_step.dependOn(&run_tests.step);

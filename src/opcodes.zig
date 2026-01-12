@@ -24,8 +24,10 @@ pub const SetupDispatcher = block: {
         .Decorate = opDecorate,
         .EntryPoint = opEntryPoint,
         .ExecutionMode = opExecutionMode,
+        .FMul = autoSetupConstant,
         .Function = opFunction,
         .FunctionEnd = opFunctionEnd,
+        .IMul = autoSetupConstant,
         .Label = opLabel,
         .Load = autoSetupConstant,
         .MemberDecorate = opDecorateMember,
@@ -44,7 +46,6 @@ pub const SetupDispatcher = block: {
         .TypeVector = opTypeVector,
         .TypeVoid = opTypeVoid,
         .Variable = opVariable,
-        .FMul = autoSetupConstant,
     });
 };
 
@@ -54,10 +55,11 @@ pub const RuntimeDispatcher = block: {
         .AccessChain = opAccessChain,
         .CompositeConstruct = opCompositeConstruct,
         .CompositeExtract = opCompositeExtract,
+        .FMul = opFMul,
+        .IMul = opIMul,
         .Load = opLoad,
         .Return = opReturn,
         .Store = opStore,
-        .FMul = opFMul,
     });
 };
 
@@ -591,43 +593,62 @@ fn opReturn(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
 }
 
 fn opFMul(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
-    const res_type = try rt.it.next();
-    const id = try rt.it.next();
-    const op1 = try rt.it.next();
-    const op2 = try rt.it.next();
+    const target_type = (rt.results[try rt.it.next()].variant orelse return RuntimeError.InvalidSpirV).Type;
+    const value = try rt.results[try rt.it.next()].getValue();
+    const op1_value = try rt.results[try rt.it.next()].getValue();
+    const op2_value = try rt.results[try rt.it.next()].getValue();
 
-    const target_type = (rt.results[res_type].variant orelse return RuntimeError.InvalidSpirV).Type;
-
-    const target = &rt.results[id];
-    const value = try target.getValue();
-
-    const op1_target = &rt.results[op1];
-    const op1_value = try op1_target.getValue();
-
-    const op2_target = &rt.results[op2];
-    const op2_value = try op2_target.getValue();
-
-    const float_size = sw: switch (target_type) {
+    const size = sw: switch (target_type) {
         .Vector => |v| continue :sw (rt.results[v.components_type_word].variant orelse return RuntimeError.InvalidSpirV).Type,
         .Float => |f| f.bit_length,
         else => return RuntimeError.InvalidSpirV,
     };
 
-    switch (value.*) {
-        .Float => switch (float_size) {
-            16 => value.Float.float16 = op1_value.Float.float16 * op2_value.Float.float16,
-            32 => value.Float.float32 = op1_value.Float.float32 * op2_value.Float.float32,
-            64 => value.Float.float64 = op1_value.Float.float64 * op2_value.Float.float64,
-            else => return RuntimeError.InvalidSpirV,
-        },
-        .Vector => |vec| for (vec, op1_value.Vector, op2_value.Vector) |*val, op1_v, op2_v| {
-            switch (float_size) {
-                16 => val.Float.float16 = op1_v.Float.float16 * op2_v.Float.float16,
-                32 => val.Float.float32 = op1_v.Float.float32 * op2_v.Float.float32,
-                64 => val.Float.float64 = op1_v.Float.float64 * op2_v.Float.float64,
+    const operator = struct {
+        fn process(bit_count: SpvWord, v: *Result.Value, op1_v: *const Result.Value, op2_v: *const Result.Value) RuntimeError!void {
+            switch (bit_count) {
+                16 => v.Float.float16 = op1_v.Float.float16 * op2_v.Float.float16,
+                32 => v.Float.float32 = op1_v.Float.float32 * op2_v.Float.float32,
+                64 => v.Float.float64 = op1_v.Float.float64 * op2_v.Float.float64,
                 else => return RuntimeError.InvalidSpirV,
             }
-        },
+        }
+    };
+
+    switch (value.*) {
+        .Float => try operator.process(size, value, op1_value, op2_value),
+        .Vector => |vec| for (vec, op1_value.Vector, op2_value.Vector) |*val, op1_v, op2_v| try operator.process(size, val, &op1_v, &op2_v),
+        else => return RuntimeError.InvalidSpirV,
+    }
+}
+
+fn opIMul(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const target_type = (rt.results[try rt.it.next()].variant orelse return RuntimeError.InvalidSpirV).Type;
+    const value = try rt.results[try rt.it.next()].getValue();
+    const op1_value = try rt.results[try rt.it.next()].getValue();
+    const op2_value = try rt.results[try rt.it.next()].getValue();
+
+    const size = sw: switch (target_type) {
+        .Vector => |v| continue :sw (rt.results[v.components_type_word].variant orelse return RuntimeError.InvalidSpirV).Type,
+        .Int => |i| i.bit_length,
+        else => return RuntimeError.InvalidSpirV,
+    };
+
+    const operator = struct {
+        fn process(bit_count: SpvWord, v: *Result.Value, op1_v: *const Result.Value, op2_v: *const Result.Value) RuntimeError!void {
+            switch (bit_count) {
+                8 => v.Int.sint8 = op1_v.Int.sint8 * op2_v.Int.sint8,
+                16 => v.Int.sint16 = op1_v.Int.sint16 * op2_v.Int.sint16,
+                32 => v.Int.sint32 = op1_v.Int.sint32 * op2_v.Int.sint32,
+                64 => v.Int.sint64 = op1_v.Int.sint64 * op2_v.Int.sint64,
+                else => return RuntimeError.InvalidSpirV,
+            }
+        }
+    };
+
+    switch (value.*) {
+        .Int => try operator.process(size, value, op1_value, op2_value),
+        .Vector => |vec| for (vec, op1_value.Vector, op2_value.Vector) |*val, op1_v, op2_v| try operator.process(size, val, &op1_v, &op2_v),
         else => return RuntimeError.InvalidSpirV,
     }
 }

@@ -6,6 +6,11 @@
             .url = "git+https://github.com/Kbz-8/pretty#117674465efd4d07d5ae9d9d8ca59c2c323a65ba",
             .hash = "pretty-0.10.6-Tm65r99UAQDEJMgZysD10qE8dinBHr064fPM6YkxVPfB",
         },
+        .NZSL = .{ // For unit tests
+            .url = "git+https://github.com/Kbz-8/NZigSL#60a82680901e806f322789b585bf32547f5f5442",
+            .hash = "NZSL-1.1.1-N0xSVGd6AABOa_qLFkTeeprKLj_2YqayosICqh10_nbB",
+            .lazy = true,
+        },
     },
     .minimum_zig_version = "0.15.2",
     .paths = .{
