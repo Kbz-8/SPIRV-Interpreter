@@ -20,7 +20,7 @@ pub fn compileNzsl(allocator: std.mem.Allocator, source: []const u8) ![]const u3
 }
 
 pub const case = struct {
-    pub fn expectOutput(comptime T: type, source: []const u32, output_name: []const u8, comptime expected: []const T) !void {
+    pub fn expectOutput(comptime T: type, comptime len: usize, source: []const u32, output_name: []const u8, expected: []const T) !void {
         const allocator = std.testing.allocator;
 
         var module = try spv.Module.init(allocator, source);
@@ -30,10 +30,28 @@ pub const case = struct {
         defer rt.deinit(allocator);
 
         try rt.callEntryPoint(allocator, try rt.getEntryPointByName("main"));
-        var output: [expected.len]T = undefined;
-        try rt.readOutput(T, output[0..output.len], try rt.getResultByName(output_name));
+        var output: [len]T = undefined;
+        try rt.readOutput(T, output[0..len], try rt.getResultByName(output_name));
 
         try std.testing.expectEqualSlices(T, expected, &output);
+    }
+
+    pub fn random(comptime T: type) T {
+        var prng: std.Random.DefaultPrng = .init(@intCast(std.time.microTimestamp()));
+        const rand = prng.random();
+
+        return switch (@typeInfo(T)) {
+            .int => rand.int(T),
+            .float => rand.float(T),
+            .vector => |v| blk: {
+                var vec: @Vector(v.len, v.child) = undefined;
+                for (0..v.len) |i| {
+                    vec[i] = random(v.child);
+                }
+                break :blk vec;
+            },
+            inline else => unreachable,
+        };
     }
 };
 

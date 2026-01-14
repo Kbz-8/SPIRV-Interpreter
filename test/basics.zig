@@ -25,5 +25,5 @@ test "FMul vec4[f32]" {
     const code = try compileNzsl(allocator, shader);
     defer allocator.free(code);
 
-    try case.expectOutput(f32, code, "color", &.{ 4, 3, 2, 1 });
+    try case.expectOutput(f32, 4, code, "color", &.{ 4, 3, 2, 1 });
 }

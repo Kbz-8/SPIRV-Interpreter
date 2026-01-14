@@ -13,6 +13,12 @@ const SpvByte = spv.SpvByte;
 const SpvWord = spv.SpvWord;
 const SpvBool = spv.SpvBool;
 
+const MathType = enum {
+    Float,
+    SInt,
+    UInt,
+};
+
 pub const OpCodeFunc = *const fn (std.mem.Allocator, SpvWord, *Runtime) RuntimeError!void;
 
 pub const SetupDispatcher = block: {
@@ -55,8 +61,8 @@ pub const RuntimeDispatcher = block: {
         .AccessChain = opAccessChain,
         .CompositeConstruct = opCompositeConstruct,
         .CompositeExtract = opCompositeExtract,
-        .FMul = opFMul,
-        .IMul = opIMul,
+        .FMul = maths(.Float).opMul,
+        .IMul = maths(.SInt).opMul,
         .Load = opLoad,
         .Return = opReturn,
         .Store = opStore,
@@ -592,65 +598,56 @@ fn opReturn(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     }
 }
 
-fn opFMul(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
-    const target_type = (rt.results[try rt.it.next()].variant orelse return RuntimeError.InvalidSpirV).Type;
-    const value = try rt.results[try rt.it.next()].getValue();
-    const op1_value = try rt.results[try rt.it.next()].getValue();
-    const op2_value = try rt.results[try rt.it.next()].getValue();
+fn maths(comptime T: MathType) type {
+    return struct {
+        fn opMul(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+            const target_type = (rt.results[try rt.it.next()].variant orelse return RuntimeError.InvalidSpirV).Type;
+            const value = try rt.results[try rt.it.next()].getValue();
+            const op1_value = try rt.results[try rt.it.next()].getValue();
+            const op2_value = try rt.results[try rt.it.next()].getValue();
 
-    const size = sw: switch (target_type) {
-        .Vector => |v| continue :sw (rt.results[v.components_type_word].variant orelse return RuntimeError.InvalidSpirV).Type,
-        .Float => |f| f.bit_length,
-        else => return RuntimeError.InvalidSpirV,
-    };
+            const size = sw: switch (target_type) {
+                .Vector => |v| continue :sw (rt.results[v.components_type_word].variant orelse return RuntimeError.InvalidSpirV).Type,
+                .Float => |f| if (T == .Float) f.bit_length else return RuntimeError.InvalidSpirV,
+                .Int => |i| if (T == .SInt or T == .UInt) i.bit_length else return RuntimeError.InvalidSpirV,
+                else => return RuntimeError.InvalidSpirV,
+            };
 
-    const operator = struct {
-        fn process(bit_count: SpvWord, v: *Result.Value, op1_v: *const Result.Value, op2_v: *const Result.Value) RuntimeError!void {
-            switch (bit_count) {
-                16 => v.Float.float16 = op1_v.Float.float16 * op2_v.Float.float16,
-                32 => v.Float.float32 = op1_v.Float.float32 * op2_v.Float.float32,
-                64 => v.Float.float64 = op1_v.Float.float64 * op2_v.Float.float64,
+            const operator = struct {
+                fn process(bit_count: SpvWord, v: *Result.Value, op1_v: *const Result.Value, op2_v: *const Result.Value) RuntimeError!void {
+                    switch (T) {
+                        .Float => switch (bit_count) {
+                            16 => v.Float.float16 = op1_v.Float.float16 * op2_v.Float.float16,
+                            32 => v.Float.float32 = op1_v.Float.float32 * op2_v.Float.float32,
+                            64 => v.Float.float64 = op1_v.Float.float64 * op2_v.Float.float64,
+                            else => return RuntimeError.InvalidSpirV,
+                        },
+                        .SInt => switch (bit_count) {
+                            8 => v.Int.sint8 = @mulWithOverflow(op1_v.Int.sint8, op2_v.Int.sint8)[0],
+                            16 => v.Int.sint16 = @mulWithOverflow(op1_v.Int.sint16, op2_v.Int.sint16)[0],
+                            32 => v.Int.sint32 = @mulWithOverflow(op1_v.Int.sint32, op2_v.Int.sint32)[0],
+                            64 => v.Int.sint64 = @mulWithOverflow(op1_v.Int.sint64, op2_v.Int.sint64)[0],
+                            else => return RuntimeError.InvalidSpirV,
+                        },
+                        .UInt => switch (bit_count) {
+                            8 => v.Int.uint8 = @mulWithOverflow(op1_v.Int.uint8, op2_v.Int.uint8)[0],
+                            16 => v.Int.uint16 = @mulWithOverflow(op1_v.Int.uint16, op2_v.Int.uint16)[0],
+                            32 => v.Int.uint32 = @mulWithOverflow(op1_v.Int.uint32, op2_v.Int.uint32)[0],
+                            64 => v.Int.uint64 = @mulWithOverflow(op1_v.Int.uint64, op2_v.Int.uint64)[0],
+                            else => return RuntimeError.InvalidSpirV,
+                        },
+                    }
+                }
+            };
+
+            switch (value.*) {
+                .Float => if (T == .Float) try operator.process(size, value, op1_value, op2_value) else return RuntimeError.InvalidSpirV,
+                .Int => if (T == .SInt or T == .UInt) try operator.process(size, value, op1_value, op2_value) else return RuntimeError.InvalidSpirV,
+                .Vector => |vec| for (vec, op1_value.Vector, op2_value.Vector) |*val, op1_v, op2_v| try operator.process(size, val, &op1_v, &op2_v),
                 else => return RuntimeError.InvalidSpirV,
             }
         }
     };
-
-    switch (value.*) {
-        .Float => try operator.process(size, value, op1_value, op2_value),
-        .Vector => |vec| for (vec, op1_value.Vector, op2_value.Vector) |*val, op1_v, op2_v| try operator.process(size, val, &op1_v, &op2_v),
-        else => return RuntimeError.InvalidSpirV,
-    }
-}
-
-fn opIMul(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
-    const target_type = (rt.results[try rt.it.next()].variant orelse return RuntimeError.InvalidSpirV).Type;
-    const value = try rt.results[try rt.it.next()].getValue();
-    const op1_value = try rt.results[try rt.it.next()].getValue();
-    const op2_value = try rt.results[try rt.it.next()].getValue();
-
-    const size = sw: switch (target_type) {
-        .Vector => |v| continue :sw (rt.results[v.components_type_word].variant orelse return RuntimeError.InvalidSpirV).Type,
-        .Int => |i| i.bit_length,
-        else => return RuntimeError.InvalidSpirV,
-    };
-
-    const operator = struct {
-        fn process(bit_count: SpvWord, v: *Result.Value, op1_v: *const Result.Value, op2_v: *const Result.Value) RuntimeError!void {
-            switch (bit_count) {
-                8 => v.Int.sint8 = op1_v.Int.sint8 * op2_v.Int.sint8,
-                16 => v.Int.sint16 = op1_v.Int.sint16 * op2_v.Int.sint16,
-                32 => v.Int.sint32 = op1_v.Int.sint32 * op2_v.Int.sint32,
-                64 => v.Int.sint64 = op1_v.Int.sint64 * op2_v.Int.sint64,
-                else => return RuntimeError.InvalidSpirV,
-            }
-        }
-    };
-
-    switch (value.*) {
-        .Int => try operator.process(size, value, op1_value, op2_value),
-        .Vector => |vec| for (vec, op1_value.Vector, op2_value.Vector) |*val, op1_v, op2_v| try operator.process(size, val, &op1_v, &op2_v),
-        else => return RuntimeError.InvalidSpirV,
-    }
 }
 
 fn setupConstant(allocator: std.mem.Allocator, rt: *Runtime) RuntimeError!*Result {
