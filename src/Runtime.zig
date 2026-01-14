@@ -21,6 +21,7 @@ pub const RuntimeError = error{
     Killed,
     InvalidEntryPoint,
     ToDo,
+    DivisionByZero,
 };
 
 pub const Function = struct {

@@ -19,6 +19,14 @@ const MathType = enum {
     UInt,
 };
 
+const MathOp = enum {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+};
+
 pub const OpCodeFunc = *const fn (std.mem.Allocator, SpvWord, *Runtime) RuntimeError!void;
 
 pub const SetupDispatcher = block: {
@@ -30,10 +38,8 @@ pub const SetupDispatcher = block: {
         .Decorate = opDecorate,
         .EntryPoint = opEntryPoint,
         .ExecutionMode = opExecutionMode,
-        .FMul = autoSetupConstant,
         .Function = opFunction,
         .FunctionEnd = opFunctionEnd,
-        .IMul = autoSetupConstant,
         .Label = opLabel,
         .Load = autoSetupConstant,
         .MemberDecorate = opDecorateMember,
@@ -52,6 +58,18 @@ pub const SetupDispatcher = block: {
         .TypeVector = opTypeVector,
         .TypeVoid = opTypeVoid,
         .Variable = opVariable,
+        .FAdd = autoSetupConstant,
+        .FDiv = autoSetupConstant,
+        .FMod = autoSetupConstant,
+        .FMul = autoSetupConstant,
+        .FSub = autoSetupConstant,
+        .IAdd = autoSetupConstant,
+        .IMul = autoSetupConstant,
+        .ISub = autoSetupConstant,
+        .SDiv = autoSetupConstant,
+        .SMod = autoSetupConstant,
+        .UDiv = autoSetupConstant,
+        .UMod = autoSetupConstant,
     });
 };
 
@@ -61,11 +79,21 @@ pub const RuntimeDispatcher = block: {
         .AccessChain = opAccessChain,
         .CompositeConstruct = opCompositeConstruct,
         .CompositeExtract = opCompositeExtract,
-        .FMul = maths(.Float).opMul,
-        .IMul = maths(.SInt).opMul,
+        .FAdd = maths(.Float, .Add).op,
+        .FDiv = maths(.Float, .Div).op,
+        .FMod = maths(.Float, .Mod).op,
+        .FMul = maths(.Float, .Mul).op,
+        .FSub = maths(.Float, .Sub).op,
+        .IAdd = maths(.SInt, .Add).op,
+        .IMul = maths(.SInt, .Mul).op,
+        .ISub = maths(.SInt, .Sub).op,
         .Load = opLoad,
         .Return = opReturn,
+        .SDiv = maths(.SInt, .Div).op,
+        .SMod = maths(.SInt, .Mod).op,
         .Store = opStore,
+        .UDiv = maths(.UInt, .Div).op,
+        .UMod = maths(.UInt, .Mod).op,
     });
 };
 
@@ -387,14 +415,18 @@ fn opConstant(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) R
     switch (target.variant.?.Constant) {
         .Int => |*i| {
             if (word_count - 2 != 1) {
-                i.uint64 = @as(u64, try rt.it.next()) | (@as(u64, try rt.it.next()) >> 32);
+                const low = @as(u64, try rt.it.next());
+                const high = @as(u64, try rt.it.next());
+                i.uint64 = (high << 32) | low;
             } else {
                 i.uint32 = try rt.it.next();
             }
         },
         .Float => |*f| {
             if (word_count - 2 != 1) {
-                f.float64 = @bitCast(@as(u64, try rt.it.next()) | (@as(u64, try rt.it.next()) >> 32));
+                const low = @as(u64, try rt.it.next());
+                const high = @as(u64, try rt.it.next());
+                f.float64 = @bitCast((high << 32) | low);
             } else {
                 f.float32 = @bitCast(try rt.it.next());
             }
@@ -598,9 +630,9 @@ fn opReturn(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     }
 }
 
-fn maths(comptime T: MathType) type {
+fn maths(comptime T: MathType, comptime Op: MathOp) type {
     return struct {
-        fn opMul(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+        fn op(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
             const target_type = (rt.results[try rt.it.next()].variant orelse return RuntimeError.InvalidSpirV).Type;
             const value = try rt.results[try rt.it.next()].getValue();
             const op1_value = try rt.results[try rt.it.next()].getValue();
@@ -614,26 +646,52 @@ fn maths(comptime T: MathType) type {
             };
 
             const operator = struct {
+                fn operation(comptime TT: type, op1: TT, op2: TT) RuntimeError!TT {
+                    return switch (Op) {
+                        .Add => if (@typeInfo(TT) == .int) @addWithOverflow(op1, op2)[0] else op1 + op2,
+                        .Sub => if (@typeInfo(TT) == .int) @subWithOverflow(op1, op2)[0] else op1 - op2,
+                        .Mul => if (@typeInfo(TT) == .int) @mulWithOverflow(op1, op2)[0] else op1 * op2,
+                        .Div => blk: {
+                            if (op2 == 0) return RuntimeError.DivisionByZero;
+                            break :blk if (@typeInfo(TT) == .int) @divTrunc(op1, op2) else op1 / op2;
+                        },
+                        .Mod => blk: {
+                            if (op2 == 0) return RuntimeError.DivisionByZero;
+                            break :blk @mod(op1, op2);
+                        },
+                    };
+                }
+
                 fn process(bit_count: SpvWord, v: *Result.Value, op1_v: *const Result.Value, op2_v: *const Result.Value) RuntimeError!void {
                     switch (T) {
                         .Float => switch (bit_count) {
-                            16 => v.Float.float16 = op1_v.Float.float16 * op2_v.Float.float16,
-                            32 => v.Float.float32 = op1_v.Float.float32 * op2_v.Float.float32,
-                            64 => v.Float.float64 = op1_v.Float.float64 * op2_v.Float.float64,
+                            inline 16, 32, 64 => |i| @field(v.Float, std.fmt.comptimePrint("float{}", .{i})) = try operation(
+                                @Type(.{ .float = .{ .bits = i } }),
+                                @field(op1_v.Float, std.fmt.comptimePrint("float{}", .{i})),
+                                @field(op2_v.Float, std.fmt.comptimePrint("float{}", .{i})),
+                            ),
                             else => return RuntimeError.InvalidSpirV,
                         },
                         .SInt => switch (bit_count) {
-                            8 => v.Int.sint8 = @mulWithOverflow(op1_v.Int.sint8, op2_v.Int.sint8)[0],
-                            16 => v.Int.sint16 = @mulWithOverflow(op1_v.Int.sint16, op2_v.Int.sint16)[0],
-                            32 => v.Int.sint32 = @mulWithOverflow(op1_v.Int.sint32, op2_v.Int.sint32)[0],
-                            64 => v.Int.sint64 = @mulWithOverflow(op1_v.Int.sint64, op2_v.Int.sint64)[0],
+                            inline 8, 16, 32, 64 => |i| @field(v.Int, std.fmt.comptimePrint("sint{}", .{i})) = try operation(
+                                @Type(.{ .int = .{
+                                    .signedness = .signed,
+                                    .bits = i,
+                                } }),
+                                @field(op1_v.Int, std.fmt.comptimePrint("sint{}", .{i})),
+                                @field(op2_v.Int, std.fmt.comptimePrint("sint{}", .{i})),
+                            ),
                             else => return RuntimeError.InvalidSpirV,
                         },
                         .UInt => switch (bit_count) {
-                            8 => v.Int.uint8 = @mulWithOverflow(op1_v.Int.uint8, op2_v.Int.uint8)[0],
-                            16 => v.Int.uint16 = @mulWithOverflow(op1_v.Int.uint16, op2_v.Int.uint16)[0],
-                            32 => v.Int.uint32 = @mulWithOverflow(op1_v.Int.uint32, op2_v.Int.uint32)[0],
-                            64 => v.Int.uint64 = @mulWithOverflow(op1_v.Int.uint64, op2_v.Int.uint64)[0],
+                            inline 8, 16, 32, 64 => |i| @field(v.Int, std.fmt.comptimePrint("uint{}", .{i})) = try operation(
+                                @Type(.{ .int = .{
+                                    .signedness = .unsigned,
+                                    .bits = i,
+                                } }),
+                                @field(op1_v.Int, std.fmt.comptimePrint("uint{}", .{i})),
+                                @field(op2_v.Int, std.fmt.comptimePrint("uint{}", .{i})),
+                            ),
                             else => return RuntimeError.InvalidSpirV,
                         },
                     }

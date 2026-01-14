@@ -3,7 +3,7 @@ const root = @import("root.zig");
 const compileNzsl = root.compileNzsl;
 const case = root.case;
 
-test "FMul vec4[f32]" {
+test "Simple fragment shader" {
     const allocator = std.testing.allocator;
     const shader =
         \\ [nzsl_version("1.1")]
