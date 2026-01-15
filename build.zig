@@ -56,7 +56,10 @@ pub fn build(b: *std.Build) void {
             .{ .name = "nzsl", .module = nzsl.module("nzigsl") },
         },
     });
-    const lib_tests = b.addTest(.{ .root_module = test_mod });
+    const lib_tests = b.addTest(.{
+        .root_module = test_mod,
+        .test_runner = .{ .path = b.path("test/test_runner.zig"), .mode = .simple },
+    });
     const run_tests = b.addRunArtifact(lib_tests);
     const test_step = b.step("test", "Run Zig unit tests");
     test_step.dependOn(&run_tests.step);
