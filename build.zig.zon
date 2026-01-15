@@ -7,8 +7,8 @@
             .hash = "pretty-0.10.6-Tm65r99UAQDEJMgZysD10qE8dinBHr064fPM6YkxVPfB",
         },
         .NZSL = .{ // For unit tests
-            .url = "git+https://github.com/Kbz-8/NZigSL#60a82680901e806f322789b585bf32547f5f5442",
-            .hash = "NZSL-1.1.1-N0xSVGd6AABOa_qLFkTeeprKLj_2YqayosICqh10_nbB",
+            .url = "git+https://git.kbz8.me/kbz_8/NZigSL#0bdfc3231138b2a1d5a2c9d517df2c3e7a296dc7",
+            .hash = "NZSL-1.1.1-N0xSVLF6AADmN3lNOmBVu0humpmo4YRv6pd-lSygyG8o",
             .lazy = true,
         },
     },
