@@ -111,6 +111,7 @@ pub fn callEntryPoint(self: *Self, allocator: std.mem.Allocator, entry_point_ind
         }
     }
 
+    self.it.did_jump = false; // To reset function jump
     while (self.it.nextOrNull()) |opcode_data| {
         const word_count = ((opcode_data & (~spv.SpvOpCodeMask)) >> spv.SpvWordCountShift) - 1;
         const opcode = (opcode_data & spv.SpvOpCodeMask);
@@ -121,8 +122,13 @@ pub fn callEntryPoint(self: *Self, allocator: std.mem.Allocator, entry_point_ind
                 try pfn(allocator, word_count, self);
             }
         }
-        _ = it_tmp.skipN(word_count);
-        self.it = it_tmp;
+        if (!self.it.did_jump) {
+            _ = it_tmp.skipN(word_count);
+            self.it = it_tmp;
+        } else {
+            self.it.did_jump = false;
+            _ = it_tmp.skip();
+        }
     }
 
     //@import("pretty").print(allocator, self.results, .{

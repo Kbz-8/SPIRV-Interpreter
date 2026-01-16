@@ -41,8 +41,12 @@ pub fn build(b: *std.Build) void {
     const run_example = b.addRunArtifact(example_exe);
     run_example.step.dependOn(&example_install.step);
 
-    const run_example_step = b.step("example", "Run the basic example");
+    const run_example_step = b.step("example", "Run the example");
     run_example_step.dependOn(&run_example.step);
+
+    const compile_shader_cmd = b.addSystemCommand(&[_][]const u8{ "nzslc", "example/shader.nzsl", "--compile=spv,spv-dis", "-o", "example" });
+    const compile_shader_step = b.step("example-shader", "Compiles example's shader");
+    compile_shader_step.dependOn(&compile_shader_cmd.step);
 
     // Zig unit tests setup
 

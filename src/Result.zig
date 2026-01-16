@@ -238,9 +238,15 @@ variant: ?union(Variant) {
     },
     Variable: struct {
         storage_class: spv.SpvStorageClass,
+        type_word: SpvWord,
+        type: Type,
         value: Value,
     },
-    Constant: Value,
+    Constant: struct {
+        type_word: SpvWord,
+        type: Type,
+        value: Value,
+    },
     Function: struct {
         source_location: usize,
         return_type: SpvWord,
@@ -284,7 +290,7 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
                 },
                 else => {},
             },
-            .Constant => |*v| v.deinit(allocator),
+            .Constant => |*c| c.value.deinit(allocator),
             .Variable => |*v| v.value.deinit(allocator),
             //.AccessChain => |*a| a.value.deinit(allocator),
             else => {},
@@ -293,10 +299,26 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
     self.decorations.deinit(allocator);
 }
 
+pub fn getValueTypeWord(self: *Self) RuntimeError!SpvWord {
+    return switch (self.variant orelse return RuntimeError.InvalidSpirV) {
+        .Variable => |v| v.type_word,
+        .Constant => |c| c.type_word,
+        else => RuntimeError.InvalidSpirV,
+    };
+}
+
+pub fn getValueType(self: *Self) RuntimeError!Type {
+    return switch (self.variant orelse return RuntimeError.InvalidSpirV) {
+        .Variable => |v| v.type,
+        .Constant => |c| c.type,
+        else => RuntimeError.InvalidSpirV,
+    };
+}
+
 pub fn getValue(self: *Self) RuntimeError!*Value {
     return switch (self.variant orelse return RuntimeError.InvalidSpirV) {
         .Variable => |*v| &v.value,
-        .Constant => |*v| v,
+        .Constant => |*c| &c.value,
         else => RuntimeError.InvalidSpirV,
     };
 }
@@ -343,10 +365,18 @@ pub fn dupe(self: *const Self, allocator: std.mem.Allocator) RuntimeError!Self {
                     .Variable => |v| break :blk .{
                         .Variable = .{
                             .storage_class = v.storage_class,
+                            .type_word = v.type_word,
+                            .type = v.type,
                             .value = try v.value.dupe(allocator),
                         },
                     },
-                    .Constant => |c| break :blk .{ .Constant = try c.dupe(allocator) },
+                    .Constant => |c| break :blk .{
+                        .Constant = .{
+                            .type_word = c.type_word,
+                            .type = c.type,
+                            .value = try c.value.dupe(allocator),
+                        },
+                    },
                     .Function => |f| break :blk .{
                         .Function = .{
                             .source_location = f.source_location,

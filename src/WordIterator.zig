@@ -9,11 +9,13 @@ const Self = @This();
 
 buffer: []const SpvWord,
 index: usize,
+did_jump: bool,
 
 pub fn init(buffer: []const SpvWord) Self {
     return .{
         .buffer = buffer,
         .index = 0,
+        .did_jump = false,
     };
 }
 
@@ -66,5 +68,6 @@ pub inline fn emitSourceLocation(self: *const Self) usize {
 pub inline fn jumpToSourceLocation(self: *Self, source_location: usize) bool {
     if (source_location > self.buffer.len) return false;
     self.index = source_location;
+    self.did_jump = true;
     return true;
 }
