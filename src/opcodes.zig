@@ -75,6 +75,7 @@ pub const SetupDispatcher = block: {
         .Function = opFunction,
         .FunctionCall = autoSetupConstant,
         .FunctionEnd = opFunctionEnd,
+        .FunctionParameter = opFunctionParameter,
         .IAdd = autoSetupConstant,
         .IEqual = autoSetupConstant,
         .IMul = autoSetupConstant,
@@ -697,8 +698,53 @@ fn opFunction(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeErr
     rt.current_function = &rt.mod.results[id];
 }
 
+fn opFunctionCall(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    _ = rt.it.skip();
+    const ret = &rt.results[try rt.it.next()];
+    const func = &rt.results[try rt.it.next()];
+
+    for ((func.variant orelse return RuntimeError.InvalidSpirV).Function.params) |param| {
+        const arg = &rt.results[try rt.it.next()];
+        (rt.results[param].variant orelse return RuntimeError.InvalidSpirV).FunctionParameter.value_ptr = try arg.getValue();
+    }
+    rt.function_stack.items[rt.function_stack.items.len - 1].source_location = rt.it.emitSourceLocation();
+    const source_location = (func.variant orelse return RuntimeError.InvalidSpirV).Function.source_location;
+    rt.function_stack.append(allocator, .{
+        .source_location = source_location,
+        .result = func,
+        .ret = ret,
+    }) catch return RuntimeError.OutOfMemory;
+    if (!rt.it.jumpToSourceLocation(source_location)) return RuntimeError.InvalidSpirV;
+    rt.current_parameter_index = 0;
+}
+
 fn opFunctionEnd(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     rt.current_function = null;
+}
+
+fn opFunctionParameter(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const var_type = try rt.it.next();
+    const id = try rt.it.next();
+
+    const target = &rt.mod.results[id];
+
+    const resolved = rt.mod.results[var_type].resolveType(rt.mod.results);
+    const member_count = resolved.getMemberCounts();
+    if (member_count == 0) {
+        return RuntimeError.InvalidSpirV;
+    }
+    target.variant = .{
+        .FunctionParameter = .{
+            .type_word = var_type,
+            .type = switch (resolved.variant orelse return RuntimeError.InvalidSpirV) {
+                .Type => |t| @as(Result.Type, t),
+                else => return RuntimeError.InvalidSpirV,
+            },
+            .value_ptr = null,
+        },
+    };
+    ((rt.current_function orelse return RuntimeError.InvalidSpirV).variant orelse return RuntimeError.InvalidSpirV).Function.params[rt.current_parameter_index] = id;
+    rt.current_parameter_index += 1;
 }
 
 fn opLabel(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
@@ -714,20 +760,7 @@ fn opLoad(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     _ = rt.it.skip();
     const id = try rt.it.next();
     const ptr_id = try rt.it.next();
-    copyValue(
-        switch (rt.results[id].variant orelse return RuntimeError.InvalidSpirV) {
-            .Variable => |*v| &v.value,
-            .Constant => |*c| &c.value,
-            .AccessChain => |*a| &a.value,
-            else => return RuntimeError.InvalidSpirV,
-        },
-        switch (rt.results[ptr_id].variant orelse return RuntimeError.InvalidSpirV) {
-            .Variable => |v| &v.value,
-            .Constant => |c| &c.value,
-            .AccessChain => |a| &a.value,
-            else => return RuntimeError.InvalidSpirV,
-        },
-    );
+    copyValue(try rt.results[id].getValue(), try rt.results[ptr_id].getValue());
 }
 
 fn opMemberName(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
@@ -775,7 +808,6 @@ fn opName(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) Runti
 }
 
 fn opReturn(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
-    rt.last_return_id = null;
     _ = rt.function_stack.pop();
     if (rt.function_stack.getLastOrNull()) |function| {
         _ = rt.it.jumpToSourceLocation(function.source_location);
@@ -787,6 +819,13 @@ fn opReturn(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
 }
 
 fn opReturnValue(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    if (rt.function_stack.getLastOrNull()) |function| {
+        var ret_res = rt.results[try rt.it.next()];
+        copyValue(try function.ret.getValue(), try ret_res.getValue());
+    } else {
+        return RuntimeError.InvalidSpirV; // No current function ???
+    }
+
     _ = rt.function_stack.pop();
     if (rt.function_stack.getLastOrNull()) |function| {
         _ = rt.it.jumpToSourceLocation(function.source_location);
@@ -824,20 +863,7 @@ fn opSourceExtension(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Run
 fn opStore(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     const ptr_id = try rt.it.next();
     const val_id = try rt.it.next();
-    copyValue(
-        switch (rt.results[ptr_id].variant orelse return RuntimeError.InvalidSpirV) {
-            .Variable => |*v| &v.value,
-            .Constant => |*c| &c.value,
-            .AccessChain => |*a| &a.value,
-            else => return RuntimeError.InvalidSpirV,
-        },
-        switch (rt.results[val_id].variant orelse return RuntimeError.InvalidSpirV) {
-            .Variable => |v| &v.value,
-            .Constant => |c| &c.value,
-            .AccessChain => |a| &a.value,
-            else => return RuntimeError.InvalidSpirV,
-        },
-    );
+    copyValue(try rt.results[ptr_id].getValue(), try rt.results[val_id].getValue());
 }
 
 fn opTypeBool(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {

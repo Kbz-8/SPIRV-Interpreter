@@ -27,6 +27,7 @@ pub const RuntimeError = error{
 pub const Function = struct {
     source_location: usize,
     result: *Result,
+    ret: *Result,
 };
 
 mod: *Module,
@@ -35,6 +36,7 @@ it: WordIterator,
 /// Local deep copy of module's results to be able to run multiple runtimes concurrently
 results: []Result,
 
+current_parameter_index: SpvWord,
 current_function: ?*Result,
 function_stack: std.ArrayList(Function),
 
@@ -49,6 +51,7 @@ pub fn init(allocator: std.mem.Allocator, module: *Module) RuntimeError!Self {
             }
             break :blk results;
         },
+        .current_parameter_index = 0,
         .current_function = null,
         .function_stack = .empty,
     };
@@ -103,6 +106,11 @@ pub fn callEntryPoint(self: *Self, allocator: std.mem.Allocator, entry_point_ind
             switch (variant) {
                 .Function => |f| {
                     if (!self.it.jumpToSourceLocation(f.source_location)) return RuntimeError.InvalidEntryPoint;
+                    self.function_stack.append(allocator, .{
+                        .source_location = f.source_location,
+                        .result = entry_point_result,
+                        .ret = &self.results[f.return_type],
+                    }) catch return RuntimeError.OutOfMemory;
                 },
                 else => return RuntimeError.InvalidEntryPoint,
             }
@@ -127,7 +135,7 @@ pub fn callEntryPoint(self: *Self, allocator: std.mem.Allocator, entry_point_ind
             self.it = it_tmp;
         } else {
             self.it.did_jump = false;
-            _ = it_tmp.skip();
+            //_ = self.it.skip();
         }
     }
 

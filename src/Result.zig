@@ -251,13 +251,17 @@ variant: ?union(Variant) {
         source_location: usize,
         return_type: SpvWord,
         function_type: SpvWord,
-        params: []const SpvWord,
+        params: []SpvWord,
     },
     AccessChain: struct {
         target: SpvWord,
         value: Value,
     },
-    FunctionParameter: struct {},
+    FunctionParameter: struct {
+        type_word: SpvWord,
+        type: Type,
+        value_ptr: ?*Value,
+    },
     Label: struct {
         source_location: usize,
     },
@@ -293,6 +297,7 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
             .Constant => |*c| c.value.deinit(allocator),
             .Variable => |*v| v.value.deinit(allocator),
             //.AccessChain => |*a| a.value.deinit(allocator),
+            .Function => |f| allocator.free(f.params),
             else => {},
         }
     }
@@ -303,6 +308,8 @@ pub fn getValueTypeWord(self: *Self) RuntimeError!SpvWord {
     return switch (self.variant orelse return RuntimeError.InvalidSpirV) {
         .Variable => |v| v.type_word,
         .Constant => |c| c.type_word,
+        .AccessChain => |*a| a.target,
+        .FunctionParameter => |p| p.type_word,
         else => RuntimeError.InvalidSpirV,
     };
 }
@@ -311,6 +318,7 @@ pub fn getValueType(self: *Self) RuntimeError!Type {
     return switch (self.variant orelse return RuntimeError.InvalidSpirV) {
         .Variable => |v| v.type,
         .Constant => |c| c.type,
+        .FunctionParameter => |p| p.type,
         else => RuntimeError.InvalidSpirV,
     };
 }
@@ -319,6 +327,8 @@ pub fn getValue(self: *Self) RuntimeError!*Value {
     return switch (self.variant orelse return RuntimeError.InvalidSpirV) {
         .Variable => |*v| &v.value,
         .Constant => |*c| &c.value,
+        .AccessChain => |*a| &a.value,
+        .FunctionParameter => |*p| p.value_ptr orelse return RuntimeError.InvalidSpirV,
         else => RuntimeError.InvalidSpirV,
     };
 }

@@ -7,15 +7,15 @@ struct FragOut
     [location(0)] color: vec4[f32]
 }
 
-fn computeColor() -> f32
+fn computeColor(val: f32) -> f32
 {
-	return 1.0;
+	return 2.0 * val;
 }
 
 [entry(frag)]
 fn main() -> FragOut
 {
     let output: FragOut;
-    output.color = vec4[f32](computeColor(), computeColor(), computeColor(), computeColor());
+    output.color = vec4[f32](computeColor(1.0), computeColor(2.0), computeColor(3.0), computeColor(4.0));
     return output;
 }
