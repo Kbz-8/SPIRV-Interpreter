@@ -36,6 +36,152 @@ const CondOp = enum {
     LessEqual,
 };
 
+pub const OpCodeFunc = *const fn (std.mem.Allocator, SpvWord, *Runtime) RuntimeError!void;
+
+pub const SetupDispatcher = block: {
+    @setEvalBranchQuota(65535);
+    break :block std.EnumMap(spv.SpvOp, OpCodeFunc).init(.{
+        .Bitcast = autoSetupConstant,
+        .Capability = opCapability,
+        .CompositeConstruct = autoSetupConstant,
+        .Constant = opConstant,
+        .ConvertFToS = autoSetupConstant,
+        .ConvertFToU = autoSetupConstant,
+        .ConvertPtrToU = autoSetupConstant,
+        .ConvertSToF = autoSetupConstant,
+        .ConvertUToF = autoSetupConstant,
+        .ConvertUToPtr = autoSetupConstant,
+        .Decorate = opDecorate,
+        .EntryPoint = opEntryPoint,
+        .ExecutionMode = opExecutionMode,
+        .FAdd = autoSetupConstant,
+        .FConvert = autoSetupConstant,
+        .FDiv = autoSetupConstant,
+        .FMod = autoSetupConstant,
+        .FMul = autoSetupConstant,
+        .FOrdEqual = autoSetupConstant,
+        .FOrdGreaterThan = autoSetupConstant,
+        .FOrdGreaterThanEqual = autoSetupConstant,
+        .FOrdLessThan = autoSetupConstant,
+        .FOrdLessThanEqual = autoSetupConstant,
+        .FOrdNotEqual = autoSetupConstant,
+        .FSub = autoSetupConstant,
+        .FUnordEqual = autoSetupConstant,
+        .FUnordGreaterThan = autoSetupConstant,
+        .FUnordGreaterThanEqual = autoSetupConstant,
+        .FUnordLessThan = autoSetupConstant,
+        .FUnordLessThanEqual = autoSetupConstant,
+        .FUnordNotEqual = autoSetupConstant,
+        .Function = opFunction,
+        .FunctionCall = autoSetupConstant,
+        .FunctionEnd = opFunctionEnd,
+        .IAdd = autoSetupConstant,
+        .IEqual = autoSetupConstant,
+        .IMul = autoSetupConstant,
+        .INotEqual = autoSetupConstant,
+        .ISub = autoSetupConstant,
+        .Label = opLabel,
+        .Load = autoSetupConstant,
+        .MemberDecorate = opDecorateMember,
+        .MemberName = opMemberName,
+        .MemoryModel = opMemoryModel,
+        .Name = opName,
+        .QuantizeToF16 = autoSetupConstant,
+        .SConvert = autoSetupConstant,
+        .SDiv = autoSetupConstant,
+        .SGreaterThan = autoSetupConstant,
+        .SGreaterThanEqual = autoSetupConstant,
+        .SLessThan = autoSetupConstant,
+        .SLessThanEqual = autoSetupConstant,
+        .SMod = autoSetupConstant,
+        .SatConvertSToU = autoSetupConstant,
+        .SatConvertUToS = autoSetupConstant,
+        .Source = opSource,
+        .SourceExtension = opSourceExtension,
+        .TypeBool = opTypeBool,
+        .TypeFloat = opTypeFloat,
+        .TypeFunction = opTypeFunction,
+        .TypeInt = opTypeInt,
+        .TypeMatrix = opTypeMatrix,
+        .TypePointer = opTypePointer,
+        .TypeStruct = opTypeStruct,
+        .TypeVector = opTypeVector,
+        .TypeVoid = opTypeVoid,
+        .UConvert = autoSetupConstant,
+        .UDiv = autoSetupConstant,
+        .UGreaterThan = autoSetupConstant,
+        .UGreaterThanEqual = autoSetupConstant,
+        .ULessThan = autoSetupConstant,
+        .ULessThanEqual = autoSetupConstant,
+        .UMod = autoSetupConstant,
+        .Variable = opVariable,
+    });
+};
+
+pub const RuntimeDispatcher = block: {
+    @setEvalBranchQuota(65535);
+    break :block std.EnumMap(spv.SpvOp, OpCodeFunc).init(.{
+        .AccessChain = opAccessChain,
+        .Bitcast = opBitcast,
+        .Branch = opBranch,
+        .BranchConditional = opBranchConditional,
+        .CompositeConstruct = opCompositeConstruct,
+        .CompositeExtract = opCompositeExtract,
+        .ConvertFToS = ConversionEngine(.Float, .SInt).op,
+        .ConvertFToU = ConversionEngine(.Float, .UInt).op,
+        .ConvertSToF = ConversionEngine(.SInt, .Float).op,
+        .ConvertUToF = ConversionEngine(.UInt, .Float).op,
+        .FAdd = MathEngine(.Float, .Add).op,
+        .FConvert = ConversionEngine(.Float, .Float).op,
+        .FDiv = MathEngine(.Float, .Div).op,
+        .FMod = MathEngine(.Float, .Mod).op,
+        .FMul = MathEngine(.Float, .Mul).op,
+        .FOrdEqual = CondEngine(.Float, .Equal).op,
+        .FOrdGreaterThan = CondEngine(.Float, .Greater).op,
+        .FOrdGreaterThanEqual = CondEngine(.Float, .GreaterEqual).op,
+        .FOrdLessThan = CondEngine(.Float, .Less).op,
+        .FOrdLessThanEqual = CondEngine(.Float, .LessEqual).op,
+        .FOrdNotEqual = CondEngine(.Float, .NotEqual).op,
+        .FSub = MathEngine(.Float, .Sub).op,
+        .FUnordEqual = CondEngine(.Float, .Equal).op,
+        .FUnordGreaterThan = CondEngine(.Float, .Greater).op,
+        .FUnordGreaterThanEqual = CondEngine(.Float, .GreaterEqual).op,
+        .FUnordLessThan = CondEngine(.Float, .Less).op,
+        .FUnordLessThanEqual = CondEngine(.Float, .LessEqual).op,
+        .FUnordNotEqual = CondEngine(.Float, .NotEqual).op,
+        .FunctionCall = opFunctionCall,
+        .IAdd = MathEngine(.SInt, .Add).op,
+        .IEqual = CondEngine(.SInt, .Equal).op,
+        .IMul = MathEngine(.SInt, .Mul).op,
+        .INotEqual = CondEngine(.SInt, .NotEqual).op,
+        .ISub = MathEngine(.SInt, .Sub).op,
+        .Load = opLoad,
+        .Return = opReturn,
+        .ReturnValue = opReturnValue,
+        .SConvert = ConversionEngine(.SInt, .SInt).op,
+        .SDiv = MathEngine(.SInt, .Div).op,
+        .SGreaterThan = CondEngine(.SInt, .Greater).op,
+        .SGreaterThanEqual = CondEngine(.SInt, .GreaterEqual).op,
+        .SLessThan = CondEngine(.SInt, .Less).op,
+        .SLessThanEqual = CondEngine(.SInt, .LessEqual).op,
+        .SMod = MathEngine(.SInt, .Mod).op,
+        .Store = opStore,
+        .UConvert = ConversionEngine(.UInt, .UInt).op,
+        .UDiv = MathEngine(.UInt, .Div).op,
+        .UGreaterThan = CondEngine(.UInt, .Greater).op,
+        .UGreaterThanEqual = CondEngine(.UInt, .GreaterEqual).op,
+        .ULessThan = CondEngine(.UInt, .Less).op,
+        .ULessThanEqual = CondEngine(.UInt, .LessEqual).op,
+        .UMod = MathEngine(.UInt, .Mod).op,
+
+        //.QuantizeToF16  = ,
+        //.ConvertPtrToU  = ,
+        //.SatConvertSToU = ,
+        //.SatConvertUToS = ,
+        //.ConvertUToPtr  = ,
+    });
+};
+
 fn CondEngine(comptime T: ValueType, comptime Op: CondOp) type {
     return struct {
         fn op(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
@@ -156,148 +302,6 @@ fn ConversionEngine(comptime From: ValueType, comptime To: ValueType) type {
     };
 }
 
-pub const OpCodeFunc = *const fn (std.mem.Allocator, SpvWord, *Runtime) RuntimeError!void;
-
-pub const SetupDispatcher = block: {
-    @setEvalBranchQuota(65535);
-    break :block std.EnumMap(spv.SpvOp, OpCodeFunc).init(.{
-        .Capability = opCapability,
-        .CompositeConstruct = autoSetupConstant,
-        .Constant = opConstant,
-        .Decorate = opDecorate,
-        .EntryPoint = opEntryPoint,
-        .ExecutionMode = opExecutionMode,
-        .FAdd = autoSetupConstant,
-        .FDiv = autoSetupConstant,
-        .FMod = autoSetupConstant,
-        .FMul = autoSetupConstant,
-        .FOrdEqual = autoSetupConstant,
-        .FOrdGreaterThan = autoSetupConstant,
-        .FOrdGreaterThanEqual = autoSetupConstant,
-        .FOrdLessThan = autoSetupConstant,
-        .FOrdLessThanEqual = autoSetupConstant,
-        .FOrdNotEqual = autoSetupConstant,
-        .FSub = autoSetupConstant,
-        .FUnordEqual = autoSetupConstant,
-        .FUnordGreaterThan = autoSetupConstant,
-        .FUnordGreaterThanEqual = autoSetupConstant,
-        .FUnordLessThan = autoSetupConstant,
-        .FUnordLessThanEqual = autoSetupConstant,
-        .FUnordNotEqual = autoSetupConstant,
-        .Function = opFunction,
-        .FunctionEnd = opFunctionEnd,
-        .IAdd = autoSetupConstant,
-        .IEqual = autoSetupConstant,
-        .IMul = autoSetupConstant,
-        .INotEqual = autoSetupConstant,
-        .ISub = autoSetupConstant,
-        .Label = opLabel,
-        .Load = autoSetupConstant,
-        .MemberDecorate = opDecorateMember,
-        .MemberName = opMemberName,
-        .MemoryModel = opMemoryModel,
-        .Name = opName,
-        .SDiv = autoSetupConstant,
-        .SGreaterThan = autoSetupConstant,
-        .SGreaterThanEqual = autoSetupConstant,
-        .SLessThan = autoSetupConstant,
-        .SLessThanEqual = autoSetupConstant,
-        .SMod = autoSetupConstant,
-        .Source = opSource,
-        .SourceExtension = opSourceExtension,
-        .TypeBool = opTypeBool,
-        .TypeFloat = opTypeFloat,
-        .TypeFunction = opTypeFunction,
-        .TypeInt = opTypeInt,
-        .TypeMatrix = opTypeMatrix,
-        .TypePointer = opTypePointer,
-        .TypeStruct = opTypeStruct,
-        .TypeVector = opTypeVector,
-        .TypeVoid = opTypeVoid,
-        .UDiv = autoSetupConstant,
-        .UGreaterThan = autoSetupConstant,
-        .UGreaterThanEqual = autoSetupConstant,
-        .ULessThan = autoSetupConstant,
-        .ULessThanEqual = autoSetupConstant,
-        .UMod = autoSetupConstant,
-        .Variable = opVariable,
-
-        .ConvertFToU = autoSetupConstant,
-        .ConvertFToS = autoSetupConstant,
-        .ConvertSToF = autoSetupConstant,
-        .ConvertUToF = autoSetupConstant,
-        .UConvert = autoSetupConstant,
-        .SConvert = autoSetupConstant,
-        .FConvert = autoSetupConstant,
-        .QuantizeToF16 = autoSetupConstant,
-        .ConvertPtrToU = autoSetupConstant,
-        .SatConvertSToU = autoSetupConstant,
-        .SatConvertUToS = autoSetupConstant,
-        .ConvertUToPtr = autoSetupConstant,
-    });
-};
-
-pub const RuntimeDispatcher = block: {
-    @setEvalBranchQuota(65535);
-    break :block std.EnumMap(spv.SpvOp, OpCodeFunc).init(.{
-        .AccessChain = opAccessChain,
-        .Branch = opBranch,
-        .BranchConditional = opBranchConditional,
-        .CompositeConstruct = opCompositeConstruct,
-        .CompositeExtract = opCompositeExtract,
-        .FAdd = MathEngine(.Float, .Add).op,
-        .FDiv = MathEngine(.Float, .Div).op,
-        .FMod = MathEngine(.Float, .Mod).op,
-        .FMul = MathEngine(.Float, .Mul).op,
-        .FOrdEqual = CondEngine(.Float, .Equal).op,
-        .FOrdGreaterThan = CondEngine(.Float, .Greater).op,
-        .FOrdGreaterThanEqual = CondEngine(.Float, .GreaterEqual).op,
-        .FOrdLessThan = CondEngine(.Float, .Less).op,
-        .FOrdLessThanEqual = CondEngine(.Float, .LessEqual).op,
-        .FOrdNotEqual = CondEngine(.Float, .NotEqual).op,
-        .FSub = MathEngine(.Float, .Sub).op,
-        .FUnordEqual = CondEngine(.Float, .Equal).op,
-        .FUnordGreaterThan = CondEngine(.Float, .Greater).op,
-        .FUnordGreaterThanEqual = CondEngine(.Float, .GreaterEqual).op,
-        .FUnordLessThan = CondEngine(.Float, .Less).op,
-        .FUnordLessThanEqual = CondEngine(.Float, .LessEqual).op,
-        .FUnordNotEqual = CondEngine(.Float, .NotEqual).op,
-        .IAdd = MathEngine(.SInt, .Add).op,
-        .IEqual = CondEngine(.SInt, .Equal).op,
-        .IMul = MathEngine(.SInt, .Mul).op,
-        .INotEqual = CondEngine(.SInt, .NotEqual).op,
-        .ISub = MathEngine(.SInt, .Sub).op,
-        .Load = opLoad,
-        .Return = opReturn,
-        .SDiv = MathEngine(.SInt, .Div).op,
-        .SGreaterThan = CondEngine(.SInt, .Greater).op,
-        .SGreaterThanEqual = CondEngine(.SInt, .GreaterEqual).op,
-        .SLessThan = CondEngine(.SInt, .Less).op,
-        .SLessThanEqual = CondEngine(.SInt, .LessEqual).op,
-        .SMod = MathEngine(.SInt, .Mod).op,
-        .Store = opStore,
-        .UDiv = MathEngine(.UInt, .Div).op,
-        .UGreaterThan = CondEngine(.UInt, .Greater).op,
-        .UGreaterThanEqual = CondEngine(.UInt, .GreaterEqual).op,
-        .ULessThan = CondEngine(.UInt, .Less).op,
-        .ULessThanEqual = CondEngine(.UInt, .LessEqual).op,
-        .UMod = MathEngine(.UInt, .Mod).op,
-
-        .ConvertFToU = ConversionEngine(.Float, .UInt).op,
-        .ConvertFToS = ConversionEngine(.Float, .SInt).op,
-        .ConvertSToF = ConversionEngine(.SInt, .Float).op,
-        .ConvertUToF = ConversionEngine(.UInt, .Float).op,
-        .UConvert = ConversionEngine(.UInt, .UInt).op,
-        .SConvert = ConversionEngine(.SInt, .SInt).op,
-        .FConvert = ConversionEngine(.Float, .Float).op,
-        //.QuantizeToF16  = autoSetupConstant,
-        //.ConvertPtrToU  = autoSetupConstant,
-        //.SatConvertSToU = autoSetupConstant,
-        //.SatConvertUToS = autoSetupConstant,
-        //.ConvertUToPtr  = autoSetupConstant,
-    });
-};
-
 fn MathEngine(comptime T: ValueType, comptime Op: MathOp) type {
     return struct {
         fn op(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
@@ -403,6 +407,35 @@ fn addDecoration(allocator: std.mem.Allocator, rt: *Runtime, target: SpvWord, de
 
 fn autoSetupConstant(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     _ = try setupConstant(allocator, rt);
+}
+
+fn opBitcast(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    _ = rt.it.skip();
+    const to_value = try rt.results[try rt.it.next()].getValue();
+    const from_value = try rt.results[try rt.it.next()].getValue();
+
+    const caster = struct {
+        /// Asumes that values passed are primitives ints or floats
+        fn cast(to: *Result.Value, from: *const Result.Value) RuntimeError!void {
+            const from_bytes: u64 = switch (from.*) {
+                .Float => |f| @bitCast(f.float64),
+                .Int => |i| i.uint64,
+                else => return RuntimeError.InvalidSpirV,
+            };
+
+            switch (to.*) {
+                .Float => |*f| f.float64 = @bitCast(from_bytes),
+                .Int => |*i| i.uint64 = from_bytes,
+                else => return RuntimeError.InvalidSpirV,
+            }
+        }
+    };
+
+    switch (to_value.*) {
+        .Int, .Float => try caster.cast(to_value, from_value),
+        .Vector => |vec| for (vec, from_value.Vector) |*t, *f| try caster.cast(t, f),
+        else => return RuntimeError.InvalidSpirV,
+    }
 }
 
 fn copyValue(dst: *Result.Value, src: *const Result.Value) void {
@@ -742,6 +775,18 @@ fn opName(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) Runti
 }
 
 fn opReturn(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    rt.last_return_id = null;
+    _ = rt.function_stack.pop();
+    if (rt.function_stack.getLastOrNull()) |function| {
+        _ = rt.it.jumpToSourceLocation(function.source_location);
+        rt.current_function = function.result;
+    } else {
+        rt.current_function = null;
+        rt.it.skipToEnd();
+    }
+}
+
+fn opReturnValue(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     _ = rt.function_stack.pop();
     if (rt.function_stack.getLastOrNull()) |function| {
         _ = rt.it.jumpToSourceLocation(function.source_location);

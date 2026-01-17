@@ -58,5 +58,6 @@ pub const case = struct {
 test {
     std.testing.refAllDecls(@import("basics.zig"));
     std.testing.refAllDecls(@import("branching.zig"));
+    std.testing.refAllDecls(@import("casts.zig"));
     std.testing.refAllDecls(@import("maths.zig"));
 }
