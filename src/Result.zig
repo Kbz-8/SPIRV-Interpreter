@@ -185,15 +185,7 @@ pub const Value = union(Type) {
     }
 };
 
-const Self = @This();
-
-name: ?[]const u8,
-
-decorations: std.ArrayList(Decoration),
-
-parent: ?*const Self,
-
-variant: ?union(Variant) {
+pub const VariantData = union(Variant) {
     String: []const u8,
     Extension: struct {},
     Type: union(Type) {
@@ -265,7 +257,17 @@ variant: ?union(Variant) {
     Label: struct {
         source_location: usize,
     },
-},
+};
+
+const Self = @This();
+
+name: ?[]const u8,
+
+decorations: std.ArrayList(Decoration),
+
+parent: ?*const Self,
+
+variant: ?VariantData,
 
 pub fn init() Self {
     return .{
@@ -305,7 +307,7 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
 }
 
 pub fn getValueTypeWord(self: *Self) RuntimeError!SpvWord {
-    return switch (self.variant orelse return RuntimeError.InvalidSpirV) {
+    return switch ((try self.getVariant()).*) {
         .Variable => |v| v.type_word,
         .Constant => |c| c.type_word,
         .AccessChain => |*a| a.target,
@@ -315,7 +317,7 @@ pub fn getValueTypeWord(self: *Self) RuntimeError!SpvWord {
 }
 
 pub fn getValueType(self: *Self) RuntimeError!Type {
-    return switch (self.variant orelse return RuntimeError.InvalidSpirV) {
+    return switch ((try self.getVariant()).*) {
         .Variable => |v| v.type,
         .Constant => |c| c.type,
         .FunctionParameter => |p| p.type,
@@ -324,13 +326,21 @@ pub fn getValueType(self: *Self) RuntimeError!Type {
 }
 
 pub fn getValue(self: *Self) RuntimeError!*Value {
-    return switch (self.variant orelse return RuntimeError.InvalidSpirV) {
+    return switch ((try self.getVariant()).*) {
         .Variable => |*v| &v.value,
         .Constant => |*c| &c.value,
         .AccessChain => |*a| &a.value,
         .FunctionParameter => |*p| p.value_ptr orelse return RuntimeError.InvalidSpirV,
         else => RuntimeError.InvalidSpirV,
     };
+}
+
+pub inline fn getVariant(self: *Self) RuntimeError!*VariantData {
+    return &(self.variant orelse return RuntimeError.InvalidSpirV);
+}
+
+pub inline fn getConstVariant(self: *const Self) RuntimeError!*const VariantData {
+    return &(self.variant orelse return RuntimeError.InvalidSpirV);
 }
 
 /// Performs a deep copy
