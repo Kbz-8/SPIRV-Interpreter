@@ -4,19 +4,17 @@ module;
 
 struct FragOut
 {
-    [location(0)] color: vec4[i32]
-}
-
-fn fibonacci(n: i32) -> i32
-{
-    if (n <= i32(1)) return n;
-    return fibonacci(n - i32(1)) + fibonacci(n - i32(2));
+    [location(0)] color: vec4[f32]
 }
 
 [entry(frag)]
 fn main() -> FragOut
 {
+    let value: f32 = 0.0;
+    for i in 1 -> 20 {
+        value *= f32(i);
+    }
     let output: FragOut;
-    output.color = vec4[i32](fibonacci(2), fibonacci(2), fibonacci(2), fibonacci(2));
+    output.color = vec4[f32](value, value, value, value);
     return output;
 }
