@@ -1,22 +1,27 @@
 [nzsl_version("1.1")]
-[feature(float64)]
 module;
 
 struct FragOut
 {
-    [location(0)] color: vec4[f32]
+	[location(0)] value: f32,
+	[location(1)] value2: f32
+}
+
+fn Half(inout color: vec3[f32], out value: f32, in inValue: f32, inValue2: f32)
+{
+	color *= 2.0;
+	value = 10.0;
 }
 
 [entry(frag)]
 fn main() -> FragOut
 {
-    let value: f32 = 1.0;
-    for i in 1 -> 5 {
-		if (i == 3)
-			continue;
-        value *= f32(i);
-    }
-    let output: FragOut;
-    output.color = vec4[f32](value, value, value, value);
-    return output;
+	let output: FragOut;
+	let mainColor = vec3[f32](1.0, 1.0, 1.0);
+	let inValue = 2.0;
+	let inValue2 = 1.0;
+	Half(inout mainColor, out output.value2, in inValue, inValue2);
+	output.value = mainColor.x;
+
+	return output;
 }

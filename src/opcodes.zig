@@ -99,6 +99,7 @@ pub const SetupDispatcher = block: {
         .SatConvertUToS = autoSetupConstant,
         .Source = opSource,
         .SourceExtension = opSourceExtension,
+        .TypeArray = opTypeArray,
         .TypeBool = opTypeBool,
         .TypeFloat = opTypeFloat,
         .TypeFunction = opTypeFunction,
@@ -505,7 +506,10 @@ fn opAccessChain(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) Runtim
                         if (i.uint32 > m.len) return RuntimeError.InvalidSpirV;
                         value_ptr = &m[i.uint32];
                     },
-                    .Array => |_| return RuntimeError.ToDo,
+                    .Array => |a| {
+                        if (i.uint32 > a.len) return RuntimeError.InvalidSpirV;
+                        value_ptr = &a[i.uint32];
+                    },
                     .Structure => |s| {
                         if (i.uint32 > s.len) return RuntimeError.InvalidSpirV;
                         value_ptr = &s[i.uint32];
@@ -866,6 +870,23 @@ fn opStore(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     copyValue(try rt.results[ptr_id].getValue(), try rt.results[val_id].getValue());
 }
 
+fn opTypeArray(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const id = try rt.it.next();
+    const components_type_word = try rt.it.next();
+    rt.mod.results[id].variant = .{
+        .Type = .{
+            .Array = .{
+                .components_type_word = components_type_word,
+                .components_type = switch ((try rt.mod.results[components_type_word].getVariant()).*) {
+                    .Type => |t| @as(Result.Type, t),
+                    else => return RuntimeError.InvalidSpirV,
+                },
+                .member_count = try rt.it.next(),
+            },
+        },
+    };
+}
+
 fn opTypeBool(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     const id = try rt.it.next();
     rt.mod.results[id].variant = .{
@@ -1076,9 +1097,6 @@ fn setupConstant(allocator: std.mem.Allocator, rt: *Runtime) RuntimeError!*Resul
 
     const resolved = rt.mod.results[res_type].resolveType(rt.mod.results);
     const member_count = resolved.getMemberCounts();
-    if (member_count == 0) {
-        return RuntimeError.InvalidSpirV;
-    }
     target.variant = .{
         .Constant = .{
             .value = try Result.initValue(allocator, member_count, rt.mod.results, resolved),
