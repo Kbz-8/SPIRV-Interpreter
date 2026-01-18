@@ -17,8 +17,8 @@ pub fn main() !void {
         defer rt.deinit(allocator);
 
         try rt.callEntryPoint(allocator, try rt.getEntryPointByName("main"));
-        var output: [4]f32 = undefined;
-        try rt.readOutput(f32, output[0..output.len], try rt.getResultByName("color"));
+        var output: [4]i32 = undefined;
+        try rt.readOutput(i32, output[0..output.len], try rt.getResultByName("color"));
         std.log.info("Output: Vec4{any}", .{output});
     }
     std.log.info("Successfully executed", .{});

@@ -59,5 +59,6 @@ test {
     std.testing.refAllDecls(@import("basics.zig"));
     std.testing.refAllDecls(@import("branching.zig"));
     std.testing.refAllDecls(@import("casts.zig"));
+    std.testing.refAllDecls(@import("functions.zig"));
     std.testing.refAllDecls(@import("maths.zig"));
 }
