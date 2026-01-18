@@ -1,18 +1,18 @@
 Version 1.0
 Generator: 2560130
-Bound: 45
+Bound: 51
 Schema: 0
       OpCapability Capability(Shader)
       OpCapability Capability(Float64)
       OpMemoryModel AddressingModel(Logical) MemoryModel(GLSL450)
-      OpEntryPoint ExecutionModel(Fragment) %17 "main" %6
-      OpExecutionMode %17 ExecutionMode(OriginUpperLeft)
+      OpEntryPoint ExecutionModel(Fragment) %18 "main" %6
+      OpExecutionMode %18 ExecutionMode(OriginUpperLeft)
       OpSource SourceLanguage(NZSL) 4198400
       OpSourceExtension "Version: 1.1"
       OpName %7 "FragOut"
       OpMemberName %7 0 "color"
       OpName %6 "color"
-      OpName %17 "main"
+      OpName %18 "main"
       OpDecorate %6 Decoration(Location) 0
       OpMemberDecorate %7 0 Decoration(Offset) 0
  %1 = OpTypeVoid
@@ -21,55 +21,65 @@ Schema: 0
  %4 = OpTypeVector %3 4
  %5 = OpTypePointer StorageClass(Output) %4
  %7 = OpTypeStruct %4
- %8 = OpConstant %3 f32(0)
+ %8 = OpConstant %3 f32(1)
  %9 = OpTypePointer StorageClass(Function) %3
 %10 = OpTypeInt 32 1
 %11 = OpConstant %10 i32(1)
 %12 = OpTypePointer StorageClass(Function) %10
-%13 = OpConstant %10 i32(20)
+%13 = OpConstant %10 i32(5)
 %14 = OpTypeBool
-%15 = OpTypePointer StorageClass(Function) %7
-%16 = OpConstant %10 i32(0)
-%42 = OpTypePointer StorageClass(Function) %4
+%15 = OpConstant %10 i32(3)
+%16 = OpTypePointer StorageClass(Function) %7
+%17 = OpConstant %10 i32(0)
+%48 = OpTypePointer StorageClass(Function) %4
  %6 = OpVariable %5 StorageClass(Output)
-%17 = OpFunction %1 FunctionControl(0) %2
-%18 = OpLabel
-%19 = OpVariable %9 StorageClass(Function)
-%20 = OpVariable %12 StorageClass(Function)
+%18 = OpFunction %1 FunctionControl(0) %2
+%19 = OpLabel
+%20 = OpVariable %9 StorageClass(Function)
 %21 = OpVariable %12 StorageClass(Function)
-%22 = OpVariable %15 StorageClass(Function)
-      OpStore %19 %8
-      OpStore %20 %11
-      OpStore %21 %13
-      OpBranch %23
-%23 = OpLabel
-%27 = OpLoad %10 %20
-%28 = OpLoad %10 %21
-%29 = OpSLessThan %14 %27 %28
-      OpLoopMerge %25 %26 LoopControl(0)
-      OpBranchConditional %29 %24 %25
+%22 = OpVariable %12 StorageClass(Function)
+%23 = OpVariable %16 StorageClass(Function)
+      OpStore %20 %8
+      OpStore %21 %11
+      OpStore %22 %13
+      OpBranch %24
 %24 = OpLabel
-%30 = OpLoad %3 %19
-%31 = OpLoad %10 %20
-%32 = OpConvertSToF %3 %31
-%33 = OpFMul %3 %30 %32
-      OpStore %19 %33
-%34 = OpLoad %10 %20
-%35 = OpIAdd %10 %34 %11
-      OpStore %20 %35
-      OpBranch %26
-%26 = OpLabel
-      OpBranch %23
+%28 = OpLoad %10 %21
+%29 = OpLoad %10 %22
+%30 = OpSLessThan %14 %28 %29
+      OpLoopMerge %26 %27 LoopControl(0)
+      OpBranchConditional %30 %25 %26
 %25 = OpLabel
-%36 = OpLoad %3 %19
-%37 = OpLoad %3 %19
-%38 = OpLoad %3 %19
-%39 = OpLoad %3 %19
-%40 = OpCompositeConstruct %4 %36 %37 %38 %39
-%41 = OpAccessChain %42 %22 %16
-      OpStore %41 %40
-%43 = OpLoad %7 %22
-%44 = OpCompositeExtract %4 %43 0
-      OpStore %6 %44
+%34 = OpLoad %10 %21
+%35 = OpIEqual %14 %34 %15
+      OpSelectionMerge %31 SelectionControl(0)
+      OpBranchConditional %35 %32 %33
+%32 = OpLabel
+      OpBranch %27
+%33 = OpLabel
+      OpBranch %31
+%31 = OpLabel
+%36 = OpLoad %3 %20
+%37 = OpLoad %10 %21
+%38 = OpConvertSToF %3 %37
+%39 = OpFMul %3 %36 %38
+      OpStore %20 %39
+%40 = OpLoad %10 %21
+%41 = OpIAdd %10 %40 %11
+      OpStore %21 %41
+      OpBranch %27
+%27 = OpLabel
+      OpBranch %24
+%26 = OpLabel
+%42 = OpLoad %3 %20
+%43 = OpLoad %3 %20
+%44 = OpLoad %3 %20
+%45 = OpLoad %3 %20
+%46 = OpCompositeConstruct %4 %42 %43 %44 %45
+%47 = OpAccessChain %48 %23 %17
+      OpStore %47 %46
+%49 = OpLoad %7 %23
+%50 = OpCompositeExtract %4 %49 0
+      OpStore %6 %50
       OpReturn
       OpFunctionEnd
