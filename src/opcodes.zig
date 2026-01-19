@@ -43,6 +43,7 @@ const BitOp = enum {
     BitFieldUExtract,
     BitReverse,
     BitwiseAnd,
+    BitwiseOr,
     BitwiseXor,
     Not,
     ShiftLeft,
@@ -55,7 +56,15 @@ pub const OpCodeFunc = *const fn (std.mem.Allocator, SpvWord, *Runtime) RuntimeE
 pub const SetupDispatcher = block: {
     @setEvalBranchQuota(65535);
     break :block std.EnumMap(spv.SpvOp, OpCodeFunc).init(.{
+        .BitCount = autoSetupConstant,
+        .BitFieldInsert = autoSetupConstant,
+        .BitFieldSExtract = autoSetupConstant,
+        .BitFieldUExtract = autoSetupConstant,
+        .BitReverse = autoSetupConstant,
         .Bitcast = autoSetupConstant,
+        .BitwiseAnd = autoSetupConstant,
+        .BitwiseOr = autoSetupConstant,
+        .BitwiseXor = autoSetupConstant,
         .Capability = opCapability,
         .CompositeConstruct = autoSetupConstant,
         .Constant = opConstant,
@@ -101,6 +110,7 @@ pub const SetupDispatcher = block: {
         .MemberName = opMemberName,
         .MemoryModel = opMemoryModel,
         .Name = opName,
+        .Not = autoSetupConstant,
         .QuantizeToF16 = autoSetupConstant,
         .SConvert = autoSetupConstant,
         .SDiv = autoSetupConstant,
@@ -111,6 +121,9 @@ pub const SetupDispatcher = block: {
         .SMod = autoSetupConstant,
         .SatConvertSToU = autoSetupConstant,
         .SatConvertUToS = autoSetupConstant,
+        .ShiftLeftLogical = autoSetupConstant,
+        .ShiftRightArithmetic = autoSetupConstant,
+        .ShiftRightLogical = autoSetupConstant,
         .Source = opSource,
         .SourceExtension = opSourceExtension,
         .TypeArray = opTypeArray,
@@ -131,17 +144,6 @@ pub const SetupDispatcher = block: {
         .ULessThanEqual = autoSetupConstant,
         .UMod = autoSetupConstant,
         .Variable = opVariable,
-        .ShiftLeftLogical = autoSetupConstant,
-        .ShiftRightLogical = autoSetupConstant,
-        .ShiftRightArithmetic = autoSetupConstant,
-        .BitwiseAnd = autoSetupConstant,
-        .BitwiseXor = autoSetupConstant,
-        .Not = autoSetupConstant,
-        .BitFieldInsert = autoSetupConstant,
-        .BitFieldSExtract = autoSetupConstant,
-        .BitFieldUExtract = autoSetupConstant,
-        .BitReverse = autoSetupConstant,
-        .BitCount = autoSetupConstant,
     });
 };
 
@@ -149,7 +151,15 @@ pub const RuntimeDispatcher = block: {
     @setEvalBranchQuota(65535);
     break :block std.EnumMap(spv.SpvOp, OpCodeFunc).init(.{
         .AccessChain = opAccessChain,
+        .BitCount = BitEngine(.UInt, .BitCount).op,
+        .BitFieldInsert = BitEngine(.UInt, .BitFieldInsert).op,
+        .BitFieldSExtract = BitEngine(.SInt, .BitFieldSExtract).op,
+        .BitFieldUExtract = BitEngine(.UInt, .BitFieldUExtract).op,
+        .BitReverse = BitEngine(.UInt, .BitReverse).op,
         .Bitcast = opBitcast,
+        .BitwiseAnd = BitEngine(.UInt, .BitwiseAnd).op,
+        .BitwiseOr = BitEngine(.UInt, .BitwiseOr).op,
+        .BitwiseXor = BitEngine(.UInt, .BitwiseXor).op,
         .Branch = opBranch,
         .BranchConditional = opBranchConditional,
         .CompositeConstruct = opCompositeConstruct,
@@ -183,6 +193,7 @@ pub const RuntimeDispatcher = block: {
         .INotEqual = CondEngine(.SInt, .NotEqual).op,
         .ISub = MathEngine(.SInt, .Sub).op,
         .Load = opLoad,
+        .Not = BitEngine(.UInt, .Not).op,
         .Return = opReturn,
         .ReturnValue = opReturnValue,
         .SConvert = ConversionEngine(.SInt, .SInt).op,
@@ -192,6 +203,9 @@ pub const RuntimeDispatcher = block: {
         .SLessThan = CondEngine(.SInt, .Less).op,
         .SLessThanEqual = CondEngine(.SInt, .LessEqual).op,
         .SMod = MathEngine(.SInt, .Mod).op,
+        .ShiftLeftLogical = BitEngine(.UInt, .ShiftLeft).op,
+        .ShiftRightArithmetic = BitEngine(.SInt, .ShiftRightArithmetic).op,
+        .ShiftRightLogical = BitEngine(.UInt, .ShiftRight).op,
         .Store = opStore,
         .UConvert = ConversionEngine(.UInt, .UInt).op,
         .UDiv = MathEngine(.UInt, .Div).op,
@@ -210,47 +224,83 @@ pub const RuntimeDispatcher = block: {
 };
 
 fn BitEngine(comptime T: ValueType, comptime Op: BitOp) type {
+    if (T == .Float) @compileError("Invalid value type");
     return struct {
         fn op(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
-            _ = rt.it.skip();
+            const target_type = (try rt.results[try rt.it.next()].getVariant()).Type;
             const value = try rt.results[try rt.it.next()].getValue();
             const op1_value = try rt.results[try rt.it.next()].getValue();
-            const op2_value = if (Op == .Not) null else try rt.results[try rt.it.next()].getValue();
+            const op2_value: ?*Result.Value = switch (Op) {
+                .Not, .BitCount, .BitReverse => null,
+                else => try rt.results[try rt.it.next()].getValue(),
+            };
 
             const size = sw: switch (target_type) {
                 .Vector => |v| continue :sw (try rt.results[v.components_type_word].getVariant()).Type,
-                .Float => |f| if (T == .Float) f.bit_length else return RuntimeError.InvalidSpirV,
-                .Int => |i| if (T == .SInt or T == .UInt) i.bit_length else return RuntimeError.InvalidSpirV,
+                .Int => |i| i.bit_length,
                 else => return RuntimeError.InvalidSpirV,
             };
 
             const operator = struct {
-                fn operation(comptime TT: type, op1: TT, op2: TT) RuntimeError!TT {
-                    return switch (Op) {
-                        .Add => if (@typeInfo(TT) == .int) @addWithOverflow(op1, op2)[0] else op1 + op2,
-                        .Sub => if (@typeInfo(TT) == .int) @subWithOverflow(op1, op2)[0] else op1 - op2,
-                        .Mul => if (@typeInfo(TT) == .int) @mulWithOverflow(op1, op2)[0] else op1 * op2,
-                        .Div => blk: {
-                            if (op2 == 0) return RuntimeError.DivisionByZero;
-                            break :blk if (@typeInfo(TT) == .int) @divTrunc(op1, op2) else op1 / op2;
-                        },
-                        .Mod => blk: {
-                            if (op2 == 0) return RuntimeError.DivisionByZero;
-                            break :blk @mod(op1, op2);
-                        },
-                    };
+                inline fn bitMask(bits: u64) u64 {
+                    return if (bits >= 32) ~@as(u64, 0) else (@as(u64, 0x1) << @intCast(bits)) - 1;
                 }
 
-                fn process(bit_count: SpvWord, v: *Result.Value, op1_v: *const Result.Value, op2_v: *const Result.Value) RuntimeError!void {
+                inline fn bitInsert(comptime TT: type, base: TT, insert: TT, offset: u64, count: u64) TT {
+                    const mask = bitMask(count) << @intCast(offset);
+                    return @as(TT, @intCast((base & ~mask) | ((insert << @intCast(offset)) & mask)));
+                }
+
+                inline fn bitExtract(comptime TT: type, v: TT, offset: TT, count: u64) TT {
+                    return (v >> @intCast(offset)) & @as(TT, @intCast(bitMask(count)));
+                }
+
+                fn operation(comptime TT: type, rt2: *Runtime, op1: TT, op2: ?TT) RuntimeError!TT {
+                    switch (Op) {
+                        .BitCount => return @bitSizeOf(TT),
+                        .BitReverse => return @bitReverse(op1),
+                        .Not => return ~op1,
+                        else => {},
+                    }
+                    return if (op2) |v2|
+                        switch (Op) {
+                            .BitFieldInsert => blk: {
+                                const offset = try rt2.results[try rt2.it.next()].getValue();
+                                const count = try rt2.results[try rt2.it.next()].getValue();
+                                break :blk bitInsert(TT, op1, v2, offset.Int.uint64, count.Int.uint64);
+                            },
+                            .BitFieldSExtract => blk: {
+                                if (T == .UInt) return RuntimeError.InvalidSpirV;
+                                const count = try rt2.results[try rt2.it.next()].getValue();
+                                break :blk bitExtract(TT, op1, v2, count.Int.uint64);
+                            },
+                            .BitFieldUExtract => blk: {
+                                if (T == .SInt) return RuntimeError.InvalidSpirV;
+                                const count = try rt2.results[try rt2.it.next()].getValue();
+                                break :blk bitExtract(TT, op1, v2, count.Int.uint64);
+                            },
+                            .BitwiseAnd => op1 & v2,
+                            .BitwiseOr => op1 | v2,
+                            .BitwiseXor => op1 ^ v2,
+                            .ShiftLeft => op1 << @intCast(v2),
+                            .ShiftRight, .ShiftRightArithmetic => op1 >> @intCast(v2),
+                            else => return RuntimeError.InvalidSpirV,
+                        }
+                    else
+                        RuntimeError.InvalidSpirV;
+                }
+
+                fn process(rt2: *Runtime, bit_count: SpvWord, v: *Result.Value, op1_v: *const Result.Value, op2_v: ?*const Result.Value) RuntimeError!void {
                     switch (bit_count) {
                         inline 8, 16, 32, 64 => |i| {
-                            if (i == 8 and T == .Float) { // No f8
-                                return RuntimeError.InvalidSpirV;
-                            }
                             (try getValuePrimitiveField(T, i, v)).* = try operation(
                                 getValuePrimitiveFieldType(T, i),
+                                rt2,
                                 (try getValuePrimitiveField(T, i, @constCast(op1_v))).*,
-                                (try getValuePrimitiveField(T, i, @constCast(op2_v))).*,
+                                if (op2_v) |v2|
+                                    (try getValuePrimitiveField(T, i, @constCast(v2))).*
+                                else
+                                    null,
                             );
                         },
                         else => return RuntimeError.InvalidSpirV,
@@ -259,9 +309,9 @@ fn BitEngine(comptime T: ValueType, comptime Op: BitOp) type {
             };
 
             switch (value.*) {
-                .Float => if (T == .Float) try operator.process(size, value, op1_value, op2_value) else return RuntimeError.InvalidSpirV,
-                .Int => if (T == .SInt or T == .UInt) try operator.process(size, value, op1_value, op2_value) else return RuntimeError.InvalidSpirV,
-                .Vector => |vec| for (vec, op1_value.Vector, op2_value.Vector) |*val, op1_v, op2_v| try operator.process(size, val, &op1_v, &op2_v),
+                .Int => try operator.process(rt, size, value, op1_value, op2_value),
+                .Vector => |vec| for (vec, op1_value.Vector, 0..) |*val, op1_v, i|
+                    try operator.process(rt, size, val, &op1_v, if (op2_value) |op2_v| &op2_v.Vector[i] else null),
                 else => return RuntimeError.InvalidSpirV,
             }
         }

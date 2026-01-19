@@ -4,36 +4,37 @@ const compileNzsl = root.compileNzsl;
 const case = root.case;
 
 const Operations = enum {
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Mod,
+    BitwiseAnd,
+    BitwiseOr,
+    BitwiseXor,
+    ShiftLeft,
+    ShiftRight,
+    ShiftRightArithmetic,
 };
 
-// Tests all mathematical operation on all NZSL supported primitive types
-test "Maths primitives" {
+test "Bitwise primitives" {
     const allocator = std.testing.allocator;
-    const types = [_]type{ f32, f64, i32, u32 };
-    var operations = std.EnumMap(Operations, u8).init(.{
-        .Add = '+',
-        .Sub = '-',
-        .Mul = '*',
-        .Div = '/',
-        .Mod = '%',
+    const types = [_]type{ i32, u32 };
+    var operations = std.EnumMap(Operations, []const u8).init(.{
+        .BitwiseAnd = "&",
+        .BitwiseOr = "|",
+        .BitwiseXor = "^",
+        .ShiftLeft = "<<",
+        .ShiftRight = ">>",
+        .ShiftRightArithmetic = ">>",
     });
 
     var it = operations.iterator();
     while (it.next()) |op| {
         inline for (types) |T| {
-            const base: T = case.random(T);
-            const ratio: T = case.random(T);
+            const op1: T = case.random(T);
+            const op2: T = @mod(case.random(T), @bitSizeOf(T));
             const expected = switch (op.key) {
-                .Add => if (@typeInfo(T) == .int) @addWithOverflow(base, ratio)[0] else base + ratio,
-                .Sub => if (@typeInfo(T) == .int) @subWithOverflow(base, ratio)[0] else base - ratio,
-                .Mul => if (@typeInfo(T) == .int) @mulWithOverflow(base, ratio)[0] else base * ratio,
-                .Div => if (@typeInfo(T) == .int) @divTrunc(base, ratio) else base / ratio,
-                .Mod => @mod(base, ratio),
+                .BitwiseAnd => op1 & op2,
+                .BitwiseOr => op1 | op2,
+                .BitwiseXor => op1 ^ op2,
+                .ShiftLeft => op1 << @intCast(op2),
+                .ShiftRight, .ShiftRightArithmetic => op1 >> @intCast(op2),
             };
 
             const shader = try std.fmt.allocPrint(
@@ -50,9 +51,9 @@ test "Maths primitives" {
                 \\ [entry(frag)]
                 \\ fn main() -> FragOut
                 \\ {{
-                \\     let ratio: {s} = {d};
-                \\     let base: {s} = {d};
-                \\     let color = base {c} ratio;
+                \\     let op1: {s} = {d};
+                \\     let op2: {s} = {d};
+                \\     let color = op1 {s} op2;
                 \\
                 \\     let output: FragOut;
                 \\     output.color = vec4[{s}](color, color, color, color);
@@ -62,9 +63,9 @@ test "Maths primitives" {
                 .{
                     @typeName(T),
                     @typeName(T),
-                    ratio,
+                    op1,
                     @typeName(T),
-                    base,
+                    op2,
                     op.value.*,
                     @typeName(T),
                 },
@@ -77,30 +78,31 @@ test "Maths primitives" {
     }
 }
 
-// Tests all mathematical operation on vec2/3/4 with all NZSL supported primitive types
-test "Maths vectors" {
+test "Bitwise vectors" {
     const allocator = std.testing.allocator;
-    const types = [_]type{ f32, f64, i32, u32 };
-    var operations = std.EnumMap(Operations, u8).init(.{
-        .Add = '+',
-        .Sub = '-',
-        .Mul = '*',
-        .Div = '/',
-        .Mod = '%',
+    const types = [_]type{ i32, u32 };
+    var operations = std.EnumMap(Operations, []const u8).init(.{
+        .BitwiseAnd = "&",
+        .BitwiseOr = "|",
+        .BitwiseXor = "^",
+        .ShiftLeft = "<<",
+        .ShiftRight = ">>",
+        .ShiftRightArithmetic = ">>",
     });
 
     var it = operations.iterator();
     while (it.next()) |op| {
         inline for (2..5) |L| {
             inline for (types) |T| {
-                const base_color: case.Vec(L, T) = .{ .val = case.random(@Vector(L, T)) };
-                const ratio: case.Vec(L, T) = .{ .val = case.random(@Vector(L, T)) };
+                const op1: case.Vec(L, T) = .{ .val = case.random(@Vector(L, T)) };
+                var op2: case.Vec(L, T) = .{ .val = case.random(@Vector(L, T)) };
+                for (0..L) |i| op2.val[i] = @mod(op2.val[i], @bitSizeOf(T));
                 const expected = switch (op.key) {
-                    .Add => if (@typeInfo(T) == .int) @addWithOverflow(base_color.val, ratio.val)[0] else base_color.val + ratio.val,
-                    .Sub => if (@typeInfo(T) == .int) @subWithOverflow(base_color.val, ratio.val)[0] else base_color.val - ratio.val,
-                    .Mul => if (@typeInfo(T) == .int) @mulWithOverflow(base_color.val, ratio.val)[0] else base_color.val * ratio.val,
-                    .Div => if (@typeInfo(T) == .int) @divTrunc(base_color.val, ratio.val) else base_color.val / ratio.val,
-                    .Mod => @mod(base_color.val, ratio.val),
+                    .BitwiseAnd => op1.val & op2.val,
+                    .BitwiseOr => op1.val | op2.val,
+                    .BitwiseXor => op1.val ^ op2.val,
+                    .ShiftLeft => op1.val << @intCast(op2.val),
+                    .ShiftRight, .ShiftRightArithmetic => op1.val >> @intCast(op2.val),
                 };
 
                 const shader = try std.fmt.allocPrint(
@@ -117,10 +119,11 @@ test "Maths vectors" {
                     \\ [entry(frag)]
                     \\ fn main() -> FragOut
                     \\ {{
-                    \\     let ratio = vec{d}[{s}]({f});
+                    \\     let op1 = vec{d}[{s}]({f});
+                    \\     let op2 = vec{d}[{s}]({f});
                     \\
                     \\     let output: FragOut;
-                    \\     output.color = vec{d}[{s}]({f}) {c} ratio;
+                    \\     output.color = op1 {s} op2;
                     \\     return output;
                     \\ }}
                 ,
@@ -129,10 +132,10 @@ test "Maths vectors" {
                         @typeName(T),
                         L,
                         @typeName(T),
-                        ratio,
+                        op1,
                         L,
                         @typeName(T),
-                        base_color,
+                        op2,
                         op.value.*,
                     },
                 );

@@ -53,11 +53,25 @@ pub const case = struct {
             inline else => unreachable,
         };
     }
+
+    pub fn Vec(comptime len: usize, comptime T: type) type {
+        return struct {
+            const Self = @This();
+            val: @Vector(len, T),
+            pub fn format(self: *const Self, w: *std.Io.Writer) std.Io.Writer.Error!void {
+                inline for (0..len) |i| {
+                    try w.print("{d}", .{self.val[i]});
+                    if (i < len - 1) try w.writeAll(", ");
+                }
+            }
+        };
+    }
 };
 
 test {
     std.testing.refAllDecls(@import("arrays.zig"));
     std.testing.refAllDecls(@import("basics.zig"));
+    std.testing.refAllDecls(@import("bitwise.zig"));
     std.testing.refAllDecls(@import("branching.zig"));
     std.testing.refAllDecls(@import("casts.zig"));
     std.testing.refAllDecls(@import("functions.zig"));

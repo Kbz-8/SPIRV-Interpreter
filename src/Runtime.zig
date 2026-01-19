@@ -166,7 +166,7 @@ fn readValue(self: *const Self, comptime T: type, output: []T, value: *const Res
             if (T == bool) {
                 output[0] = b;
             } else {
-                unreachable;
+                unreachable; // Wanted value may not be composed of booleans
             }
         },
         .Int => |i| {
@@ -179,7 +179,7 @@ fn readValue(self: *const Self, comptime T: type, output: []T, value: *const Res
                 u16 => output[0] = i.uint16,
                 u32 => output[0] = i.uint32,
                 u64 => output[0] = i.uint64,
-                inline else => unreachable,
+                inline else => unreachable, // Wanted value may not be composed of ints
             }
         },
         .Float => |f| {
@@ -187,7 +187,7 @@ fn readValue(self: *const Self, comptime T: type, output: []T, value: *const Res
                 f16 => output[0] = f.float16,
                 f32 => output[0] = f.float32,
                 f64 => output[0] = f.float64,
-                inline else => unreachable,
+                inline else => unreachable, // Wanted value may not be composed of floats
             }
         },
         .Vector => |values| for (values, 0..) |v, i| self.readValue(T, output[i..], &v),

@@ -34,7 +34,7 @@ Schema: 0
 %17 = OpVariable %11 StorageClass(Function)
       OpStore %15 %8
 %18 = OpLoad %3 %15
-%19 = OpShiftLeftLogical %3 %18 %10
+%19 = OpShiftRightArithmetic %3 %18 %10
       OpStore %16 %19
 %20 = OpLoad %3 %16
 %21 = OpLoad %3 %16
