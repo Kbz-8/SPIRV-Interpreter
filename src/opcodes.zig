@@ -21,19 +21,33 @@ const ValueType = enum {
 
 const MathOp = enum {
     Add,
-    Sub,
-    Mul,
     Div,
     Mod,
+    Mul,
+    Sub,
 };
 
 const CondOp = enum {
     Equal,
-    NotEqual,
     Greater,
     GreaterEqual,
     Less,
     LessEqual,
+    NotEqual,
+};
+
+const BitOp = enum {
+    BitCount,
+    BitFieldInsert,
+    BitFieldSExtract,
+    BitFieldUExtract,
+    BitReverse,
+    BitwiseAnd,
+    BitwiseXor,
+    Not,
+    ShiftLeft,
+    ShiftRight,
+    ShiftRightArithmetic,
 };
 
 pub const OpCodeFunc = *const fn (std.mem.Allocator, SpvWord, *Runtime) RuntimeError!void;
@@ -117,6 +131,17 @@ pub const SetupDispatcher = block: {
         .ULessThanEqual = autoSetupConstant,
         .UMod = autoSetupConstant,
         .Variable = opVariable,
+        .ShiftLeftLogical = autoSetupConstant,
+        .ShiftRightLogical = autoSetupConstant,
+        .ShiftRightArithmetic = autoSetupConstant,
+        .BitwiseAnd = autoSetupConstant,
+        .BitwiseXor = autoSetupConstant,
+        .Not = autoSetupConstant,
+        .BitFieldInsert = autoSetupConstant,
+        .BitFieldSExtract = autoSetupConstant,
+        .BitFieldUExtract = autoSetupConstant,
+        .BitReverse = autoSetupConstant,
+        .BitCount = autoSetupConstant,
     });
 };
 
@@ -183,6 +208,65 @@ pub const RuntimeDispatcher = block: {
         //.ConvertUToPtr  = ,
     });
 };
+
+fn BitEngine(comptime T: ValueType, comptime Op: BitOp) type {
+    return struct {
+        fn op(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+            _ = rt.it.skip();
+            const value = try rt.results[try rt.it.next()].getValue();
+            const op1_value = try rt.results[try rt.it.next()].getValue();
+            const op2_value = if (Op == .Not) null else try rt.results[try rt.it.next()].getValue();
+
+            const size = sw: switch (target_type) {
+                .Vector => |v| continue :sw (try rt.results[v.components_type_word].getVariant()).Type,
+                .Float => |f| if (T == .Float) f.bit_length else return RuntimeError.InvalidSpirV,
+                .Int => |i| if (T == .SInt or T == .UInt) i.bit_length else return RuntimeError.InvalidSpirV,
+                else => return RuntimeError.InvalidSpirV,
+            };
+
+            const operator = struct {
+                fn operation(comptime TT: type, op1: TT, op2: TT) RuntimeError!TT {
+                    return switch (Op) {
+                        .Add => if (@typeInfo(TT) == .int) @addWithOverflow(op1, op2)[0] else op1 + op2,
+                        .Sub => if (@typeInfo(TT) == .int) @subWithOverflow(op1, op2)[0] else op1 - op2,
+                        .Mul => if (@typeInfo(TT) == .int) @mulWithOverflow(op1, op2)[0] else op1 * op2,
+                        .Div => blk: {
+                            if (op2 == 0) return RuntimeError.DivisionByZero;
+                            break :blk if (@typeInfo(TT) == .int) @divTrunc(op1, op2) else op1 / op2;
+                        },
+                        .Mod => blk: {
+                            if (op2 == 0) return RuntimeError.DivisionByZero;
+                            break :blk @mod(op1, op2);
+                        },
+                    };
+                }
+
+                fn process(bit_count: SpvWord, v: *Result.Value, op1_v: *const Result.Value, op2_v: *const Result.Value) RuntimeError!void {
+                    switch (bit_count) {
+                        inline 8, 16, 32, 64 => |i| {
+                            if (i == 8 and T == .Float) { // No f8
+                                return RuntimeError.InvalidSpirV;
+                            }
+                            (try getValuePrimitiveField(T, i, v)).* = try operation(
+                                getValuePrimitiveFieldType(T, i),
+                                (try getValuePrimitiveField(T, i, @constCast(op1_v))).*,
+                                (try getValuePrimitiveField(T, i, @constCast(op2_v))).*,
+                            );
+                        },
+                        else => return RuntimeError.InvalidSpirV,
+                    }
+                }
+            };
+
+            switch (value.*) {
+                .Float => if (T == .Float) try operator.process(size, value, op1_value, op2_value) else return RuntimeError.InvalidSpirV,
+                .Int => if (T == .SInt or T == .UInt) try operator.process(size, value, op1_value, op2_value) else return RuntimeError.InvalidSpirV,
+                .Vector => |vec| for (vec, op1_value.Vector, op2_value.Vector) |*val, op1_v, op2_v| try operator.process(size, val, &op1_v, &op2_v),
+                else => return RuntimeError.InvalidSpirV,
+            }
+        }
+    };
+}
 
 fn CondEngine(comptime T: ValueType, comptime Op: CondOp) type {
     return struct {
