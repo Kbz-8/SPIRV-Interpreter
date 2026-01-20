@@ -31,12 +31,14 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "spv", .module = mod },
-                .{ .name = "pretty", .module = pretty.module("pretty") },
             },
         }),
     });
 
-    const sdl3 = b.lazyDependency("sdl3", .{}) orelse return;
+    const sdl3 = b.lazyDependency("sdl3", .{
+        .target = target,
+        .optimize = optimize,
+    }) orelse return;
     example_exe.root_module.addImport("sdl3", sdl3.module("sdl3"));
 
     const example_install = b.addInstallArtifact(example_exe, .{});
