@@ -169,6 +169,7 @@ pub const RuntimeDispatcher = block: {
         .ConvertFToU = ConversionEngine(.Float, .UInt).op,
         .ConvertSToF = ConversionEngine(.SInt, .Float).op,
         .ConvertUToF = ConversionEngine(.UInt, .Float).op,
+        .CopyMemory = opCopyMemory,
         .FAdd = MathEngine(.Float, .Add).op,
         .FConvert = ConversionEngine(.Float, .Float).op,
         .FDiv = MathEngine(.Float, .Div).op,
@@ -631,21 +632,9 @@ fn opAccessChain(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) Runtim
         switch (member_value.*) {
             .Int => |i| {
                 switch (value_ptr.*) {
-                    .Vector => |v| {
+                    .Vector, .Matrix, .Array, .Structure => |v| {
                         if (i.uint32 > v.len) return RuntimeError.InvalidSpirV;
                         value_ptr = &v[i.uint32];
-                    },
-                    .Matrix => |m| {
-                        if (i.uint32 > m.len) return RuntimeError.InvalidSpirV;
-                        value_ptr = &m[i.uint32];
-                    },
-                    .Array => |a| {
-                        if (i.uint32 > a.len) return RuntimeError.InvalidSpirV;
-                        value_ptr = &a[i.uint32];
-                    },
-                    .Structure => |s| {
-                        if (i.uint32 > s.len) return RuntimeError.InvalidSpirV;
-                        value_ptr = &s[i.uint32];
                     },
                     else => return RuntimeError.InvalidSpirV,
                 }
@@ -750,6 +739,12 @@ fn opConstant(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) R
         },
         else => return RuntimeError.InvalidSpirV,
     }
+}
+
+fn opCopyMemory(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const target = try rt.it.next();
+    const source = try rt.it.next();
+    copyValue(try rt.results[target].getValue(), try rt.results[source].getValue());
 }
 
 fn opDecorate(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {

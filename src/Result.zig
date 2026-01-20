@@ -85,10 +85,7 @@ pub const Value = union(Type) {
 
     pub inline fn getCompositeDataOrNull(self: *const Value) ?[]Value {
         return switch (self.*) {
-            .Vector => |v| v,
-            .Matrix => |m| m,
-            .Array => |a| a,
-            .Structure => |s| s,
+            .Vector, .Matrix, .Array, .Structure => |v| v,
             else => null,
         };
     }
@@ -181,19 +178,7 @@ pub const Value = union(Type) {
 
     fn deinit(self: *Value, allocator: std.mem.Allocator) void {
         switch (self.*) {
-            .Vector => |values| {
-                for (values) |*value| value.deinit(allocator);
-                allocator.free(values);
-            },
-            .Matrix => |values| {
-                for (values) |*value| value.deinit(allocator);
-                allocator.free(values);
-            },
-            .Array => |values| {
-                for (values) |*value| value.deinit(allocator);
-                allocator.free(values);
-            },
-            .Structure => |values| {
+            .Vector, .Matrix, .Array, .Structure => |values| {
                 for (values) |*value| value.deinit(allocator);
                 allocator.free(values);
             },

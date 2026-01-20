@@ -14,20 +14,16 @@ const WordIterator = @import("WordIterator.zig");
 const Self = @This();
 
 pub const RuntimeError = error{
-    InvalidSpirV,
-    UnsupportedSpirV,
-    OutOfMemory,
-    Unreachable,
-    Killed,
-    InvalidEntryPoint,
-    ToDo,
     DivisionByZero,
+    InvalidEntryPoint,
+    InvalidSpirV,
     InvalidValueType,
-};
-
-pub const ReadOutputError = error{
+    Killed,
     NotFound,
-    InvalidValueType,
+    OutOfMemory,
+    ToDo,
+    Unreachable,
+    UnsupportedSpirV,
 };
 
 pub const Function = struct {
@@ -141,7 +137,6 @@ pub fn callEntryPoint(self: *Self, allocator: std.mem.Allocator, entry_point_ind
             self.it = it_tmp;
         } else {
             self.it.did_jump = false;
-            //_ = self.it.skip();
         }
     }
 
@@ -153,11 +148,19 @@ pub fn callEntryPoint(self: *Self, allocator: std.mem.Allocator, entry_point_ind
     //}) catch return RuntimeError.OutOfMemory;
 }
 
-pub fn readOutput(self: *const Self, comptime T: type, output: []T, result: SpvWord) ReadOutputError!void {
+pub fn readOutput(self: *const Self, comptime T: type, output: []T, result: SpvWord) RuntimeError!void {
     if (std.mem.indexOf(SpvWord, self.mod.output_locations.items, &.{result})) |_| {
         try self.readValue(T, output, &self.results[result].variant.?.Variable.value);
     } else {
-        return ReadOutputError.NotFound;
+        return RuntimeError.NotFound;
+    }
+}
+
+pub fn writeInput(self: *const Self, comptime T: type, input: []const T, result: SpvWord) RuntimeError!void {
+    if (std.mem.indexOf(SpvWord, self.mod.input_locations.items, &.{result})) |_| {
+        try self.writeValue(T, input, &self.results[result].variant.?.Variable.value);
+    } else {
+        return RuntimeError.NotFound;
     }
 }
 
@@ -166,13 +169,13 @@ fn reset(self: *Self) void {
     self.current_function = null;
 }
 
-fn readValue(self: *const Self, comptime T: type, output: []T, value: *const Result.Value) ReadOutputError!void {
+fn readValue(self: *const Self, comptime T: type, output: []T, value: *const Result.Value) RuntimeError!void {
     switch (value.*) {
         .Bool => |b| {
             if (T == bool) {
                 output[0] = b;
             } else {
-                return ReadOutputError.InvalidValueType;
+                return RuntimeError.InvalidValueType;
             }
         },
         .Int => |i| {
@@ -185,7 +188,7 @@ fn readValue(self: *const Self, comptime T: type, output: []T, value: *const Res
                 u16 => output[0] = i.uint16,
                 u32 => output[0] = i.uint32,
                 u64 => output[0] = i.uint64,
-                inline else => return ReadOutputError.InvalidValueType,
+                inline else => return RuntimeError.InvalidValueType,
             }
         },
         .Float => |f| {
@@ -193,13 +196,45 @@ fn readValue(self: *const Self, comptime T: type, output: []T, value: *const Res
                 f16 => output[0] = f.float16,
                 f32 => output[0] = f.float32,
                 f64 => output[0] = f.float64,
-                inline else => return ReadOutputError.InvalidValueType,
+                inline else => return RuntimeError.InvalidValueType,
             }
         },
-        .Vector => |values| for (values, 0..) |v, i| try self.readValue(T, output[i..], &v),
-        .Matrix => |values| for (values, 0..) |v, i| try self.readValue(T, output[i..], &v),
-        .Array => |values| for (values, 0..) |v, i| try self.readValue(T, output[i..], &v), // Doubt if this is allowed
-        .Structure => |values| for (values, 0..) |v, i| try self.readValue(T, output[i..], &v),
-        else => return ReadOutputError.InvalidValueType,
+        .Vector, .Matrix, .Array, .Structure => |values| for (values, 0..) |v, i| try self.readValue(T, output[i..], &v),
+        else => return RuntimeError.InvalidValueType,
+    }
+}
+
+fn writeValue(self: *const Self, comptime T: type, input: []const T, value: *Result.Value) RuntimeError!void {
+    switch (value.*) {
+        .Bool => |*b| {
+            if (T == bool) {
+                b.* = input[0];
+            } else {
+                return RuntimeError.InvalidValueType;
+            }
+        },
+        .Int => |*i| {
+            switch (T) {
+                i8 => i.sint8 = input[0],
+                i16 => i.sint16 = input[0],
+                i32 => i.sint32 = input[0],
+                i64 => i.sint64 = input[0],
+                u8 => i.uint8 = input[0],
+                u16 => i.uint16 = input[0],
+                u32 => i.uint32 = input[0],
+                u64 => i.uint64 = input[0],
+                inline else => return RuntimeError.InvalidValueType,
+            }
+        },
+        .Float => |*f| {
+            switch (T) {
+                f16 => f.float16 = input[0],
+                f32 => f.float32 = input[0],
+                f64 => f.float64 = input[0],
+                inline else => return RuntimeError.InvalidValueType,
+            }
+        },
+        .Vector, .Matrix, .Array, .Structure => |*values| for (values.*, 0..) |*v, i| try self.writeValue(T, input[i..], v),
+        else => return RuntimeError.InvalidValueType,
     }
 }
