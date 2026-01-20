@@ -22,6 +22,12 @@ pub const RuntimeError = error{
     InvalidEntryPoint,
     ToDo,
     DivisionByZero,
+    InvalidValueType,
+};
+
+pub const ReadOutputError = error{
+    NotFound,
+    InvalidValueType,
 };
 
 pub const Function = struct {
@@ -147,11 +153,11 @@ pub fn callEntryPoint(self: *Self, allocator: std.mem.Allocator, entry_point_ind
     //}) catch return RuntimeError.OutOfMemory;
 }
 
-pub fn readOutput(self: *const Self, comptime T: type, output: []T, result: SpvWord) error{NotFound}!void {
+pub fn readOutput(self: *const Self, comptime T: type, output: []T, result: SpvWord) ReadOutputError!void {
     if (std.mem.indexOf(SpvWord, self.mod.output_locations.items, &.{result})) |_| {
-        self.readValue(T, output, &self.results[result].variant.?.Variable.value);
+        try self.readValue(T, output, &self.results[result].variant.?.Variable.value);
     } else {
-        return error.NotFound;
+        return ReadOutputError.NotFound;
     }
 }
 
@@ -160,13 +166,13 @@ fn reset(self: *Self) void {
     self.current_function = null;
 }
 
-fn readValue(self: *const Self, comptime T: type, output: []T, value: *const Result.Value) void {
+fn readValue(self: *const Self, comptime T: type, output: []T, value: *const Result.Value) ReadOutputError!void {
     switch (value.*) {
         .Bool => |b| {
             if (T == bool) {
                 output[0] = b;
             } else {
-                unreachable; // Wanted value may not be composed of booleans
+                return ReadOutputError.InvalidValueType;
             }
         },
         .Int => |i| {
@@ -179,7 +185,7 @@ fn readValue(self: *const Self, comptime T: type, output: []T, value: *const Res
                 u16 => output[0] = i.uint16,
                 u32 => output[0] = i.uint32,
                 u64 => output[0] = i.uint64,
-                inline else => unreachable, // Wanted value may not be composed of ints
+                inline else => return ReadOutputError.InvalidValueType,
             }
         },
         .Float => |f| {
@@ -187,13 +193,13 @@ fn readValue(self: *const Self, comptime T: type, output: []T, value: *const Res
                 f16 => output[0] = f.float16,
                 f32 => output[0] = f.float32,
                 f64 => output[0] = f.float64,
-                inline else => unreachable, // Wanted value may not be composed of floats
+                inline else => return ReadOutputError.InvalidValueType,
             }
         },
-        .Vector => |values| for (values, 0..) |v, i| self.readValue(T, output[i..], &v),
-        .Matrix => |values| for (values, 0..) |v, i| self.readValue(T, output[i..], &v),
-        .Array => unreachable, // TODO
-        .Structure => |values| for (values, 0..) |v, i| self.readValue(T, output[i..], &v),
-        else => unreachable,
+        .Vector => |values| for (values, 0..) |v, i| try self.readValue(T, output[i..], &v),
+        .Matrix => |values| for (values, 0..) |v, i| try self.readValue(T, output[i..], &v),
+        .Array => |values| for (values, 0..) |v, i| try self.readValue(T, output[i..], &v), // Doubt if this is allowed
+        .Structure => |values| for (values, 0..) |v, i| try self.readValue(T, output[i..], &v),
+        else => return ReadOutputError.InvalidValueType,
     }
 }

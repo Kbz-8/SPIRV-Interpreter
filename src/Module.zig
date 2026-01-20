@@ -159,14 +159,14 @@ pub fn init(allocator: std.mem.Allocator, source: []const SpvWord) ModuleError!S
             capabilities,
             entry_points,
         });
-
-        //@import("pretty").print(allocator, self.results, .{
-        //    .tab_size = 4,
-        //    .max_depth = 0,
-        //    .struct_max_len = 0,
-        //    .array_max_len = 0,
-        //}) catch return ModuleError.OutOfMemory;
     }
+
+    //@import("pretty").print(allocator, self.results, .{
+    //    .tab_size = 4,
+    //    .max_depth = 0,
+    //    .struct_max_len = 0,
+    //    .array_max_len = 0,
+    //}) catch return ModuleError.OutOfMemory;
 
     return self;
 }
@@ -205,6 +205,10 @@ fn populateMaps(self: *Self, allocator: std.mem.Allocator) ModuleError!void {
     for (self.results, 0..) |result, id| {
         if (result.variant == null or std.meta.activeTag(result.variant.?) != .Variable) continue;
         switch (result.variant.?.Variable.storage_class) {
+            .Input => for (result.decorations.items) |decoration| switch (decoration.rtype) {
+                .Location => self.input_locations.append(allocator, @intCast(id)) catch return ModuleError.OutOfMemory,
+                else => {},
+            },
             .Output => for (result.decorations.items) |decoration| switch (decoration.rtype) {
                 .Location => self.output_locations.append(allocator, @intCast(id)) catch return ModuleError.OutOfMemory,
                 else => {},

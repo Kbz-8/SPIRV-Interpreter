@@ -24,6 +24,7 @@ const MathOp = enum {
     Div,
     Mod,
     Mul,
+    Rem,
     Sub,
 };
 
@@ -463,10 +464,8 @@ fn MathEngine(comptime T: ValueType, comptime Op: MathOp) type {
                             if (op2 == 0) return RuntimeError.DivisionByZero;
                             break :blk if (@typeInfo(TT) == .int) @divTrunc(op1, op2) else op1 / op2;
                         },
-                        .Mod => blk: {
-                            if (op2 == 0) return RuntimeError.DivisionByZero;
-                            break :blk @mod(op1, op2);
-                        },
+                        .Mod => if (op2 == 0) return RuntimeError.DivisionByZero else @mod(op1, op2),
+                        .Rem => if (op2 == 0) return RuntimeError.DivisionByZero else @rem(op1, op2),
                     };
                 }
 

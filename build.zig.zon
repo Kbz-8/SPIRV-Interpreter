@@ -11,6 +11,11 @@
             .hash = "NZSL-1.1.2-N0xSVMt6AAC1ncQHA_RafnclWolDA477iTnFmZgdvxd-",
             .lazy = true,
         },
+        .sdl3 = .{
+            .url = "git+https://codeberg.org/7Games/zig-sdl3?ref=master#eefd1b86205ed4fbc5f5274b5ba34aa97798d693",
+            .hash = "sdl3-0.1.6-NmT1Q8kQJgCrbdH9Z3ZmLo5uJ1et3oxhfYazrNTtfsgv",
+            .lazy = true,
+        },
     },
     .minimum_zig_version = "0.15.2",
     .paths = .{

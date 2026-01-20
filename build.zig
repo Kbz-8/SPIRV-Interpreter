@@ -35,6 +35,9 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const sdl3 = b.lazyDependency("sdl3", .{}) orelse return;
+    example_exe.root_module.addImport("sdl3", sdl3.module("sdl3"));
+
     const example_install = b.addInstallArtifact(example_exe, .{});
     example_install.step.dependOn(&lib_install.step);
 
