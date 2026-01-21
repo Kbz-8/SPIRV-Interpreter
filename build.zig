@@ -4,6 +4,8 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const use_llvm = b.option(bool, "use-llvm", "use llvm") orelse false;
+
     const mod = b.createModule(.{
         .root_source_file = b.path("src/lib.zig"),
         .target = target,
@@ -22,7 +24,7 @@ pub fn build(b: *std.Build) void {
         .name = "spirv_interpreter",
         .root_module = mod,
         .linkage = .dynamic,
-        //.use_llvm = true,
+        .use_llvm = use_llvm,
     });
     const lib_install = b.addInstallArtifact(lib, .{});
 
@@ -44,6 +46,7 @@ pub fn build(b: *std.Build) void {
                     //.{ .name = "pretty", .module = pretty.module("pretty") },
                 },
             }),
+            .use_llvm = use_llvm,
         });
 
         const example_install = b.addInstallArtifact(example_exe, .{});
@@ -59,6 +62,35 @@ pub fn build(b: *std.Build) void {
         const compile_shader_step = b.step("example-shader", "Compiles example's shader (needs nzslc installed)");
         compile_shader_step.dependOn(&compile_shader_cmd.step);
     }
+
+    // Zig sandbox setup
+
+    const sandbox_exe = b.addExecutable(.{
+        .name = "spirv_interpreter_sandbpx",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("sandbox/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "spv", .module = mod },
+                //.{ .name = "pretty", .module = pretty.module("pretty") },
+            },
+        }),
+        .use_llvm = use_llvm,
+    });
+
+    const sandbox_install = b.addInstallArtifact(sandbox_exe, .{});
+    sandbox_install.step.dependOn(&lib_install.step);
+
+    const run_sandbox = b.addRunArtifact(sandbox_exe);
+    run_sandbox.step.dependOn(&sandbox_install.step);
+
+    const run_sandbox_step = b.step("sandbox", "Run the sandbox");
+    run_sandbox_step.dependOn(&run_sandbox.step);
+
+    const compile_shader_cmd = b.addSystemCommand(&[_][]const u8{ "nzslc", "sandbox/shader.nzsl", "--compile=spv,spv-dis", "-o", "sandbox" });
+    const compile_shader_step = b.step("sandbox-shader", "Compiles sandbox's shader (needs nzslc installed)");
+    compile_shader_step.dependOn(&compile_shader_cmd.step);
 
     // Zig unit tests setup
 

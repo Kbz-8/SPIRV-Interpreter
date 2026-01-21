@@ -13,7 +13,7 @@
 //!
 //!         const allocator = gpa.allocator();
 //!
-//!         var module = try spv.Module.init(allocator, @ptrCast(@alignCast(shader_source)));
+//!         var module = try spv.Module.init(allocator, @ptrCast(@alignCast(shader_source)), .{});
 //!         defer module.deinit(allocator);
 //!
 //!         var rt = try spv.Runtime.init(allocator, &module);

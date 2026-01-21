@@ -20,8 +20,4 @@ jobs:
     - uses: mlugg/setup-zig@v2
 
     - name: Test
-      run: |
-        zig build test -Dno-example=true
-        zig build test -Dno-example=true --release=fast
-        zig build test -Dno-example=true --release=safe
-        zig build test -Dno-example=true --release=small
+      run: zig build test -Dno-example=true

@@ -47,6 +47,35 @@ pub const case = struct {
         }
     }
 
+    pub fn expectOutputWithInput(comptime T: type, comptime len: usize, source: []const u32, output_name: []const u8, expected: []const T, input_name: []const u8, input: []const T) !void {
+        const allocator = std.testing.allocator;
+
+        const module_options = [_]spv.Module.ModuleOptions{
+            .{
+                .use_simd_vectors_specializations = true,
+            },
+            .{
+                .use_simd_vectors_specializations = false,
+            },
+        };
+
+        for (module_options) |opt| {
+            var module = try spv.Module.init(allocator, source, opt);
+            defer module.deinit(allocator);
+
+            var rt = try spv.Runtime.init(allocator, &module);
+            defer rt.deinit(allocator);
+
+            try rt.writeInput(T, input[0..len], try rt.getResultByName(input_name));
+
+            try rt.callEntryPoint(allocator, try rt.getEntryPointByName("main"));
+            var output: [len]T = undefined;
+            try rt.readOutput(T, output[0..len], try rt.getResultByName(output_name));
+
+            try std.testing.expectEqualSlices(T, expected, &output);
+        }
+    }
+
     pub fn random(comptime T: type) T {
         var prng: std.Random.DefaultPrng = .init(@intCast(std.time.microTimestamp()));
         const rand = prng.random();
@@ -86,6 +115,7 @@ test {
     std.testing.refAllDecls(@import("branching.zig"));
     std.testing.refAllDecls(@import("casts.zig"));
     std.testing.refAllDecls(@import("functions.zig"));
+    std.testing.refAllDecls(@import("inputs.zig"));
     std.testing.refAllDecls(@import("loops.zig"));
     std.testing.refAllDecls(@import("maths.zig"));
 }

@@ -1,8 +1,3 @@
-# SPIR-V Interpreter <a href="https://git.kbz8.me/kbz_8/SPIRV-Interpreter/actions?workflows=build.yml"><img src="https://git.kbz8.me/kbz_8/SPIRV-Interpreter/actions/workflows/build.yml/badge.svg"></a> <a href="https://git.kbz8.me/kbz_8/SPIRV-Interpreter/actions?workflows=test.yml"><img src="https://git.kbz8.me/kbz_8/SPIRV-Interpreter/actions/workflows/test.yml/badge.svg"></a>
-
-A small footprint SPIR-V interpreter with zero dependencies to execute SPIR-V shaders on the CPU. It is designed to be used with multiple runtimes concurrently.
-
-```zig
 const std = @import("std");
 const spv = @import("spv");
 
@@ -28,4 +23,3 @@ pub fn main() !void {
     }
     std.log.info("Successfully executed", .{});
 }
-```
