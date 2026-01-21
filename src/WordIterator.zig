@@ -19,7 +19,7 @@ pub fn init(buffer: []const SpvWord) Self {
     };
 }
 
-pub fn nextOrNull(self: *Self) ?SpvWord {
+pub inline fn nextOrNull(self: *Self) ?SpvWord {
     const word = self.peek() orelse return null;
     self.index += 1;
     return word;
@@ -33,15 +33,15 @@ pub inline fn next(self: *Self) RuntimeError!SpvWord {
     return self.nextOrNull() orelse return RuntimeError.InvalidSpirV;
 }
 
-pub fn nextAs(self: *Self, comptime E: type) RuntimeError!E {
+pub inline fn nextAs(self: *Self, comptime E: type) RuntimeError!E {
     return self.nextAsOrNull(E) orelse return RuntimeError.InvalidSpirV;
 }
 
-pub fn peek(self: *const Self) ?SpvWord {
+pub inline fn peek(self: *const Self) ?SpvWord {
     return if (self.index >= self.buffer.len) null else self.buffer[self.index];
 }
 
-pub fn skip(self: *Self) bool {
+pub inline fn skip(self: *Self) bool {
     if (self.index >= self.buffer.len) {
         return false;
     }
@@ -49,7 +49,7 @@ pub fn skip(self: *Self) bool {
     return true;
 }
 
-pub fn skipN(self: *Self, count: usize) bool {
+pub inline fn skipN(self: *Self, count: usize) bool {
     if (self.index >= self.buffer.len) {
         return false;
     }
@@ -57,7 +57,7 @@ pub fn skipN(self: *Self, count: usize) bool {
     return true;
 }
 
-pub fn skipToEnd(self: *Self) void {
+pub inline fn skipToEnd(self: *Self) void {
     self.index = self.buffer.len;
 }
 

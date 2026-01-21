@@ -23,7 +23,7 @@ jobs:
         node-version: 24
 
     - name: Building
-      run: zig build
+      run: zig build -Dno-example=true
 
     - name: Generating docs
       run: zig build docs

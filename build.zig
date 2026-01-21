@@ -13,6 +13,11 @@ pub fn build(b: *std.Build) void {
     const pretty = b.dependency("pretty", .{ .target = target, .optimize = optimize });
     mod.addImport("pretty", pretty.module("pretty"));
 
+    var it = b.user_input_options.iterator();
+    while (it.next()) |entry| {
+        std.debug.print("{s} - {s} {any}", .{ entry.key_ptr.*, entry.value_ptr.name, entry.value_ptr.used });
+    }
+
     const lib = b.addLibrary(.{
         .name = "spirv_interpreter",
         .root_module = mod,
@@ -23,52 +28,51 @@ pub fn build(b: *std.Build) void {
 
     // Zig example setup
 
-    const sdl3 = b.lazyDependency("sdl3", .{
-        .target = target,
-        .optimize = optimize,
-    }) orelse return;
+    const no_example = b.option(bool, "no-example", "skips example dependencies fetch") orelse false;
 
-    const example_exe = b.addExecutable(.{
-        .name = "spirv_interpreter_example",
+    if (!no_example) {
+        const sdl3 = b.lazyDependency("sdl3", .{ .target = target, .optimize = optimize }) orelse return;
+        const example_exe = b.addExecutable(.{
+            .name = "spirv_interpreter_example",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("example/main.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "spv", .module = mod },
+                    .{ .name = "sdl3", .module = sdl3.module("sdl3") },
+                    //.{ .name = "pretty", .module = pretty.module("pretty") },
+                },
+            }),
+        });
+
+        const example_install = b.addInstallArtifact(example_exe, .{});
+        example_install.step.dependOn(&lib_install.step);
+
+        const run_example = b.addRunArtifact(example_exe);
+        run_example.step.dependOn(&example_install.step);
+
+        const run_example_step = b.step("example", "Run the example");
+        run_example_step.dependOn(&run_example.step);
+
+        const compile_shader_cmd = b.addSystemCommand(&[_][]const u8{ "nzslc", "example/shader.nzsl", "--compile=spv,spv-dis", "-o", "example" });
+        const compile_shader_step = b.step("example-shader", "Compiles example's shader (needs nzslc installed)");
+        compile_shader_step.dependOn(&compile_shader_cmd.step);
+    }
+
+    // Zig unit tests setup
+
+    const nzsl = b.lazyDependency("NZSL", .{ .target = target, .optimize = optimize }) orelse return;
+    const lib_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("example/main.zig"),
+            .root_source_file = b.path("test/root.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "spv", .module = mod },
-                .{ .name = "sdl3", .module = sdl3.module("sdl3") },
-                //.{ .name = "pretty", .module = pretty.module("pretty") },
+                .{ .name = "nzsl", .module = nzsl.module("nzigsl") },
             },
         }),
-    });
-
-    const example_install = b.addInstallArtifact(example_exe, .{});
-    example_install.step.dependOn(&lib_install.step);
-
-    const run_example = b.addRunArtifact(example_exe);
-    run_example.step.dependOn(&example_install.step);
-
-    const run_example_step = b.step("example", "Run the example");
-    run_example_step.dependOn(&run_example.step);
-
-    const compile_shader_cmd = b.addSystemCommand(&[_][]const u8{ "nzslc", "example/shader.nzsl", "--compile=spv,spv-dis", "-o", "example" });
-    const compile_shader_step = b.step("example-shader", "Compiles example's shader");
-    compile_shader_step.dependOn(&compile_shader_cmd.step);
-
-    // Zig unit tests setup
-
-    const nzsl = b.lazyDependency("NZSL", .{}) orelse return;
-    const test_mod = b.createModule(.{
-        .root_source_file = b.path("test/root.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "spv", .module = mod },
-            .{ .name = "nzsl", .module = nzsl.module("nzigsl") },
-        },
-    });
-    const lib_tests = b.addTest(.{
-        .root_module = test_mod,
         .test_runner = .{ .path = b.path("test/test_runner.zig"), .mode = .simple },
     });
     const run_tests = b.addRunArtifact(lib_tests);

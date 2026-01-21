@@ -12,8 +12,8 @@
             .lazy = true,
         },
         .sdl3 = .{
-            .url = "git+https://codeberg.org/7Games/zig-sdl3?ref=master#eefd1b86205ed4fbc5f5274b5ba34aa97798d693",
-            .hash = "sdl3-0.1.6-NmT1Q8kQJgCrbdH9Z3ZmLo5uJ1et3oxhfYazrNTtfsgv",
+            .url = "git+https://codeberg.org/7Games/zig-sdl3?ref=v0.1.6#9c1842246c59f03f87ba59b160ca7e3d5e5ce972",
+            .hash = "sdl3-0.1.6-NmT1Q5sQJgCzT6hLj7WOSrwxE0Qsef1wIkDopbOOFru0",
             .lazy = true,
         },
     },
