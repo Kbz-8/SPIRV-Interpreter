@@ -42,6 +42,12 @@ pub fn main() !void {
             const tri_h = bottom_y - top_y;
             const max_half_w = @divTrunc(screen_width, 2) - margin_x;
 
+            var timer = try std.time.Timer.start();
+            defer {
+                const ns = timer.lap();
+                std.log.info("Took {d:.3}s to render", .{@as(f32, @floatFromInt(ns)) / std.time.ns_per_s});
+            }
+
             for (top_y..bottom_y) |y| {
                 const t: f32 = @as(f32, @floatFromInt(y - top_y)) / @as(f32, @floatFromInt(tri_h));
                 const half_w: usize = @intFromFloat((t * @as(f32, @floatFromInt(max_half_w))) + 0.5);
@@ -79,7 +85,7 @@ pub fn main() !void {
 
         try window.updateSurface();
 
-        std.Thread.sleep(10_000_000_000);
+        std.Thread.sleep(2_000_000_000);
     }
     std.log.info("Successfully executed", .{});
 }

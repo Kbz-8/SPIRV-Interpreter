@@ -199,6 +199,42 @@ fn readValue(self: *const Self, comptime T: type, output: []T, value: *const Res
                 inline else => return RuntimeError.InvalidValueType,
             }
         },
+        .Vector4f32 => |vec| inline for (0..4) |i| switch (T) {
+            f32 => output[i] = vec[i],
+            inline else => return RuntimeError.InvalidValueType,
+        },
+        .Vector3f32 => |vec| inline for (0..3) |i| switch (T) {
+            f32 => output[i] = vec[i],
+            inline else => return RuntimeError.InvalidValueType,
+        },
+        .Vector2f32 => |vec| inline for (0..2) |i| switch (T) {
+            f32 => output[i] = vec[i],
+            inline else => return RuntimeError.InvalidValueType,
+        },
+        .Vector4i32 => |vec| inline for (0..4) |i| switch (T) {
+            i32 => output[i] = vec[i],
+            inline else => return RuntimeError.InvalidValueType,
+        },
+        .Vector3i32 => |vec| inline for (0..3) |i| switch (T) {
+            i32 => output[i] = vec[i],
+            inline else => return RuntimeError.InvalidValueType,
+        },
+        .Vector2i32 => |vec| inline for (0..2) |i| switch (T) {
+            i32 => output[i] = vec[i],
+            inline else => return RuntimeError.InvalidValueType,
+        },
+        .Vector4u32 => |vec| inline for (0..4) |i| switch (T) {
+            u32 => output[i] = vec[i],
+            inline else => return RuntimeError.InvalidValueType,
+        },
+        .Vector3u32 => |vec| inline for (0..3) |i| switch (T) {
+            u32 => output[i] = vec[i],
+            inline else => return RuntimeError.InvalidValueType,
+        },
+        .Vector2u32 => |vec| inline for (0..2) |i| switch (T) {
+            u32 => output[i] = vec[i],
+            inline else => return RuntimeError.InvalidValueType,
+        },
         .Vector, .Matrix, .Array, .Structure => |values| for (values, 0..) |v, i| try self.readValue(T, output[i..], &v),
         else => return RuntimeError.InvalidValueType,
     }
@@ -233,6 +269,42 @@ fn writeValue(self: *const Self, comptime T: type, input: []const T, value: *Res
                 f64 => f.float64 = input[0],
                 inline else => return RuntimeError.InvalidValueType,
             }
+        },
+        .Vector4f32 => |vec| inline for (0..4) |i| switch (T) {
+            f32 => vec[i] = input[i],
+            inline else => return RuntimeError.InvalidValueType,
+        },
+        .Vector3f32 => |vec| inline for (0..3) |i| switch (T) {
+            f32 => vec[i] = input[i],
+            inline else => return RuntimeError.InvalidValueType,
+        },
+        .Vector2f32 => |vec| inline for (0..2) |i| switch (T) {
+            f32 => vec[i] = input[i],
+            inline else => return RuntimeError.InvalidValueType,
+        },
+        .Vector4i32 => |vec| inline for (0..4) |i| switch (T) {
+            i32 => vec[i] = input[i],
+            inline else => return RuntimeError.InvalidValueType,
+        },
+        .Vector3i32 => |vec| inline for (0..3) |i| switch (T) {
+            i32 => vec[i] = input[i],
+            inline else => return RuntimeError.InvalidValueType,
+        },
+        .Vector2i32 => |vec| inline for (0..2) |i| switch (T) {
+            i32 => vec[i] = input[i],
+            inline else => return RuntimeError.InvalidValueType,
+        },
+        .Vector4u32 => |vec| inline for (0..4) |i| switch (T) {
+            u32 => vec[i] = input[i],
+            inline else => return RuntimeError.InvalidValueType,
+        },
+        .Vector3u32 => |vec| inline for (0..3) |i| switch (T) {
+            u32 => vec[i] = input[i],
+            inline else => return RuntimeError.InvalidValueType,
+        },
+        .Vector2u32 => |vec| inline for (0..2) |i| switch (T) {
+            u32 => vec[i] = input[i],
+            inline else => return RuntimeError.InvalidValueType,
         },
         .Vector, .Matrix, .Array, .Structure => |*values| for (values.*, 0..) |*v, i| try self.writeValue(T, input[i..], v),
         else => return RuntimeError.InvalidValueType,

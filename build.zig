@@ -31,6 +31,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "spv", .module = mod },
+                .{ .name = "pretty", .module = pretty.module("pretty") },
             },
         }),
     });

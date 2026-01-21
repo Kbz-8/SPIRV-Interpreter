@@ -239,6 +239,16 @@ fn BitEngine(comptime T: ValueType, comptime Op: BitOp) type {
 
             const size = sw: switch (target_type) {
                 .Vector => |v| continue :sw (try rt.results[v.components_type_word].getVariant()).Type,
+                .Vector4f32,
+                .Vector3f32,
+                .Vector2f32,
+                .Vector4i32,
+                .Vector3i32,
+                .Vector2i32,
+                .Vector4u32,
+                .Vector3u32,
+                .Vector2u32,
+                => 32,
                 .Int => |i| i.bit_length,
                 else => return RuntimeError.InvalidSpirV,
             };
@@ -249,7 +259,7 @@ fn BitEngine(comptime T: ValueType, comptime Op: BitOp) type {
                 }
 
                 inline fn bitInsert(comptime TT: type, base: TT, insert: TT, offset: u64, count: u64) TT {
-                    const mask = bitMask(count) << @intCast(offset);
+                    const mask: TT = @intCast(bitMask(count) << @intCast(offset));
                     return @as(TT, @intCast((base & ~mask) | ((insert << @intCast(offset)) & mask)));
                 }
 
@@ -314,6 +324,25 @@ fn BitEngine(comptime T: ValueType, comptime Op: BitOp) type {
                 .Int => try operator.process(rt, size, value, op1_value, op2_value),
                 .Vector => |vec| for (vec, op1_value.Vector, 0..) |*val, op1_v, i|
                     try operator.process(rt, size, val, &op1_v, if (op2_value) |op2_v| &op2_v.Vector[i] else null),
+                // No bit manipulation on VectorXf32
+                .Vector4i32 => |*vec| inline for (0..4) |i| {
+                    vec[i] = try operator.operation(i32, rt, op1_value.Vector4i32[i], if (op2_value) |op2_v| op2_v.Vector4i32[i] else null);
+                },
+                .Vector3i32 => |*vec| inline for (0..3) |i| {
+                    vec[i] = try operator.operation(i32, rt, op1_value.Vector3i32[i], if (op2_value) |op2_v| op2_v.Vector3i32[i] else null);
+                },
+                .Vector2i32 => |*vec| inline for (0..2) |i| {
+                    vec[i] = try operator.operation(i32, rt, op1_value.Vector2i32[i], if (op2_value) |op2_v| op2_v.Vector2i32[i] else null);
+                },
+                .Vector4u32 => |*vec| inline for (0..4) |i| {
+                    vec[i] = try operator.operation(u32, rt, op1_value.Vector4u32[i], if (op2_value) |op2_v| op2_v.Vector4u32[i] else null);
+                },
+                .Vector3u32 => |*vec| inline for (0..3) |i| {
+                    vec[i] = try operator.operation(u32, rt, op1_value.Vector3u32[i], if (op2_value) |op2_v| op2_v.Vector3u32[i] else null);
+                },
+                .Vector2u32 => |*vec| inline for (0..2) |i| {
+                    vec[i] = try operator.operation(u32, rt, op1_value.Vector2u32[i], if (op2_value) |op2_v| op2_v.Vector2u32[i] else null);
+                },
                 else => return RuntimeError.InvalidSpirV,
             }
         }
@@ -337,6 +366,16 @@ fn CondEngine(comptime T: ValueType, comptime Op: CondOp) type {
 
             const size = sw: switch ((try rt.results[op1_type].getVariant()).Type) {
                 .Vector => |v| continue :sw (try rt.results[v.components_type_word].getVariant()).Type,
+                .Vector4f32,
+                .Vector3f32,
+                .Vector2f32,
+                .Vector4i32,
+                .Vector3i32,
+                .Vector2i32,
+                .Vector4u32,
+                .Vector3u32,
+                .Vector2u32,
+                => 32,
                 .Float => |f| if (T == .Float) f.bit_length else return RuntimeError.InvalidSpirV,
                 .Int => |i| if (T == .SInt or T == .UInt) i.bit_length else return RuntimeError.InvalidSpirV,
                 else => return RuntimeError.InvalidSpirV,
@@ -374,6 +413,7 @@ fn CondEngine(comptime T: ValueType, comptime Op: CondOp) type {
             switch (value.*) {
                 .Bool => try operator.process(size, value, op1_value, op2_value),
                 .Vector => |vec| for (vec, op1_value.Vector, op2_value.Vector) |*val, op1_v, op2_v| try operator.process(size, val, &op1_v, &op2_v),
+                // No Vector specializations for booleans
                 else => return RuntimeError.InvalidSpirV,
             }
         }
@@ -391,6 +431,16 @@ fn ConversionEngine(comptime From: ValueType, comptime To: ValueType) type {
 
             const from_size = sw: switch ((try rt.results[op_type].getVariant()).Type) {
                 .Vector => |v| continue :sw (try rt.results[v.components_type_word].getVariant()).Type,
+                .Vector4f32,
+                .Vector3f32,
+                .Vector2f32,
+                .Vector4i32,
+                .Vector3i32,
+                .Vector2i32,
+                .Vector4u32,
+                .Vector3u32,
+                .Vector2u32,
+                => 32,
                 .Float => |f| if (From == .Float) f.bit_length else return RuntimeError.InvalidSpirV,
                 .Int => |i| if (From == .SInt or From == .UInt) i.bit_length else return RuntimeError.InvalidSpirV,
                 else => return RuntimeError.InvalidSpirV,
@@ -398,6 +448,16 @@ fn ConversionEngine(comptime From: ValueType, comptime To: ValueType) type {
 
             const to_size = sw: switch (target_type) {
                 .Vector => |v| continue :sw (try rt.results[v.components_type_word].getVariant()).Type,
+                .Vector4f32,
+                .Vector3f32,
+                .Vector2f32,
+                .Vector4i32,
+                .Vector3i32,
+                .Vector2i32,
+                .Vector4u32,
+                .Vector3u32,
+                .Vector2u32,
+                => 32,
                 .Float => |f| if (To == .Float) f.bit_length else return RuntimeError.InvalidSpirV,
                 .Int => |i| if (To == .SInt or To == .UInt) i.bit_length else return RuntimeError.InvalidSpirV,
                 else => return RuntimeError.InvalidSpirV,
@@ -428,12 +488,61 @@ fn ConversionEngine(comptime From: ValueType, comptime To: ValueType) type {
                         else => return RuntimeError.InvalidSpirV,
                     }
                 }
+
+                fn processVecSpe(comptime T: type, from_bit_count: SpvWord, from: *Result.Value, index: usize) RuntimeError!T {
+                    return switch (from.*) {
+                        .Vector3f32 => |vec| std.math.lossyCast(T, vec[index]),
+                        .Vector2f32 => |vec| std.math.lossyCast(T, vec[index]),
+                        .Vector4i32 => |vec| std.math.lossyCast(T, vec[index]),
+                        .Vector3i32 => |vec| std.math.lossyCast(T, vec[index]),
+                        .Vector2i32 => |vec| std.math.lossyCast(T, vec[index]),
+                        .Vector4u32 => |vec| std.math.lossyCast(T, vec[index]),
+                        .Vector3u32 => |vec| std.math.lossyCast(T, vec[index]),
+                        .Vector2u32 => |vec| std.math.lossyCast(T, vec[index]),
+                        inline else => switch (from_bit_count) {
+                            inline 8, 16, 32, 64 => |i| std.math.lossyCast(T, blk: {
+                                if (i == 8 and From == .Float) {
+                                    return RuntimeError.InvalidSpirV;
+                                }
+                                break :blk (try getValuePrimitiveField(From, i, from)).*;
+                            }),
+                            else => return RuntimeError.InvalidSpirV,
+                        },
+                    };
+                }
             };
 
             switch (value.*) {
                 .Float => if (To == .Float) try operator.process(from_size, to_size, value, op_value) else return RuntimeError.InvalidSpirV,
                 .Int => if (To == .SInt or To == .UInt) try operator.process(from_size, to_size, value, op_value) else return RuntimeError.InvalidSpirV,
                 .Vector => |vec| for (vec, op_value.Vector) |*val, *op_v| try operator.process(from_size, to_size, val, op_v),
+                .Vector4f32 => |*vec| inline for (0..4) |i| {
+                    vec[i] = try operator.processVecSpe(f32, from_size, op_value, i);
+                },
+                .Vector3f32 => |*vec| inline for (0..3) |i| {
+                    vec[i] = try operator.processVecSpe(f32, from_size, op_value, i);
+                },
+                .Vector2f32 => |*vec| inline for (0..2) |i| {
+                    vec[i] = try operator.processVecSpe(f32, from_size, op_value, i);
+                },
+                .Vector4i32 => |*vec| inline for (0..4) |i| {
+                    vec[i] = try operator.processVecSpe(i32, from_size, op_value, i);
+                },
+                .Vector3i32 => |*vec| inline for (0..3) |i| {
+                    vec[i] = try operator.processVecSpe(i32, from_size, op_value, i);
+                },
+                .Vector2i32 => |*vec| inline for (0..2) |i| {
+                    vec[i] = try operator.processVecSpe(i32, from_size, op_value, i);
+                },
+                .Vector4u32 => |*vec| inline for (0..4) |i| {
+                    vec[i] = try operator.processVecSpe(u32, from_size, op_value, i);
+                },
+                .Vector3u32 => |*vec| inline for (0..3) |i| {
+                    vec[i] = try operator.processVecSpe(u32, from_size, op_value, i);
+                },
+                .Vector2u32 => |*vec| inline for (0..2) |i| {
+                    vec[i] = try operator.processVecSpe(u32, from_size, op_value, i);
+                },
                 else => return RuntimeError.InvalidSpirV,
             }
         }
@@ -450,6 +559,16 @@ fn MathEngine(comptime T: ValueType, comptime Op: MathOp) type {
 
             const size = sw: switch (target_type) {
                 .Vector => |v| continue :sw (try rt.results[v.components_type_word].getVariant()).Type,
+                .Vector4f32,
+                .Vector3f32,
+                .Vector2f32,
+                .Vector4i32,
+                .Vector3i32,
+                .Vector2i32,
+                .Vector4u32,
+                .Vector3u32,
+                .Vector2u32,
+                => 32,
                 .Float => |f| if (T == .Float) f.bit_length else return RuntimeError.InvalidSpirV,
                 .Int => |i| if (T == .SInt or T == .UInt) i.bit_length else return RuntimeError.InvalidSpirV,
                 else => return RuntimeError.InvalidSpirV,
@@ -491,6 +610,33 @@ fn MathEngine(comptime T: ValueType, comptime Op: MathOp) type {
                 .Float => if (T == .Float) try operator.process(size, value, op1_value, op2_value) else return RuntimeError.InvalidSpirV,
                 .Int => if (T == .SInt or T == .UInt) try operator.process(size, value, op1_value, op2_value) else return RuntimeError.InvalidSpirV,
                 .Vector => |vec| for (vec, op1_value.Vector, op2_value.Vector) |*val, op1_v, op2_v| try operator.process(size, val, &op1_v, &op2_v),
+                .Vector4f32 => |*vec| inline for (0..4) |i| {
+                    vec[i] = try operator.operation(f32, op1_value.Vector4f32[i], op2_value.Vector4f32[i]);
+                },
+                .Vector3f32 => |*vec| inline for (0..3) |i| {
+                    vec[i] = try operator.operation(f32, op1_value.Vector3f32[i], op2_value.Vector3f32[i]);
+                },
+                .Vector2f32 => |*vec| inline for (0..2) |i| {
+                    vec[i] = try operator.operation(f32, op1_value.Vector2f32[i], op2_value.Vector2f32[i]);
+                },
+                .Vector4i32 => |*vec| inline for (0..4) |i| {
+                    vec[i] = try operator.operation(i32, op1_value.Vector4i32[i], op2_value.Vector4i32[i]);
+                },
+                .Vector3i32 => |*vec| inline for (0..3) |i| {
+                    vec[i] = try operator.operation(i32, op1_value.Vector3i32[i], op2_value.Vector3i32[i]);
+                },
+                .Vector2i32 => |*vec| inline for (0..2) |i| {
+                    vec[i] = try operator.operation(i32, op1_value.Vector2i32[i], op2_value.Vector2i32[i]);
+                },
+                .Vector4u32 => |*vec| inline for (0..4) |i| {
+                    vec[i] = try operator.operation(u32, op1_value.Vector4u32[i], op2_value.Vector4u32[i]);
+                },
+                .Vector3u32 => |*vec| inline for (0..3) |i| {
+                    vec[i] = try operator.operation(u32, op1_value.Vector3u32[i], op2_value.Vector3u32[i]);
+                },
+                .Vector2u32 => |*vec| inline for (0..2) |i| {
+                    vec[i] = try operator.operation(u32, op1_value.Vector2u32[i], op2_value.Vector2u32[i]);
+                },
                 else => return RuntimeError.InvalidSpirV,
             }
         }
@@ -570,6 +716,7 @@ fn opBitcast(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     switch (to_value.*) {
         .Int, .Float => try caster.cast(to_value, from_value),
         .Vector => |vec| for (vec, from_value.Vector) |*t, *f| try caster.cast(t, f),
+        // TODO: vectors specializations
         else => return RuntimeError.InvalidSpirV,
     }
 }
@@ -622,31 +769,44 @@ fn opAccessChain(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) Runtim
     var value_ptr = try base.getValue();
 
     const index_count = word_count - 3;
-    for (0..index_count) |_| {
-        const member = &rt.results[try rt.it.next()];
-        const member_value = switch ((try member.getVariant()).*) {
-            .Constant => |c| &c.value,
-            .Variable => |v| &v.value,
-            else => return RuntimeError.InvalidSpirV,
-        };
-        switch (member_value.*) {
-            .Int => |i| {
-                switch (value_ptr.*) {
-                    .Vector, .Matrix, .Array, .Structure => |v| {
-                        if (i.uint32 > v.len) return RuntimeError.InvalidSpirV;
-                        value_ptr = &v[i.uint32];
-                    },
-                    else => return RuntimeError.InvalidSpirV,
-                }
-            },
-            else => return RuntimeError.InvalidSpirV,
-        }
-    }
-
     rt.results[id].variant = .{
         .AccessChain = .{
             .target = var_type,
-            .value = value_ptr.*,
+            .value = blk: {
+                for (0..index_count) |_| {
+                    const member = &rt.results[try rt.it.next()];
+                    const member_value = switch ((try member.getVariant()).*) {
+                        .Constant => |c| &c.value,
+                        .Variable => |v| &v.value,
+                        else => return RuntimeError.InvalidSpirV,
+                    };
+                    switch (member_value.*) {
+                        .Int => |i| {
+                            switch (value_ptr.*) {
+                                .Vector, .Matrix, .Array, .Structure => |v| {
+                                    if (i.uint32 > v.len) return RuntimeError.InvalidSpirV;
+                                    value_ptr = &v[i.uint32];
+                                },
+                                //.Vector4f32 => |v| {
+                                //    if (i.uint32 > 4) return RuntimeError.InvalidSpirV;
+                                //    break :blk .{
+                                //        .Float = .{ .float32 = v[i.uint32] },
+                                //    };
+                                //},
+                                //.Vector2f32 => |v| {
+                                //    if (i.uint32 > 2) return RuntimeError.InvalidSpirV;
+                                //    break :blk .{
+                                //        .Float = .{ .float32 = v[i.uint32] },
+                                //    };
+                                //},
+                                else => return RuntimeError.InvalidSpirV,
+                            }
+                        },
+                        else => return RuntimeError.InvalidSpirV,
+                    }
+                }
+                break :blk value_ptr;
+            },
         },
     };
 }
@@ -685,10 +845,44 @@ fn opCompositeConstruct(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime)
     const id = try rt.it.next();
 
     const index_count = word_count - 2;
-    const target = (try rt.results[id].getVariant()).Constant.value.getCompositeDataOrNull() orelse return RuntimeError.InvalidSpirV;
-    for (target[0..index_count]) |*elem| {
-        const value = (try rt.results[try rt.it.next()].getVariant()).Constant.value;
-        elem.* = value;
+    const value = &(try rt.results[id].getVariant()).Constant.value;
+    if (value.getCompositeDataOrNull()) |target| {
+        for (target[0..index_count]) |*elem| {
+            const elem_value = (try rt.results[try rt.it.next()].getVariant()).Constant.value;
+            elem.* = elem_value;
+        }
+        return;
+    }
+
+    switch (value.*) {
+        .Vector4f32 => |*vec| inline for (0..4) |i| {
+            vec[i] = (try rt.results[try rt.it.next()].getVariant()).Constant.value.Float.float32;
+        },
+        .Vector3f32 => |*vec| inline for (0..3) |i| {
+            vec[i] = (try rt.results[try rt.it.next()].getVariant()).Constant.value.Float.float32;
+        },
+        .Vector2f32 => |*vec| inline for (0..2) |i| {
+            vec[i] = (try rt.results[try rt.it.next()].getVariant()).Constant.value.Float.float32;
+        },
+        .Vector4i32 => |*vec| inline for (0..4) |i| {
+            vec[i] = (try rt.results[try rt.it.next()].getVariant()).Constant.value.Int.sint32;
+        },
+        .Vector3i32 => |*vec| inline for (0..3) |i| {
+            vec[i] = (try rt.results[try rt.it.next()].getVariant()).Constant.value.Int.sint32;
+        },
+        .Vector2i32 => |*vec| inline for (0..2) |i| {
+            vec[i] = (try rt.results[try rt.it.next()].getVariant()).Constant.value.Int.sint32;
+        },
+        .Vector4u32 => |*vec| inline for (0..4) |i| {
+            vec[i] = (try rt.results[try rt.it.next()].getVariant()).Constant.value.Int.uint32;
+        },
+        .Vector3u32 => |*vec| inline for (0..3) |i| {
+            vec[i] = (try rt.results[try rt.it.next()].getVariant()).Constant.value.Int.uint32;
+        },
+        .Vector2u32 => |*vec| inline for (0..2) |i| {
+            vec[i] = (try rt.results[try rt.it.next()].getVariant()).Constant.value.Int.uint32;
+        },
+        else => return RuntimeError.InvalidSpirV,
     }
 }
 
@@ -696,13 +890,8 @@ fn opCompositeExtract(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Ru
     const res_type = try rt.it.next();
     const id = try rt.it.next();
     const composite_id = try rt.it.next();
-
     const index_count = word_count - 3;
-    var composite = (try rt.results[composite_id].getVariant()).Constant.value;
-    for (0..index_count) |_| {
-        const member_id = try rt.it.next();
-        composite = (composite.getCompositeDataOrNull() orelse return RuntimeError.InvalidSpirV)[member_id];
-    }
+
     rt.results[id].variant = .{
         .Constant = .{
             .type_word = res_type,
@@ -710,7 +899,29 @@ fn opCompositeExtract(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Ru
                 .Type => |t| @as(Result.Type, t),
                 else => return RuntimeError.InvalidSpirV,
             },
-            .value = try composite.dupe(allocator),
+            .value = blk: {
+                var composite = (try rt.results[composite_id].getVariant()).Constant.value;
+                for (0..index_count) |_| {
+                    const member_id = try rt.it.next();
+                    if (composite.getCompositeDataOrNull()) |v| {
+                        composite = v[member_id];
+                        continue;
+                    }
+                    switch (composite) {
+                        .Vector4f32 => |v| break :blk .{ .Float = .{ .float32 = v[member_id] } },
+                        .Vector3f32 => |v| break :blk .{ .Float = .{ .float32 = v[member_id] } },
+                        .Vector2f32 => |v| break :blk .{ .Float = .{ .float32 = v[member_id] } },
+                        .Vector4i32 => |v| break :blk .{ .Int = .{ .sint32 = v[member_id] } },
+                        .Vector3i32 => |v| break :blk .{ .Int = .{ .sint32 = v[member_id] } },
+                        .Vector2i32 => |v| break :blk .{ .Int = .{ .sint32 = v[member_id] } },
+                        .Vector4u32 => |v| break :blk .{ .Int = .{ .uint32 = v[member_id] } },
+                        .Vector3u32 => |v| break :blk .{ .Int = .{ .uint32 = v[member_id] } },
+                        .Vector2u32 => |v| break :blk .{ .Int = .{ .uint32 = v[member_id] } },
+                        else => return RuntimeError.InvalidSpirV,
+                    }
+                }
+                break :blk try composite.dupe(allocator);
+            },
         },
     };
 }
@@ -1139,18 +1350,49 @@ fn opTypeStruct(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime)
 fn opTypeVector(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     const id = try rt.it.next();
     const components_type_word = try rt.it.next();
-    rt.mod.results[id].variant = .{
-        .Type = .{
+    var components_type_size: usize = 0;
+    const components_type_concrete = try rt.mod.results[components_type_word].getVariant();
+    const components_type = switch (components_type_concrete.*) {
+        .Type => |t| blk: {
+            switch (t) {
+                .Int => |i| components_type_size = i.bit_length,
+                .Float => |f| components_type_size = f.bit_length,
+                else => {},
+            }
+            break :blk @as(Result.Type, t);
+        },
+        else => return RuntimeError.InvalidSpirV,
+    };
+    const member_count = try rt.it.next();
+    rt.mod.results[id].variant = .{ .Type = blk: {
+        if (components_type_size == 32 and rt.mod.options.use_simd_vectors_specializations) {
+            switch (components_type) {
+                .Float => switch (member_count) {
+                    2 => break :blk .{ .Vector2f32 = .{} },
+                    3 => break :blk .{ .Vector3f32 = .{} },
+                    4 => break :blk .{ .Vector4f32 = .{} },
+                    else => {},
+                },
+                .Int => {
+                    const is_signed = components_type_concrete.Type.Int.is_signed;
+                    switch (member_count) {
+                        2 => break :blk if (is_signed) .{ .Vector2i32 = .{} } else .{ .Vector2u32 = .{} },
+                        3 => break :blk if (is_signed) .{ .Vector3i32 = .{} } else .{ .Vector3u32 = .{} },
+                        4 => break :blk if (is_signed) .{ .Vector4i32 = .{} } else .{ .Vector4u32 = .{} },
+                        else => {},
+                    }
+                },
+                else => {},
+            }
+        }
+        break :blk .{
             .Vector = .{
                 .components_type_word = components_type_word,
-                .components_type = switch ((try rt.mod.results[components_type_word].getVariant()).*) {
-                    .Type => |t| @as(Result.Type, t),
-                    else => return RuntimeError.InvalidSpirV,
-                },
-                .member_count = try rt.it.next(),
+                .components_type = components_type,
+                .member_count = member_count,
             },
-        },
-    };
+        };
+    } };
 }
 
 fn opTypeVoid(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {

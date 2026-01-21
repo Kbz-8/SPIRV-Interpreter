@@ -19,6 +19,10 @@ const Value = Result.Value;
 
 const Self = @This();
 
+pub const ModuleOptions = struct {
+    use_simd_vectors_specializations: bool = true,
+};
+
 const SpvEntryPoint = struct {
     exec_model: spv.SpvExecutionModel,
     id: SpvWord,
@@ -39,6 +43,8 @@ const ModuleError = error{
     UnsupportedEndianness,
     OutOfMemory,
 };
+
+options: ModuleOptions,
 
 it: WordIterator,
 
@@ -77,8 +83,9 @@ output_locations: std.ArrayList(SpvWord),
 bindings: std.AutoHashMap(SpvBinding, Value),
 push_constants: []Value,
 
-pub fn init(allocator: std.mem.Allocator, source: []const SpvWord) ModuleError!Self {
+pub fn init(allocator: std.mem.Allocator, source: []const SpvWord, options: ModuleOptions) ModuleError!Self {
     var self: Self = std.mem.zeroInit(Self, .{
+        .options = options,
         .code = allocator.dupe(SpvWord, source) catch return ModuleError.OutOfMemory,
         .files = std.ArrayList(SpvSource).empty,
         .extensions = std.ArrayList([]const u8).empty,

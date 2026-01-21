@@ -23,17 +23,28 @@ pub const case = struct {
     pub fn expectOutput(comptime T: type, comptime len: usize, source: []const u32, output_name: []const u8, expected: []const T) !void {
         const allocator = std.testing.allocator;
 
-        var module = try spv.Module.init(allocator, source);
-        defer module.deinit(allocator);
+        const module_options = [_]spv.Module.ModuleOptions{
+            .{
+                .use_simd_vectors_specializations = true,
+            },
+            .{
+                .use_simd_vectors_specializations = false,
+            },
+        };
 
-        var rt = try spv.Runtime.init(allocator, &module);
-        defer rt.deinit(allocator);
+        for (module_options) |opt| {
+            var module = try spv.Module.init(allocator, source, opt);
+            defer module.deinit(allocator);
 
-        try rt.callEntryPoint(allocator, try rt.getEntryPointByName("main"));
-        var output: [len]T = undefined;
-        try rt.readOutput(T, output[0..len], try rt.getResultByName(output_name));
+            var rt = try spv.Runtime.init(allocator, &module);
+            defer rt.deinit(allocator);
 
-        try std.testing.expectEqualSlices(T, expected, &output);
+            try rt.callEntryPoint(allocator, try rt.getEntryPointByName("main"));
+            var output: [len]T = undefined;
+            try rt.readOutput(T, output[0..len], try rt.getResultByName(output_name));
+
+            try std.testing.expectEqualSlices(T, expected, &output);
+        }
     }
 
     pub fn random(comptime T: type) T {

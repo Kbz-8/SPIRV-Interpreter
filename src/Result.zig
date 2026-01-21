@@ -8,6 +8,18 @@ const SpvByte = spv.SpvByte;
 const SpvWord = spv.SpvWord;
 const SpvBool = spv.SpvBool;
 
+pub const Vec4f32 = @Vector(4, f32);
+pub const Vec3f32 = @Vector(3, f32);
+pub const Vec2f32 = @Vector(2, f32);
+
+pub const Vec4i32 = @Vector(4, i32);
+pub const Vec3i32 = @Vector(3, i32);
+pub const Vec2i32 = @Vector(2, i32);
+
+pub const Vec4u32 = @Vector(4, u32);
+pub const Vec3u32 = @Vector(3, u32);
+pub const Vec2u32 = @Vector(2, u32);
+
 pub const Variant = enum {
     String,
     Extension,
@@ -26,6 +38,15 @@ pub const Type = enum {
     Int,
     Float,
     Vector,
+    Vector4f32,
+    Vector3f32,
+    Vector2f32,
+    Vector4i32,
+    Vector3i32,
+    Vector2i32,
+    Vector4u32,
+    Vector3u32,
+    Vector2u32,
     Matrix,
     Array,
     RuntimeArray,
@@ -73,6 +94,15 @@ pub const Value = union(Type) {
         float64: f64,
     },
     Vector: []Value,
+    Vector4f32: Vec4f32,
+    Vector3f32: Vec3f32,
+    Vector2f32: Vec2f32,
+    Vector4i32: Vec4i32,
+    Vector3i32: Vec3i32,
+    Vector2i32: Vec2i32,
+    Vector4u32: Vec4u32,
+    Vector3u32: Vec3u32,
+    Vector2u32: Vec2u32,
     Matrix: []Value,
     Array: []Value,
     RuntimeArray: struct {},
@@ -108,6 +138,15 @@ pub const Value = union(Type) {
                     }
                     break :blk self;
                 },
+                .Vector4f32 => .{ .Vector4f32 = Vec4f32{ 0.0, 0.0, 0.0, 0.0 } },
+                .Vector3f32 => .{ .Vector3f32 = Vec3f32{ 0.0, 0.0, 0.0 } },
+                .Vector2f32 => .{ .Vector2f32 = Vec2f32{ 0.0, 0.0 } },
+                .Vector4i32 => .{ .Vector4i32 = Vec4i32{ 0, 0, 0, 0 } },
+                .Vector3i32 => .{ .Vector3i32 = Vec3i32{ 0, 0, 0 } },
+                .Vector2i32 => .{ .Vector2i32 = Vec2i32{ 0, 0 } },
+                .Vector4u32 => .{ .Vector4u32 = Vec4u32{ 0, 0, 0, 0 } },
+                .Vector3u32 => .{ .Vector3u32 = Vec3u32{ 0, 0, 0 } },
+                .Vector2u32 => .{ .Vector2u32 = Vec2u32{ 0, 0 } },
                 .Matrix => |m| blk: {
                     var self: Value = .{ .Matrix = allocator.alloc(Value, member_count) catch return RuntimeError.OutOfMemory };
                     errdefer self.deinit(allocator);
@@ -205,6 +244,15 @@ pub const VariantData = union(Variant) {
             components_type: Type,
             member_count: SpvWord,
         },
+        Vector4f32: struct {},
+        Vector3f32: struct {},
+        Vector2f32: struct {},
+        Vector4i32: struct {},
+        Vector3i32: struct {},
+        Vector2i32: struct {},
+        Vector4u32: struct {},
+        Vector3u32: struct {},
+        Vector2u32: struct {},
         Matrix: struct {
             column_type_word: SpvWord,
             column_type: Type,
@@ -253,7 +301,7 @@ pub const VariantData = union(Variant) {
     },
     AccessChain: struct {
         target: SpvWord,
-        value: Value,
+        value: *Value,
     },
     FunctionParameter: struct {
         type_word: SpvWord,
@@ -335,7 +383,7 @@ pub fn getValue(self: *Self) RuntimeError!*Value {
     return switch ((try self.getVariant()).*) {
         .Variable => |*v| &v.value,
         .Constant => |*c| &c.value,
-        .AccessChain => |*a| &a.value,
+        .AccessChain => |a| a.value,
         .FunctionParameter => |*p| p.value_ptr orelse return RuntimeError.InvalidSpirV,
         else => RuntimeError.InvalidSpirV,
     };
@@ -438,6 +486,9 @@ pub fn getMemberCounts(self: *const Self) usize {
             .Type => |t| switch (t) {
                 .Bool, .Int, .Float, .Image, .Sampler => return 1,
                 .Vector => |v| return v.member_count,
+                .Vector4f32, .Vector4i32, .Vector4u32 => return 4,
+                .Vector3f32, .Vector3i32, .Vector3u32 => return 3,
+                .Vector2f32, .Vector2i32, .Vector2u32 => return 2,
                 .Matrix => |m| return m.member_count,
                 .Array => |a| return a.member_count,
                 .SampledImage => return 2,
@@ -466,6 +517,15 @@ pub fn initValue(allocator: std.mem.Allocator, member_count: usize, results: []c
                 }
                 break :blk value;
             },
+            .Vector4f32 => .{ .Vector4f32 = Vec4f32{ 0.0, 0.0, 0.0, 0.0 } },
+            .Vector3f32 => .{ .Vector3f32 = Vec3f32{ 0.0, 0.0, 0.0 } },
+            .Vector2f32 => .{ .Vector2f32 = Vec2f32{ 0.0, 0.0 } },
+            .Vector4i32 => .{ .Vector4i32 = Vec4i32{ 0, 0, 0, 0 } },
+            .Vector3i32 => .{ .Vector3i32 = Vec3i32{ 0, 0, 0 } },
+            .Vector2i32 => .{ .Vector2i32 = Vec2i32{ 0, 0 } },
+            .Vector4u32 => .{ .Vector4u32 = Vec4u32{ 0, 0, 0, 0 } },
+            .Vector3u32 => .{ .Vector3u32 = Vec3u32{ 0, 0, 0 } },
+            .Vector2u32 => .{ .Vector2u32 = Vec2u32{ 0, 0 } },
             .Matrix => |m| blk: {
                 const value: Value = .{ .Matrix = allocator.alloc(Value, member_count) catch return RuntimeError.OutOfMemory };
                 errdefer allocator.free(value.Matrix);
@@ -476,7 +536,7 @@ pub fn initValue(allocator: std.mem.Allocator, member_count: usize, results: []c
             },
             .Array => |a| blk: {
                 const value: Value = .{ .Array = allocator.alloc(Value, member_count) catch return RuntimeError.OutOfMemory };
-                errdefer allocator.free(value.Vector);
+                errdefer allocator.free(value.Array);
                 for (value.Array) |*val| {
                     val.* = try Value.init(allocator, results, a.components_type_word);
                 }
