@@ -2,3 +2,5 @@
 zig-out/
 .gdb_history
 *.o
+vgcore*
+callgrind*

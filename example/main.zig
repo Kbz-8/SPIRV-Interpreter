@@ -9,8 +9,11 @@ const screen_height = 480;
 
 pub fn main() !void {
     {
-        var gpa: std.heap.DebugAllocator(.{}) = .init;
-        defer _ = gpa.deinit();
+        //var gpa: std.heap.DebugAllocator(.{}) = .init;
+        //defer _ = gpa.deinit();
+
+        var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer gpa.deinit();
 
         defer sdl3.shutdown();
         const init_flags = sdl3.InitFlags{ .video = true };
@@ -22,7 +25,7 @@ pub fn main() !void {
 
         const allocator = gpa.allocator();
 
-        var module = try spv.Module.init(allocator, @ptrCast(@alignCast(shader_source)));
+        var module = try spv.Module.init(allocator, @ptrCast(@alignCast(shader_source)), .{});
         defer module.deinit(allocator);
 
         const surface = try window.getSurface();
@@ -72,10 +75,10 @@ pub fn main() !void {
                     try rt.readOutput(f32, output[0..], color);
 
                     const rgba = surface.mapRgba(
-                        @intFromFloat(output[0] * 255.0),
-                        @intFromFloat(output[1] * 255.0),
-                        @intFromFloat(output[2] * 255.0),
-                        @intFromFloat(output[3] * 255.0),
+                        @truncate(@as(u32, @intFromFloat(output[0] * 255.0))),
+                        @truncate(@as(u32, @intFromFloat(output[1] * 255.0))),
+                        @truncate(@as(u32, @intFromFloat(output[2] * 255.0))),
+                        @truncate(@as(u32, @intFromFloat(output[3] * 255.0))),
                     );
 
                     pixel_map[(y * surface.getWidth()) + x] = rgba.value;

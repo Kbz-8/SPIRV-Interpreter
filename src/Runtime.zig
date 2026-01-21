@@ -270,39 +270,39 @@ fn writeValue(self: *const Self, comptime T: type, input: []const T, value: *Res
                 inline else => return RuntimeError.InvalidValueType,
             }
         },
-        .Vector4f32 => |vec| inline for (0..4) |i| switch (T) {
+        .Vector4f32 => |*vec| inline for (0..4) |i| switch (T) {
             f32 => vec[i] = input[i],
             inline else => return RuntimeError.InvalidValueType,
         },
-        .Vector3f32 => |vec| inline for (0..3) |i| switch (T) {
+        .Vector3f32 => |*vec| inline for (0..3) |i| switch (T) {
             f32 => vec[i] = input[i],
             inline else => return RuntimeError.InvalidValueType,
         },
-        .Vector2f32 => |vec| inline for (0..2) |i| switch (T) {
+        .Vector2f32 => |*vec| inline for (0..2) |i| switch (T) {
             f32 => vec[i] = input[i],
             inline else => return RuntimeError.InvalidValueType,
         },
-        .Vector4i32 => |vec| inline for (0..4) |i| switch (T) {
+        .Vector4i32 => |*vec| inline for (0..4) |i| switch (T) {
             i32 => vec[i] = input[i],
             inline else => return RuntimeError.InvalidValueType,
         },
-        .Vector3i32 => |vec| inline for (0..3) |i| switch (T) {
+        .Vector3i32 => |*vec| inline for (0..3) |i| switch (T) {
             i32 => vec[i] = input[i],
             inline else => return RuntimeError.InvalidValueType,
         },
-        .Vector2i32 => |vec| inline for (0..2) |i| switch (T) {
+        .Vector2i32 => |*vec| inline for (0..2) |i| switch (T) {
             i32 => vec[i] = input[i],
             inline else => return RuntimeError.InvalidValueType,
         },
-        .Vector4u32 => |vec| inline for (0..4) |i| switch (T) {
+        .Vector4u32 => |*vec| inline for (0..4) |i| switch (T) {
             u32 => vec[i] = input[i],
             inline else => return RuntimeError.InvalidValueType,
         },
-        .Vector3u32 => |vec| inline for (0..3) |i| switch (T) {
+        .Vector3u32 => |*vec| inline for (0..3) |i| switch (T) {
             u32 => vec[i] = input[i],
             inline else => return RuntimeError.InvalidValueType,
         },
-        .Vector2u32 => |vec| inline for (0..2) |i| switch (T) {
+        .Vector2u32 => |*vec| inline for (0..2) |i| switch (T) {
             u32 => vec[i] = input[i],
             inline else => return RuntimeError.InvalidValueType,
         },
