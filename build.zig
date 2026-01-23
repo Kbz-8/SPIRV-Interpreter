@@ -4,7 +4,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const use_llvm = b.option(bool, "use-llvm", "use llvm") orelse false;
+    const use_llvm = b.option(bool, "use-llvm", "use llvm") orelse (b.release_mode != .off);
 
     const mod = b.createModule(.{
         .root_source_file = b.path("src/lib.zig"),

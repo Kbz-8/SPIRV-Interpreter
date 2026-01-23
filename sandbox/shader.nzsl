@@ -1,15 +1,71 @@
 [nzsl_version("1.1")]
 module;
 
+struct FragIn
+{
+    [location(0)] time: f32,
+    [location(1)] res: vec2[f32],
+    [location(2)] pos: vec2[f32],
+}
+
 struct FragOut
 {
-	[location(0)] color: vec4[f32]
+    [location(0)] color: vec4[f32]
 }
 
 [entry(frag)]
-fn main() -> FragOut
+fn main(input: FragIn) -> FragOut
 {
-	let output: FragOut;
-	output.color = vec4[f32](1.0, 1.0, 1.0, 1.0);
-	return output;
+    const I: i32 = 128;
+    const A: f32 = 7.5;
+    const MA: f32 = 100.0;
+    const MI: f32 = 0.001;
+
+    let uv0 = input.pos / input.res * 2.0 - vec2[f32](1.0, 1.0);
+    let uv  = vec2[f32](uv0.x * (input.res.x / input.res.y), uv0.y);
+
+    let col = vec3[f32](0.0, 0.0, 0.0);  
+    let ro  = vec3[f32](0.0, 0.0, -2.0); 
+    let rd  = vec3[f32](uv.x, uv.y, 1.0);
+    let dt  = 0.0;
+    let ds  = 0.0;
+    let dm  = -1.0;
+    let p   = ro;
+    let c   = vec3[f32](0.0, 0.0, 0.0);
+
+    let l = vec3[f32](0.0, sin(input.time * 0.2) * 4.0, cos(input.time * 0.2) * 4.0);
+
+    for i in 0 -> I
+    {
+        p = ro + rd * dt;
+        ds = length(c - p) - 1.0;
+        dt += ds;
+
+        if (dm == -1.0 || ds < dm)
+            dm = ds;
+
+        if (ds <= MI)
+        {
+            let value = max(dot(normalize(c - p), normalize(p - l)) - 0.35, 0.0);
+            col = vec3[f32](value, value, value);
+            break;
+        }
+
+        if (ds >= MA)
+        {
+            if (dot(normalize(rd), normalize(l - ro)) <= 1.0)
+            {
+                let value = max(dot(normalize(rd), normalize(l - ro)) + 0.15, 0.05)/ 1.15 * (1.0 - dm * A);
+                col = vec3[f32](value, value, value);
+            }
+            break;
+        }
+    }
+
+    if (col == vec3[f32](0.0, 0.0, 0.0))
+        discard;
+
+    let output: FragOut;
+    output.color = vec4[f32](col.x, col.y, col.z, 1.0);
+    return output;
 }

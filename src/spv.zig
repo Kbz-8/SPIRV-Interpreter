@@ -2391,3 +2391,5 @@ pub const SpvOp = enum(u32) {
     ConvertHandleToSampledImageINTEL = 6531,
     Max = 0x7fffffff,
 };
+
+pub const SpvOpMaxValue: comptime_int = @intFromEnum(SpvOp.ConvertHandleToSampledImageINTEL);

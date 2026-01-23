@@ -100,6 +100,8 @@ pub fn init(allocator: std.mem.Allocator, source: []const SpvWord, options: Modu
     });
     errdefer self.deinit(allocator);
 
+    op.initRuntimeDispatcher();
+
     self.it = WordIterator.init(self.code);
 
     const magic = self.it.next() catch return ModuleError.InvalidSpirV;

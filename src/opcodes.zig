@@ -13,7 +13,15 @@ const SpvByte = spv.SpvByte;
 const SpvWord = spv.SpvWord;
 const SpvBool = spv.SpvBool;
 
+// OpExtInstImport
+// OpExtInst Sin
+// OpExtInst Cos
+// OpExtInst Length
+// OpExtInst Normalize
+// OpExtInst FMax
+
 const ValueType = enum {
+    Bool,
     Float,
     SInt,
     UInt,
@@ -22,10 +30,15 @@ const ValueType = enum {
 const MathOp = enum {
     Add,
     Div,
+    MatrixTimesMatrix,
+    MatrixTimesScalar,
+    MatrixTimesVector,
     Mod,
     Mul,
     Rem,
     Sub,
+    VectorTimesMatrix,
+    VectorTimesScalar,
 };
 
 const CondOp = enum {
@@ -35,6 +48,11 @@ const CondOp = enum {
     Less,
     LessEqual,
     NotEqual,
+    LogicalEqual,
+    LogicalNotEqual,
+    LogicalAnd,
+    LogicalOr,
+    LogicalNot,
 };
 
 const BitOp = enum {
@@ -76,6 +94,7 @@ pub const SetupDispatcher = block: {
         .ConvertUToF = autoSetupConstant,
         .ConvertUToPtr = autoSetupConstant,
         .Decorate = opDecorate,
+        .Dot = autoSetupConstant,
         .EntryPoint = opEntryPoint,
         .ExecutionMode = opExecutionMode,
         .FAdd = autoSetupConstant,
@@ -107,6 +126,14 @@ pub const SetupDispatcher = block: {
         .ISub = autoSetupConstant,
         .Label = opLabel,
         .Load = autoSetupConstant,
+        .LogicalAnd = autoSetupConstant,
+        .LogicalEqual = autoSetupConstant,
+        .LogicalNot = autoSetupConstant,
+        .LogicalNotEqual = autoSetupConstant,
+        .LogicalOr = autoSetupConstant,
+        .MatrixTimesMatrix = autoSetupConstant,
+        .MatrixTimesScalar = autoSetupConstant,
+        .MatrixTimesVector = autoSetupConstant,
         .MemberDecorate = opDecorateMember,
         .MemberName = opMemberName,
         .MemoryModel = opMemoryModel,
@@ -145,85 +172,95 @@ pub const SetupDispatcher = block: {
         .ULessThanEqual = autoSetupConstant,
         .UMod = autoSetupConstant,
         .Variable = opVariable,
+        .VectorTimesMatrix = autoSetupConstant,
+        .VectorTimesScalar = autoSetupConstant,
     });
 };
 
-pub const RuntimeDispatcher = block: {
-    @setEvalBranchQuota(65535);
-    break :block std.EnumMap(spv.SpvOp, OpCodeFunc).init(.{
-        .AccessChain = opAccessChain,
-        .BitCount = BitEngine(.UInt, .BitCount).op,
-        .BitFieldInsert = BitEngine(.UInt, .BitFieldInsert).op,
-        .BitFieldSExtract = BitEngine(.SInt, .BitFieldSExtract).op,
-        .BitFieldUExtract = BitEngine(.UInt, .BitFieldUExtract).op,
-        .BitReverse = BitEngine(.UInt, .BitReverse).op,
-        .Bitcast = opBitcast,
-        .BitwiseAnd = BitEngine(.UInt, .BitwiseAnd).op,
-        .BitwiseOr = BitEngine(.UInt, .BitwiseOr).op,
-        .BitwiseXor = BitEngine(.UInt, .BitwiseXor).op,
-        .Branch = opBranch,
-        .BranchConditional = opBranchConditional,
-        .CompositeConstruct = opCompositeConstruct,
-        .CompositeExtract = opCompositeExtract,
-        .ConvertFToS = ConversionEngine(.Float, .SInt).op,
-        .ConvertFToU = ConversionEngine(.Float, .UInt).op,
-        .ConvertSToF = ConversionEngine(.SInt, .Float).op,
-        .ConvertUToF = ConversionEngine(.UInt, .Float).op,
-        .CopyMemory = opCopyMemory,
-        .FAdd = MathEngine(.Float, .Add).op,
-        .FConvert = ConversionEngine(.Float, .Float).op,
-        .FDiv = MathEngine(.Float, .Div).op,
-        .FMod = MathEngine(.Float, .Mod).op,
-        .FMul = MathEngine(.Float, .Mul).op,
-        .FOrdEqual = CondEngine(.Float, .Equal).op,
-        .FOrdGreaterThan = CondEngine(.Float, .Greater).op,
-        .FOrdGreaterThanEqual = CondEngine(.Float, .GreaterEqual).op,
-        .FOrdLessThan = CondEngine(.Float, .Less).op,
-        .FOrdLessThanEqual = CondEngine(.Float, .LessEqual).op,
-        .FOrdNotEqual = CondEngine(.Float, .NotEqual).op,
-        .FSub = MathEngine(.Float, .Sub).op,
-        .FUnordEqual = CondEngine(.Float, .Equal).op,
-        .FUnordGreaterThan = CondEngine(.Float, .Greater).op,
-        .FUnordGreaterThanEqual = CondEngine(.Float, .GreaterEqual).op,
-        .FUnordLessThan = CondEngine(.Float, .Less).op,
-        .FUnordLessThanEqual = CondEngine(.Float, .LessEqual).op,
-        .FUnordNotEqual = CondEngine(.Float, .NotEqual).op,
-        .FunctionCall = opFunctionCall,
-        .IAdd = MathEngine(.SInt, .Add).op,
-        .IEqual = CondEngine(.SInt, .Equal).op,
-        .IMul = MathEngine(.SInt, .Mul).op,
-        .INotEqual = CondEngine(.SInt, .NotEqual).op,
-        .ISub = MathEngine(.SInt, .Sub).op,
-        .Load = opLoad,
-        .Not = BitEngine(.UInt, .Not).op,
-        .Return = opReturn,
-        .ReturnValue = opReturnValue,
-        .SConvert = ConversionEngine(.SInt, .SInt).op,
-        .SDiv = MathEngine(.SInt, .Div).op,
-        .SGreaterThan = CondEngine(.SInt, .Greater).op,
-        .SGreaterThanEqual = CondEngine(.SInt, .GreaterEqual).op,
-        .SLessThan = CondEngine(.SInt, .Less).op,
-        .SLessThanEqual = CondEngine(.SInt, .LessEqual).op,
-        .SMod = MathEngine(.SInt, .Mod).op,
-        .ShiftLeftLogical = BitEngine(.UInt, .ShiftLeft).op,
-        .ShiftRightArithmetic = BitEngine(.SInt, .ShiftRightArithmetic).op,
-        .ShiftRightLogical = BitEngine(.UInt, .ShiftRight).op,
-        .Store = opStore,
-        .UConvert = ConversionEngine(.UInt, .UInt).op,
-        .UDiv = MathEngine(.UInt, .Div).op,
-        .UGreaterThan = CondEngine(.UInt, .Greater).op,
-        .UGreaterThanEqual = CondEngine(.UInt, .GreaterEqual).op,
-        .ULessThan = CondEngine(.UInt, .Less).op,
-        .ULessThanEqual = CondEngine(.UInt, .LessEqual).op,
-        .UMod = MathEngine(.UInt, .Mod).op,
+/// Not an EnumMap as it is way too slow for this purpose
+pub var runtime_dispatcher = [_]?OpCodeFunc{null} ** spv.SpvOpMaxValue;
 
-        //.QuantizeToF16  = ,
-        //.ConvertPtrToU  = ,
-        //.SatConvertSToU = ,
-        //.SatConvertUToS = ,
-        //.ConvertUToPtr  = ,
-    });
-};
+pub fn initRuntimeDispatcher() void {
+    // zig fmt: off
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.AccessChain)]            = opAccessChain;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.BitCount)]               = BitEngine(.UInt, .BitCount).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.BitFieldInsert)]         = BitEngine(.UInt, .BitFieldInsert).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.BitFieldSExtract)]       = BitEngine(.SInt, .BitFieldSExtract).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.BitFieldUExtract)]       = BitEngine(.UInt, .BitFieldUExtract).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.BitReverse)]             = BitEngine(.UInt, .BitReverse).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.Bitcast)]                = opBitcast;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.BitwiseAnd)]             = BitEngine(.UInt, .BitwiseAnd).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.BitwiseOr)]              = BitEngine(.UInt, .BitwiseOr).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.BitwiseXor)]             = BitEngine(.UInt, .BitwiseXor).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.Branch)]                 = opBranch;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.BranchConditional)]      = opBranchConditional;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.CompositeConstruct)]     = opCompositeConstruct;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.CompositeExtract)]       = opCompositeExtract;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ConvertFToS)]            = ConversionEngine(.Float, .SInt).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ConvertFToU)]            = ConversionEngine(.Float, .UInt).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ConvertSToF)]            = ConversionEngine(.SInt, .Float).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ConvertUToF)]            = ConversionEngine(.UInt, .Float).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.CopyMemory)]             = opCopyMemory;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.Dot)]                    = opDot;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.FAdd)]                   = MathEngine(.Float, .Add).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.FConvert)]               = ConversionEngine(.Float, .Float).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.FDiv)]                   = MathEngine(.Float, .Div).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.FMod)]                   = MathEngine(.Float, .Mod).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.FMul)]                   = MathEngine(.Float, .Mul).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.FOrdEqual)]              = CondEngine(.Float, .Equal).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.FOrdGreaterThan)]        = CondEngine(.Float, .Greater).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.FOrdGreaterThanEqual)]   = CondEngine(.Float, .GreaterEqual).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.FOrdLessThan)]           = CondEngine(.Float, .Less).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.FOrdLessThanEqual)]      = CondEngine(.Float, .LessEqual).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.FOrdNotEqual)]           = CondEngine(.Float, .NotEqual).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.FSub)]                   = MathEngine(.Float, .Sub).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.FUnordEqual)]            = CondEngine(.Float, .Equal).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.FUnordGreaterThan)]      = CondEngine(.Float, .Greater).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.FUnordGreaterThanEqual)] = CondEngine(.Float, .GreaterEqual).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.FUnordLessThan)]         = CondEngine(.Float, .Less).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.FUnordLessThanEqual)]    = CondEngine(.Float, .LessEqual).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.FUnordNotEqual)]         = CondEngine(.Float, .NotEqual).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.FunctionCall)]           = opFunctionCall;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.IAdd)]                   = MathEngine(.SInt, .Add).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.IEqual)]                 = CondEngine(.SInt, .Equal).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.IMul)]                   = MathEngine(.SInt, .Mul).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.INotEqual)]              = CondEngine(.SInt, .NotEqual).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ISub)]                   = MathEngine(.SInt, .Sub).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.Kill)]                   = opKill;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.Load)]                   = opLoad;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.LogicalAnd)]             = CondEngine(.Float, .LogicalAnd).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.LogicalEqual)]           = CondEngine(.Float, .LogicalEqual).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.LogicalNot)]             = CondEngine(.Float, .LogicalNot).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.LogicalNotEqual)]        = CondEngine(.Float, .LogicalNotEqual).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.LogicalOr)]              = CondEngine(.Float, .LogicalOr).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.MatrixTimesMatrix)]      = MathEngine(.Float, .MatrixTimesMatrix).op; // TODO
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.MatrixTimesScalar)]      = MathEngine(.Float, .MatrixTimesScalar).op; // TODO
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.MatrixTimesVector)]      = MathEngine(.Float, .MatrixTimesVector).op; // TODO
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.Not)]                    = BitEngine(.UInt, .Not).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.Return)]                 = opReturn;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ReturnValue)]            = opReturnValue;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.SConvert)]               = ConversionEngine(.SInt, .SInt).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.SDiv)]                   = MathEngine(.SInt, .Div).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.SGreaterThan)]           = CondEngine(.SInt, .Greater).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.SGreaterThanEqual)]      = CondEngine(.SInt, .GreaterEqual).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.SLessThan)]              = CondEngine(.SInt, .Less).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.SLessThanEqual)]         = CondEngine(.SInt, .LessEqual).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.SMod)]                   = MathEngine(.SInt, .Mod).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ShiftLeftLogical)]       = BitEngine(.UInt, .ShiftLeft).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ShiftRightArithmetic)]   = BitEngine(.SInt, .ShiftRightArithmetic).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ShiftRightLogical)]      = BitEngine(.UInt, .ShiftRight).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.Store)]                  = opStore;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.UConvert)]               = ConversionEngine(.UInt, .UInt).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.UDiv)]                   = MathEngine(.UInt, .Div).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.UGreaterThan)]           = CondEngine(.UInt, .Greater).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.UGreaterThanEqual)]      = CondEngine(.UInt, .GreaterEqual).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ULessThan)]              = CondEngine(.UInt, .Less).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ULessThanEqual)]         = CondEngine(.UInt, .LessEqual).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.UMod)]                   = MathEngine(.UInt, .Mod).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorTimesMatrix)]      = MathEngine(.Float, .VectorTimesMatrix).op; // TODO
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorTimesScalar)]      = MathEngine(.Float, .VectorTimesScalar).op;
+    // zig fmt: on
+}
 
 fn BitEngine(comptime T: ValueType, comptime Op: BitOp) type {
     if (T == .Float) @compileError("Invalid value type");
@@ -362,7 +399,10 @@ fn CondEngine(comptime T: ValueType, comptime Op: CondOp) type {
             const op1_result = &rt.results[try rt.it.next()];
             const op1_type = try op1_result.getValueTypeWord();
             const op1_value = try op1_result.getValue();
-            const op2_value = try rt.results[try rt.it.next()].getValue();
+            const op2_value: ?*Result.Value = switch (Op) {
+                .LogicalNot => null,
+                else => try rt.results[try rt.it.next()].getValue(),
+            };
 
             const size = sw: switch ((try rt.results[op1_type].getVariant()).Type) {
                 .Vector => |v| continue :sw (try rt.results[v.components_type_word].getVariant()).Type,
@@ -382,18 +422,21 @@ fn CondEngine(comptime T: ValueType, comptime Op: CondOp) type {
             };
 
             const operator = struct {
-                fn operation(comptime TT: type, op1: TT, op2: TT) RuntimeError!bool {
+                fn operation(comptime TT: type, op1: TT, op2: ?TT) RuntimeError!bool {
                     return switch (Op) {
-                        .Equal => op1 == op2,
-                        .NotEqual => op1 != op2,
-                        .Greater => op1 > op2,
-                        .GreaterEqual => op1 >= op2,
-                        .Less => op1 < op2,
-                        .LessEqual => op1 <= op2,
+                        .Equal, .LogicalEqual => op1 == op2 orelse return RuntimeError.InvalidSpirV,
+                        .NotEqual, .LogicalNotEqual => op1 != op2 orelse return RuntimeError.InvalidSpirV,
+                        .Greater => op1 > op2 orelse return RuntimeError.InvalidSpirV,
+                        .GreaterEqual => op1 >= op2 orelse return RuntimeError.InvalidSpirV,
+                        .Less => op1 < op2 orelse return RuntimeError.InvalidSpirV,
+                        .LessEqual => op1 <= op2 orelse return RuntimeError.InvalidSpirV,
+                        .LogicalAnd => (op1 != @as(TT, 0)) and ((op2 orelse return RuntimeError.InvalidSpirV) != @as(TT, 0)),
+                        .LogicalOr => (op1 != @as(TT, 0)) or ((op2 orelse return RuntimeError.InvalidSpirV) != @as(TT, 0)),
+                        .LogicalNot => (op1 == @as(TT, 0)),
                     };
                 }
 
-                fn process(bit_count: SpvWord, v: *Result.Value, op1_v: *const Result.Value, op2_v: *const Result.Value) RuntimeError!void {
+                fn process(bit_count: SpvWord, v: *Result.Value, op1_v: *const Result.Value, op2_v: ?*const Result.Value) RuntimeError!void {
                     switch (bit_count) {
                         inline 8, 16, 32, 64 => |i| {
                             if (i == 8 and T == .Float) { // No f8
@@ -402,7 +445,7 @@ fn CondEngine(comptime T: ValueType, comptime Op: CondOp) type {
                             v.Bool = try operation(
                                 getValuePrimitiveFieldType(T, i),
                                 (try getValuePrimitiveField(T, i, @constCast(op1_v))).*,
-                                (try getValuePrimitiveField(T, i, @constCast(op2_v))).*,
+                                if (op2_v) |val| (try getValuePrimitiveField(T, i, @constCast(val))).* else null,
                             );
                         },
                         else => return RuntimeError.InvalidSpirV,
@@ -412,7 +455,9 @@ fn CondEngine(comptime T: ValueType, comptime Op: CondOp) type {
 
             switch (value.*) {
                 .Bool => try operator.process(size, value, op1_value, op2_value),
-                .Vector => |vec| for (vec, op1_value.Vector, op2_value.Vector) |*val, op1_v, op2_v| try operator.process(size, val, &op1_v, &op2_v),
+                .Vector => |vec| for (vec, op1_value.Vector, 0..) |*val, op1_v, i| {
+                    try operator.process(size, val, &op1_v, if (op2_value) |op2_v| &op2_v.Vector[i] else null);
+                },
                 // No Vector specializations for booleans
                 else => return RuntimeError.InvalidSpirV,
             }
@@ -586,6 +631,7 @@ fn MathEngine(comptime T: ValueType, comptime Op: MathOp) type {
                         },
                         .Mod => if (op2 == 0) return RuntimeError.DivisionByZero else @mod(op1, op2),
                         .Rem => if (op2 == 0) return RuntimeError.DivisionByZero else @rem(op1, op2),
+                        else => return RuntimeError.InvalidSpirV,
                     };
                 }
 
@@ -609,15 +655,29 @@ fn MathEngine(comptime T: ValueType, comptime Op: MathOp) type {
             switch (value.*) {
                 .Float => if (T == .Float) try operator.process(size, value, op1_value, op2_value) else return RuntimeError.InvalidSpirV,
                 .Int => if (T == .SInt or T == .UInt) try operator.process(size, value, op1_value, op2_value) else return RuntimeError.InvalidSpirV,
-                .Vector => |vec| for (vec, op1_value.Vector, op2_value.Vector) |*val, op1_v, op2_v| try operator.process(size, val, &op1_v, &op2_v),
+                .Vector => |vec| for (vec, op1_value.Vector, 0..) |*val, op1_v, i| {
+                    switch (Op) {
+                        .VectorTimesScalar => try operator.process(size, val, &op1_v, op2_value),
+                        else => try operator.process(size, val, &op1_v, &op2_value.Vector[i]),
+                    }
+                },
                 .Vector4f32 => |*vec| inline for (0..4) |i| {
-                    vec[i] = try operator.operation(f32, op1_value.Vector4f32[i], op2_value.Vector4f32[i]);
+                    switch (Op) {
+                        .VectorTimesScalar => vec[i] = op1_value.Vector4f32[i] * op2_value.Float.float32,
+                        else => vec[i] = try operator.operation(f32, op1_value.Vector4f32[i], op2_value.Vector4f32[i]),
+                    }
                 },
                 .Vector3f32 => |*vec| inline for (0..3) |i| {
-                    vec[i] = try operator.operation(f32, op1_value.Vector3f32[i], op2_value.Vector3f32[i]);
+                    switch (Op) {
+                        .VectorTimesScalar => vec[i] = op1_value.Vector3f32[i] * op2_value.Float.float32,
+                        else => vec[i] = try operator.operation(f32, op1_value.Vector3f32[i], op2_value.Vector3f32[i]),
+                    }
                 },
                 .Vector2f32 => |*vec| inline for (0..2) |i| {
-                    vec[i] = try operator.operation(f32, op1_value.Vector2f32[i], op2_value.Vector2f32[i]);
+                    switch (Op) {
+                        .VectorTimesScalar => vec[i] = op1_value.Vector2f32[i] * op2_value.Float.float32,
+                        else => vec[i] = try operator.operation(f32, op1_value.Vector2f32[i], op2_value.Vector2f32[i]),
+                    }
                 },
                 .Vector4i32 => |*vec| inline for (0..4) |i| {
                     vec[i] = try operator.operation(i32, op1_value.Vector4i32[i], op2_value.Vector4i32[i]);
@@ -737,6 +797,7 @@ fn copyValue(dst: *Result.Value, src: *const Result.Value) void {
 
 fn getValuePrimitiveField(comptime T: ValueType, comptime BitCount: SpvWord, v: *Result.Value) RuntimeError!*getValuePrimitiveFieldType(T, BitCount) {
     return switch (T) {
+        .Bool => &v.Bool,
         .Float => switch (BitCount) {
             inline 16, 32, 64 => |i| &@field(v.Float, std.fmt.comptimePrint("float{}", .{i})),
             else => return RuntimeError.InvalidSpirV,
@@ -754,6 +815,7 @@ fn getValuePrimitiveField(comptime T: ValueType, comptime BitCount: SpvWord, v: 
 
 fn getValuePrimitiveFieldType(comptime T: ValueType, comptime BitCount: SpvWord) type {
     return switch (T) {
+        .Bool => bool,
         .Float => std.meta.Float(BitCount),
         .SInt => std.meta.Int(.signed, BitCount),
         .UInt => std.meta.Int(.unsigned, BitCount),
@@ -971,6 +1033,41 @@ fn opDecorateMember(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) Runt
     try addDecoration(allocator, rt, target, decoration_type, member);
 }
 
+fn opDot(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const target_type = (try rt.results[try rt.it.next()].getVariant()).Type;
+    var value = try rt.results[try rt.it.next()].getValue();
+    const op1_value = try rt.results[try rt.it.next()].getValue();
+    const op2_value = try rt.results[try rt.it.next()].getValue();
+
+    const size = switch (target_type) {
+        .Float => |f| f.bit_length,
+        else => return RuntimeError.InvalidSpirV,
+    };
+
+    value.Float.float64 = 0.0;
+
+    switch (op1_value.*) {
+        .Vector => |vec| for (vec, op2_value.Vector) |*op1_v, *op2_v| {
+            switch (size) {
+                inline 16, 32, 64 => |i| {
+                    (try getValuePrimitiveField(.Float, i, value)).* += (try getValuePrimitiveField(.Float, i, op1_v)).* * (try getValuePrimitiveField(.Float, i, op2_v)).*;
+                },
+                else => return RuntimeError.InvalidSpirV,
+            }
+        },
+        .Vector4f32 => |*vec| inline for (0..4) |i| {
+            value.Float.float32 += vec[i] * op2_value.Vector4f32[i];
+        },
+        .Vector3f32 => |*vec| inline for (0..3) |i| {
+            value.Float.float32 += vec[i] * op2_value.Vector3f32[i];
+        },
+        .Vector2f32 => |*vec| inline for (0..2) |i| {
+            value.Float.float32 += vec[i] * op2_value.Vector2f32[i];
+        },
+        else => return RuntimeError.InvalidSpirV,
+    }
+}
+
 fn opEntryPoint(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
     const entry = rt.mod.entry_points.addOne(allocator) catch return RuntimeError.OutOfMemory;
     entry.exec_model = try rt.it.nextAs(spv.SpvExecutionModel);
@@ -1097,6 +1194,10 @@ fn opLabel(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
             .source_location = rt.it.emitSourceLocation() - 2, // Original label location
         },
     };
+}
+
+fn opKill(_: std.mem.Allocator, _: SpvWord, _: *Runtime) RuntimeError!void {
+    return RuntimeError.Killed;
 }
 
 fn opLoad(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {

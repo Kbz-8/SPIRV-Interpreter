@@ -1,3 +1,5 @@
+//! A runtime meant for actual shader invocations.
+
 const std = @import("std");
 const spv = @import("spv.zig");
 const op = @import("opcodes.zig");
@@ -127,10 +129,11 @@ pub fn callEntryPoint(self: *Self, allocator: std.mem.Allocator, entry_point_ind
         const opcode = (opcode_data & spv.SpvOpCodeMask);
 
         var it_tmp = self.it; // Save because operations may iter on this iterator
-        if (std.enums.fromInt(spv.SpvOp, opcode)) |spv_op| {
-            if (op.RuntimeDispatcher.get(spv_op)) |pfn| {
-                try pfn(allocator, word_count, self);
-            }
+        if (op.runtime_dispatcher[opcode]) |pfn| {
+            pfn(allocator, word_count, self) catch |err| switch (err) {
+                RuntimeError.Killed => return,
+                else => return err,
+            };
         }
         if (!self.it.did_jump) {
             _ = it_tmp.skipN(word_count);

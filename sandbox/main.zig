@@ -16,9 +16,21 @@ pub fn main() !void {
         var rt = try spv.Runtime.init(allocator, &module);
         defer rt.deinit(allocator);
 
-        try rt.callEntryPoint(allocator, try rt.getEntryPointByName("main"));
+        const entry = try rt.getEntryPointByName("main");
+        const color = try rt.getResultByName("color");
+        const time = try rt.getResultByName("time");
+        const pos = try rt.getResultByName("pos");
+        const res = try rt.getResultByName("res");
+
         var output: [4]f32 = undefined;
-        try rt.readOutput(f32, output[0..output.len], try rt.getResultByName("color"));
+
+        try rt.writeInput(f32, &.{@as(f32, @floatFromInt(std.time.milliTimestamp()))}, time);
+        try rt.writeInput(f32, &.{ 1250.0, 720.0 }, res);
+        try rt.writeInput(f32, &.{ 0.0, 0.0 }, pos);
+
+        try rt.callEntryPoint(allocator, entry);
+
+        try rt.readOutput(f32, output[0..output.len], color);
         std.log.info("Output: Vec4{any}", .{output});
     }
     std.log.info("Successfully executed", .{});

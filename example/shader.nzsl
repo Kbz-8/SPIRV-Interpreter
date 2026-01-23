@@ -3,8 +3,9 @@ module;
 
 struct FragIn
 {
-	[location(0)] dim: vec2[f32],
-	[location(1)] pos: vec2[f32],
+	[location(0)] time: u32,
+	[location(1)] dim: vec2[f32],
+	[location(2)] pos: vec2[f32],
 }
 
 struct FragOut
