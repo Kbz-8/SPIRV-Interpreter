@@ -1,86 +1,85 @@
 Version 1.0
 Generator: 2560130
-Bound: 51
+Bound: 50
 Schema: 0
       OpCapability Capability(Shader)
       OpMemoryModel AddressingModel(Logical) MemoryModel(GLSL450)
-      OpEntryPoint ExecutionModel(Fragment) %25 "main" %5 %12 %15 %21
-      OpExecutionMode %25 ExecutionMode(OriginUpperLeft)
+      OpEntryPoint ExecutionModel(Fragment) %24 "main" %5 %11 %14 %20
+      OpExecutionMode %24 ExecutionMode(OriginUpperLeft)
       OpSource SourceLanguage(NZSL) 4198400
       OpSourceExtension "Version: 1.1"
-      OpName %17 "FragIn"
-      OpMemberName %17 0 "time"
-      OpMemberName %17 1 "dim"
-      OpMemberName %17 2 "pos"
-      OpName %22 "FragOut"
-      OpMemberName %22 0 "color"
+      OpName %16 "FragIn"
+      OpMemberName %16 0 "time"
+      OpMemberName %16 1 "res"
+      OpMemberName %16 2 "pos"
+      OpName %21 "FragOut"
+      OpMemberName %21 0 "color"
       OpName %5 "time"
-      OpName %12 "dim"
-      OpName %15 "pos"
-      OpName %21 "color"
-      OpName %25 "main"
+      OpName %11 "res"
+      OpName %14 "pos"
+      OpName %20 "color"
+      OpName %24 "main"
       OpDecorate %5 Decoration(Location) 0
-      OpDecorate %12 Decoration(Location) 1
-      OpDecorate %15 Decoration(Location) 2
-      OpDecorate %21 Decoration(Location) 0
-      OpMemberDecorate %17 0 Decoration(Offset) 0
-      OpMemberDecorate %17 1 Decoration(Offset) 8
-      OpMemberDecorate %17 2 Decoration(Offset) 16
-      OpMemberDecorate %22 0 Decoration(Offset) 0
+      OpDecorate %11 Decoration(Location) 1
+      OpDecorate %14 Decoration(Location) 2
+      OpDecorate %20 Decoration(Location) 0
+      OpMemberDecorate %16 0 Decoration(Offset) 0
+      OpMemberDecorate %16 1 Decoration(Offset) 8
+      OpMemberDecorate %16 2 Decoration(Offset) 16
+      OpMemberDecorate %21 0 Decoration(Offset) 0
  %1 = OpTypeVoid
  %2 = OpTypeFunction %1
- %3 = OpTypeInt 32 0
+ %3 = OpTypeFloat 32
  %4 = OpTypePointer StorageClass(Input) %3
  %6 = OpTypeInt 32 1
  %7 = OpConstant %6 i32(0)
  %8 = OpTypePointer StorageClass(Function) %3
- %9 = OpTypeFloat 32
-%10 = OpTypeVector %9 2
-%11 = OpTypePointer StorageClass(Input) %10
-%13 = OpConstant %6 i32(1)
-%14 = OpTypePointer StorageClass(Function) %10
-%16 = OpConstant %6 i32(2)
-%17 = OpTypeStruct %3 %10 %10
-%18 = OpTypePointer StorageClass(Function) %17
-%19 = OpTypeVector %9 4
-%20 = OpTypePointer StorageClass(Output) %19
-%22 = OpTypeStruct %19
-%23 = OpTypePointer StorageClass(Function) %22
-%24 = OpConstant %9 f32(1)
-%48 = OpTypePointer StorageClass(Function) %19
+ %9 = OpTypeVector %3 2
+%10 = OpTypePointer StorageClass(Input) %9
+%12 = OpConstant %6 i32(1)
+%13 = OpTypePointer StorageClass(Function) %9
+%15 = OpConstant %6 i32(2)
+%16 = OpTypeStruct %3 %9 %9
+%17 = OpTypePointer StorageClass(Function) %16
+%18 = OpTypeVector %3 4
+%19 = OpTypePointer StorageClass(Output) %18
+%21 = OpTypeStruct %18
+%22 = OpTypePointer StorageClass(Function) %21
+%23 = OpConstant %3 f32(1)
+%47 = OpTypePointer StorageClass(Function) %18
  %5 = OpVariable %4 StorageClass(Input)
-%12 = OpVariable %11 StorageClass(Input)
-%15 = OpVariable %11 StorageClass(Input)
-%21 = OpVariable %20 StorageClass(Output)
-%25 = OpFunction %1 FunctionControl(0) %2
-%26 = OpLabel
-%27 = OpVariable %23 StorageClass(Function)
-%28 = OpVariable %18 StorageClass(Function)
-%29 = OpAccessChain %8 %28 %7
-      OpCopyMemory %29 %5
-%30 = OpAccessChain %14 %28 %13
-      OpCopyMemory %30 %12
-%31 = OpAccessChain %14 %28 %16
-      OpCopyMemory %31 %15
-%32 = OpAccessChain %14 %28 %16
-%33 = OpLoad %10 %32
-%34 = OpCompositeExtract %9 %33 0
-%35 = OpAccessChain %14 %28 %13
-%36 = OpLoad %10 %35
-%37 = OpCompositeExtract %9 %36 0
-%38 = OpFDiv %9 %34 %37
-%39 = OpAccessChain %14 %28 %16
-%40 = OpLoad %10 %39
-%41 = OpCompositeExtract %9 %40 1
-%42 = OpAccessChain %14 %28 %13
-%43 = OpLoad %10 %42
-%44 = OpCompositeExtract %9 %43 1
-%45 = OpFDiv %9 %41 %44
-%46 = OpCompositeConstruct %19 %38 %45 %24 %24
-%47 = OpAccessChain %48 %27 %7
-      OpStore %47 %46
-%49 = OpLoad %22 %27
-%50 = OpCompositeExtract %19 %49 0
-      OpStore %21 %50
+%11 = OpVariable %10 StorageClass(Input)
+%14 = OpVariable %10 StorageClass(Input)
+%20 = OpVariable %19 StorageClass(Output)
+%24 = OpFunction %1 FunctionControl(0) %2
+%25 = OpLabel
+%26 = OpVariable %22 StorageClass(Function)
+%27 = OpVariable %17 StorageClass(Function)
+%28 = OpAccessChain %8 %27 %7
+      OpCopyMemory %28 %5
+%29 = OpAccessChain %13 %27 %12
+      OpCopyMemory %29 %11
+%30 = OpAccessChain %13 %27 %15
+      OpCopyMemory %30 %14
+%31 = OpAccessChain %13 %27 %15
+%32 = OpLoad %9 %31
+%33 = OpCompositeExtract %3 %32 0
+%34 = OpAccessChain %13 %27 %12
+%35 = OpLoad %9 %34
+%36 = OpCompositeExtract %3 %35 0
+%37 = OpFDiv %3 %33 %36
+%38 = OpAccessChain %13 %27 %15
+%39 = OpLoad %9 %38
+%40 = OpCompositeExtract %3 %39 1
+%41 = OpAccessChain %13 %27 %12
+%42 = OpLoad %9 %41
+%43 = OpCompositeExtract %3 %42 1
+%44 = OpFDiv %3 %40 %43
+%45 = OpCompositeConstruct %18 %37 %44 %23 %23
+%46 = OpAccessChain %47 %26 %7
+      OpStore %46 %45
+%48 = OpLoad %21 %26
+%49 = OpCompositeExtract %18 %48 0
+      OpStore %20 %49
       OpReturn
       OpFunctionEnd

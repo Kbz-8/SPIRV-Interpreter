@@ -41,6 +41,7 @@ const ModuleError = error{
     InvalidSpirV,
     InvalidMagic,
     UnsupportedEndianness,
+    UnsupportedExtension,
     OutOfMemory,
 };
 

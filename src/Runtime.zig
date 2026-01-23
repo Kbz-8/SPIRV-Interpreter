@@ -26,6 +26,7 @@ pub const RuntimeError = error{
     ToDo,
     Unreachable,
     UnsupportedSpirV,
+    UnsupportedExtension,
 };
 
 pub const Function = struct {

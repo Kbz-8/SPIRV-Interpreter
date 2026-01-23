@@ -13,7 +13,6 @@ const SpvByte = spv.SpvByte;
 const SpvWord = spv.SpvWord;
 const SpvBool = spv.SpvBool;
 
-// OpExtInstImport
 // OpExtInst Sin
 // OpExtInst Cos
 // OpExtInst Length
@@ -71,6 +70,7 @@ const BitOp = enum {
 };
 
 pub const OpCodeFunc = *const fn (std.mem.Allocator, SpvWord, *Runtime) RuntimeError!void;
+pub const OpCodeExtFunc = *const fn (std.mem.Allocator, SpvWord, SpvWord, SpvWord, *Runtime) RuntimeError!void;
 
 pub const SetupDispatcher = block: {
     @setEvalBranchQuota(65535);
@@ -174,6 +174,8 @@ pub const SetupDispatcher = block: {
         .Variable = opVariable,
         .VectorTimesMatrix = autoSetupConstant,
         .VectorTimesScalar = autoSetupConstant,
+        .ExtInst = autoSetupConstant,
+        .ExtInstImport = opExtInstImport,
     });
 };
 
@@ -1102,6 +1104,30 @@ fn opExecutionMode(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!
         .OutputPoints, .OutputLineStrip, .OutputTriangleStrip => rt.mod.geometry_output = @intFromEnum(mode),
         else => {},
     }
+}
+
+fn opExtInst(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
+    const target_type = try rt.it.next();
+    const id = try rt.it.next();
+    const set = try rt.it.next();
+    const inst = try rt.it.next();
+
+    switch (try rt.results[set].getVariant()) {
+        .Extension => |ext| if (ext.dispatcher[inst]) |pfn| {
+            try pfn(allocator, target_type, id, word_count, rt);
+        },
+        else => return RuntimeError.InvalidSpirV,
+    }
+}
+
+fn opExtInstImport(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
+    const id = try rt.it.next();
+    rt.mod.results[id].name = try readStringN(allocator, &rt.it, word_count - 1);
+    rt.mod.results[id].variant = .{
+        .Extension = .{
+            .dispatcher = undefined,
+        },
+    };
 }
 
 fn opFunction(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {

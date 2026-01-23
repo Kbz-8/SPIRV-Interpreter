@@ -3,8 +3,8 @@ module;
 
 struct FragIn
 {
-	[location(0)] time: u32,
-	[location(1)] dim: vec2[f32],
+	[location(0)] time: f32,
+	[location(1)] res: vec2[f32],
 	[location(2)] pos: vec2[f32],
 }
 
@@ -18,8 +18,8 @@ fn main(input: FragIn) -> FragOut
 {
 	let output: FragOut;
 	output.color = vec4[f32](
-		input.pos.x / input.dim.x,
-		input.pos.y / input.dim.y,
+		input.pos.x / input.res.x,
+		input.pos.y / input.res.y,
 		1.0,
 		1.0
 	);

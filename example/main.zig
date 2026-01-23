@@ -94,14 +94,14 @@ const Runner = struct {
     rt: spv.Runtime,
 
     fn run(self: *Self, y: usize, pixel_map: [*]u32) void {
-        const entry = self.rt.getEntryPointByName("main") catch |err| std.debug.panic("Catch error {s}", .{@errorName(err)});
-        const color = self.rt.getResultByName("color") catch |err| std.debug.panic("Catch error {s}", .{@errorName(err)});
-        const time = self.rt.getResultByName("time") catch |err| std.debug.panic("Catch error {s}", .{@errorName(err)});
-        const pos = self.rt.getResultByName("pos") catch |err| std.debug.panic("Catch error {s}", .{@errorName(err)});
-        const res = self.rt.getResultByName("res") catch |err| std.debug.panic("Catch error {s}", .{@errorName(err)});
-        var output: [4]f32 = undefined;
-
         var rt = self.rt; // Copy to avoid pointer access of `self` at runtime. Okay as Runtime contains only pointers and trivially copyable fields
+
+        const entry = rt.getEntryPointByName("main") catch |err| std.debug.panic("Catch error {s}", .{@errorName(err)});
+        const color = rt.getResultByName("color") catch |err| std.debug.panic("Catch error {s}", .{@errorName(err)});
+        const time = rt.getResultByName("time") catch |err| std.debug.panic("Catch error {s}", .{@errorName(err)});
+        const pos = rt.getResultByName("pos") catch |err| std.debug.panic("Catch error {s}", .{@errorName(err)});
+        const res = rt.getResultByName("res") catch |err| std.debug.panic("Catch error {s}", .{@errorName(err)});
+        var output: [4]f32 = undefined;
 
         for (0..screen_width) |x| {
             rt.writeInput(f32, &.{@as(f32, @floatFromInt(std.time.milliTimestamp()))}, time) catch |err| std.debug.panic("Catch error {s}", .{@errorName(err)});

@@ -1,5 +1,6 @@
 const std = @import("std");
 const spv = @import("spv.zig");
+const op = @import("opcodes.zig");
 
 const RuntimeError = @import("Runtime.zig").RuntimeError;
 
@@ -228,7 +229,10 @@ pub const Value = union(Type) {
 
 pub const VariantData = union(Variant) {
     String: []const u8,
-    Extension: struct {},
+    Extension: struct {
+        /// Should not be allocated but rather a pointer to a static array
+        dispatcher: []op.OpCodeExtFunc,
+    },
     Type: union(Type) {
         Void: struct {},
         Bool: struct {},
