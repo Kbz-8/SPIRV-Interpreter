@@ -36,3 +36,10 @@ pub const Runtime = @import("Runtime.zig");
 
 const opcodes = @import("opcodes.zig");
 const spv = @import("spv.zig");
+
+pub const SpvVoid = spv.SpvVoid;
+pub const SpvByte = spv.SpvByte;
+pub const SpvWord = spv.SpvWord;
+pub const SpvBool = spv.SpvBool;
+
+pub const GLSL_std_450 = @import("GLSL_std_450/opcodes.zig");

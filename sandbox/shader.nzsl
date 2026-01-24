@@ -62,8 +62,8 @@ fn main(input: FragIn) -> FragOut
         }
     }
 
-    if (col == vec3[f32](0.0, 0.0, 0.0))
-        discard;
+   //if (col == vec3[f32](0.0, 0.0, 0.0))
+   //    discard;
 
     let output: FragOut;
     output.color = vec4[f32](col.x, col.y, col.z, 1.0);

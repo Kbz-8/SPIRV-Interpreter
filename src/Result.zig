@@ -2,7 +2,8 @@ const std = @import("std");
 const spv = @import("spv.zig");
 const op = @import("opcodes.zig");
 
-const RuntimeError = @import("Runtime.zig").RuntimeError;
+const Runtime = @import("Runtime.zig");
+const RuntimeError = Runtime.RuntimeError;
 
 const SpvVoid = spv.SpvVoid;
 const SpvByte = spv.SpvByte;
@@ -227,65 +228,67 @@ pub const Value = union(Type) {
     }
 };
 
+pub const TypeData = union(Type) {
+    Void: struct {},
+    Bool: struct {},
+    Int: struct {
+        bit_length: SpvWord,
+        is_signed: bool,
+    },
+    Float: struct {
+        bit_length: SpvWord,
+    },
+    Vector: struct {
+        components_type_word: SpvWord,
+        components_type: Type,
+        member_count: SpvWord,
+    },
+    Vector4f32: struct {},
+    Vector3f32: struct {},
+    Vector2f32: struct {},
+    Vector4i32: struct {},
+    Vector3i32: struct {},
+    Vector2i32: struct {},
+    Vector4u32: struct {},
+    Vector3u32: struct {},
+    Vector2u32: struct {},
+    Matrix: struct {
+        column_type_word: SpvWord,
+        column_type: Type,
+        member_count: SpvWord,
+    },
+    Array: struct {
+        components_type_word: SpvWord,
+        components_type: Type,
+        member_count: SpvWord,
+    },
+    RuntimeArray: struct {},
+    Structure: struct {
+        members_type_word: []const SpvWord,
+        members: []Type,
+        member_names: std.ArrayList([]const u8),
+    },
+    Function: struct {
+        source_location: usize,
+        return_type: SpvWord,
+        params: []const SpvWord,
+    },
+    Image: struct {},
+    Sampler: struct {},
+    SampledImage: struct {},
+    Pointer: struct {
+        storage_class: spv.SpvStorageClass,
+        target: SpvWord,
+    },
+};
+
 pub const VariantData = union(Variant) {
     String: []const u8,
     Extension: struct {
         /// Should not be allocated but rather a pointer to a static array
-        dispatcher: []op.OpCodeExtFunc,
+        dispatcher: []?op.OpCodeExtFunc,
     },
-    Type: union(Type) {
-        Void: struct {},
-        Bool: struct {},
-        Int: struct {
-            bit_length: SpvWord,
-            is_signed: bool,
-        },
-        Float: struct {
-            bit_length: SpvWord,
-        },
-        Vector: struct {
-            components_type_word: SpvWord,
-            components_type: Type,
-            member_count: SpvWord,
-        },
-        Vector4f32: struct {},
-        Vector3f32: struct {},
-        Vector2f32: struct {},
-        Vector4i32: struct {},
-        Vector3i32: struct {},
-        Vector2i32: struct {},
-        Vector4u32: struct {},
-        Vector3u32: struct {},
-        Vector2u32: struct {},
-        Matrix: struct {
-            column_type_word: SpvWord,
-            column_type: Type,
-            member_count: SpvWord,
-        },
-        Array: struct {
-            components_type_word: SpvWord,
-            components_type: Type,
-            member_count: SpvWord,
-        },
-        RuntimeArray: struct {},
-        Structure: struct {
-            members_type_word: []const SpvWord,
-            members: []Type,
-            member_names: std.ArrayList([]const u8),
-        },
-        Function: struct {
-            source_location: usize,
-            return_type: SpvWord,
-            params: []const SpvWord,
-        },
-        Image: struct {},
-        Sampler: struct {},
-        SampledImage: struct {},
-        Pointer: struct {
-            storage_class: spv.SpvStorageClass,
-            target: SpvWord,
-        },
-    },
+    Type: TypeData,
     Variable: struct {
         storage_class: spv.SpvStorageClass,
         type_word: SpvWord,
@@ -364,7 +367,7 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
     self.decorations.deinit(allocator);
 }
 
-pub fn getValueTypeWord(self: *Self) RuntimeError!SpvWord {
+pub inline fn getValueTypeWord(self: *Self) RuntimeError!SpvWord {
     return switch ((try self.getVariant()).*) {
         .Variable => |v| v.type_word,
         .Constant => |c| c.type_word,
@@ -374,7 +377,7 @@ pub fn getValueTypeWord(self: *Self) RuntimeError!SpvWord {
     };
 }
 
-pub fn getValueType(self: *Self) RuntimeError!Type {
+pub inline fn getValueType(self: *Self) RuntimeError!Type {
     return switch ((try self.getVariant()).*) {
         .Variable => |v| v.type,
         .Constant => |c| c.type,
@@ -383,7 +386,7 @@ pub fn getValueType(self: *Self) RuntimeError!Type {
     };
 }
 
-pub fn getValue(self: *Self) RuntimeError!*Value {
+pub inline fn getValue(self: *Self) RuntimeError!*Value {
     return switch ((try self.getVariant()).*) {
         .Variable => |*v| &v.value,
         .Constant => |*c| &c.value,
@@ -468,6 +471,26 @@ pub fn dupe(self: *const Self, allocator: std.mem.Allocator) RuntimeError!Self {
             }
             break :blk null;
         },
+    };
+}
+
+pub fn resolveLaneBitWidth(target_type: TypeData, rt: *const Runtime) RuntimeError!SpvWord {
+    return sw: switch (target_type) {
+        .Bool => 8,
+        .Float => |f| f.bit_length,
+        .Int => |i| i.bit_length,
+        .Vector => |v| continue :sw (try rt.results[v.components_type_word].getVariant()).Type,
+        .Vector4f32,
+        .Vector3f32,
+        .Vector2f32,
+        .Vector4i32,
+        .Vector3i32,
+        .Vector2i32,
+        .Vector4u32,
+        .Vector3u32,
+        .Vector2u32,
+        => return 32,
+        else => return RuntimeError.InvalidSpirV,
     };
 }
 

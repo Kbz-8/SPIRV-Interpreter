@@ -131,10 +131,7 @@ pub fn callEntryPoint(self: *Self, allocator: std.mem.Allocator, entry_point_ind
 
         var it_tmp = self.it; // Save because operations may iter on this iterator
         if (op.runtime_dispatcher[opcode]) |pfn| {
-            pfn(allocator, word_count, self) catch |err| switch (err) {
-                RuntimeError.Killed => return,
-                else => return err,
-            };
+            try pfn(allocator, word_count, self);
         }
         if (!self.it.did_jump) {
             _ = it_tmp.skipN(word_count);

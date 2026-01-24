@@ -1,6 +1,8 @@
 const std = @import("std");
 const spv = @import("spv.zig");
 
+const GLSL_std_450 = @import("GLSL_std_450/opcodes.zig");
+
 const Module = @import("Module.zig");
 const Runtime = @import("Runtime.zig");
 const Result = @import("Result.zig");
@@ -13,13 +15,7 @@ const SpvByte = spv.SpvByte;
 const SpvWord = spv.SpvWord;
 const SpvBool = spv.SpvBool;
 
-// OpExtInst Sin
-// OpExtInst Cos
-// OpExtInst Length
-// OpExtInst Normalize
-// OpExtInst FMax
-
-const ValueType = enum {
+pub const ValueType = enum {
     Bool,
     Float,
     SInt,
@@ -230,11 +226,11 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ISub)]                   = MathEngine(.SInt, .Sub).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Kill)]                   = opKill;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Load)]                   = opLoad;
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.LogicalAnd)]             = CondEngine(.Float, .LogicalAnd).op;
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.LogicalEqual)]           = CondEngine(.Float, .LogicalEqual).op;
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.LogicalNot)]             = CondEngine(.Float, .LogicalNot).op;
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.LogicalNotEqual)]        = CondEngine(.Float, .LogicalNotEqual).op;
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.LogicalOr)]              = CondEngine(.Float, .LogicalOr).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.LogicalAnd)]             = CondEngine(.Bool, .LogicalAnd).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.LogicalEqual)]           = CondEngine(.Bool, .LogicalEqual).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.LogicalNot)]             = CondEngine(.Bool, .LogicalNot).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.LogicalNotEqual)]        = CondEngine(.Bool, .LogicalNotEqual).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.LogicalOr)]              = CondEngine(.Bool, .LogicalOr).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.MatrixTimesMatrix)]      = MathEngine(.Float, .MatrixTimesMatrix).op; // TODO
     runtime_dispatcher[@intFromEnum(spv.SpvOp.MatrixTimesScalar)]      = MathEngine(.Float, .MatrixTimesScalar).op; // TODO
     runtime_dispatcher[@intFromEnum(spv.SpvOp.MatrixTimesVector)]      = MathEngine(.Float, .MatrixTimesVector).op; // TODO
@@ -261,129 +257,270 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.UMod)]                   = MathEngine(.UInt, .Mod).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorTimesMatrix)]      = MathEngine(.Float, .VectorTimesMatrix).op; // TODO
     runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorTimesScalar)]      = MathEngine(.Float, .VectorTimesScalar).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ExtInst)]                = opExtInst;
     // zig fmt: on
+
+    // Extensions init
+    GLSL_std_450.initRuntimeDispatcher();
 }
 
-fn BitEngine(comptime T: ValueType, comptime Op: BitOp) type {
-    if (T == .Float) @compileError("Invalid value type");
+fn extEqlName(a: []const u8, b: []const u8) bool {
+    for (0..@min(a.len, b.len)) |i| {
+        if (a[i] != b[i]) return false;
+    }
+    return true;
+}
+
+const extensions_map = std.StaticStringMapWithEql([]?OpCodeExtFunc, extEqlName).initComptime(.{
+    .{ "GLSL.std.450", GLSL_std_450.runtime_dispatcher[0..] },
+});
+
+fn BitOperator(comptime T: ValueType, comptime Op: BitOp) type {
     return struct {
-        fn op(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
-            const target_type = (try rt.results[try rt.it.next()].getVariant()).Type;
-            const value = try rt.results[try rt.it.next()].getValue();
-            const op1_value = try rt.results[try rt.it.next()].getValue();
-            const op2_value: ?*Result.Value = switch (Op) {
-                .Not, .BitCount, .BitReverse => null,
-                else => try rt.results[try rt.it.next()].getValue(),
+        comptime {
+            if (T == .Float) @compileError("Invalid value type");
+        }
+
+        inline fn isUnaryOp() bool {
+            return comptime switch (Op) {
+                .Not, .BitCount, .BitReverse => true,
+                else => false,
             };
+        }
 
-            const size = sw: switch (target_type) {
-                .Vector => |v| continue :sw (try rt.results[v.components_type_word].getVariant()).Type,
-                .Vector4f32,
-                .Vector3f32,
-                .Vector2f32,
-                .Vector4i32,
-                .Vector3i32,
-                .Vector2i32,
-                .Vector4u32,
-                .Vector3u32,
-                .Vector2u32,
-                => 32,
-                .Int => |i| i.bit_length,
-                else => return RuntimeError.InvalidSpirV,
+        inline fn bitMask(bits: u64) u64 {
+            return if (bits >= 32) ~@as(u64, 0) else (@as(u64, 0x1) << @intCast(bits)) - 1;
+        }
+
+        inline fn bitInsert(comptime TT: type, base: TT, insert: TT, offset: u64, count: u64) TT {
+            const mask: TT = @intCast(bitMask(count) << @intCast(offset));
+            return @as(TT, @intCast((base & ~mask) | ((insert << @intCast(offset)) & mask)));
+        }
+
+        inline fn bitExtract(comptime TT: type, v: TT, offset: TT, count: u64) TT {
+            return (v >> @intCast(offset)) & @as(TT, @intCast(bitMask(count)));
+        }
+
+        fn operationUnary(comptime TT: type, op1: TT) RuntimeError!TT {
+            return switch (Op) {
+                .BitCount => @as(TT, @intCast(@bitSizeOf(TT))), // keep return type TT
+                .BitReverse => @bitReverse(op1),
+                .Not => ~op1,
+                else => RuntimeError.InvalidSpirV,
             };
+        }
 
-            const operator = struct {
-                inline fn bitMask(bits: u64) u64 {
-                    return if (bits >= 32) ~@as(u64, 0) else (@as(u64, 0x1) << @intCast(bits)) - 1;
-                }
+        fn operationBinary(comptime TT: type, rt: *Runtime, op1: TT, op2: TT) RuntimeError!TT {
+            return switch (Op) {
+                .BitFieldInsert => blk: {
+                    const offset = try rt.results[try rt.it.next()].getValue();
+                    const count = try rt.results[try rt.it.next()].getValue();
+                    break :blk bitInsert(TT, op1, op2, offset.Int.uint64, count.Int.uint64);
+                },
+                .BitFieldSExtract => blk: {
+                    if (T == .UInt) return RuntimeError.InvalidSpirV;
+                    const count = try rt.results[try rt.it.next()].getValue();
+                    break :blk bitExtract(TT, op1, op2, count.Int.uint64);
+                },
+                .BitFieldUExtract => blk: {
+                    if (T == .SInt) return RuntimeError.InvalidSpirV;
+                    const count = try rt.results[try rt.it.next()].getValue();
+                    break :blk bitExtract(TT, op1, op2, count.Int.uint64);
+                },
 
-                inline fn bitInsert(comptime TT: type, base: TT, insert: TT, offset: u64, count: u64) TT {
-                    const mask: TT = @intCast(bitMask(count) << @intCast(offset));
-                    return @as(TT, @intCast((base & ~mask) | ((insert << @intCast(offset)) & mask)));
-                }
+                .BitwiseAnd => op1 & op2,
+                .BitwiseOr => op1 | op2,
+                .BitwiseXor => op1 ^ op2,
+                .ShiftLeft => op1 << @intCast(op2),
+                .ShiftRight, .ShiftRightArithmetic => op1 >> @intCast(op2),
 
-                inline fn bitExtract(comptime TT: type, v: TT, offset: TT, count: u64) TT {
-                    return (v >> @intCast(offset)) & @as(TT, @intCast(bitMask(count)));
-                }
-
-                fn operation(comptime TT: type, rt2: *Runtime, op1: TT, op2: ?TT) RuntimeError!TT {
-                    switch (Op) {
-                        .BitCount => return @bitSizeOf(TT),
-                        .BitReverse => return @bitReverse(op1),
-                        .Not => return ~op1,
-                        else => {},
-                    }
-                    return if (op2) |v2|
-                        switch (Op) {
-                            .BitFieldInsert => blk: {
-                                const offset = try rt2.results[try rt2.it.next()].getValue();
-                                const count = try rt2.results[try rt2.it.next()].getValue();
-                                break :blk bitInsert(TT, op1, v2, offset.Int.uint64, count.Int.uint64);
-                            },
-                            .BitFieldSExtract => blk: {
-                                if (T == .UInt) return RuntimeError.InvalidSpirV;
-                                const count = try rt2.results[try rt2.it.next()].getValue();
-                                break :blk bitExtract(TT, op1, v2, count.Int.uint64);
-                            },
-                            .BitFieldUExtract => blk: {
-                                if (T == .SInt) return RuntimeError.InvalidSpirV;
-                                const count = try rt2.results[try rt2.it.next()].getValue();
-                                break :blk bitExtract(TT, op1, v2, count.Int.uint64);
-                            },
-                            .BitwiseAnd => op1 & v2,
-                            .BitwiseOr => op1 | v2,
-                            .BitwiseXor => op1 ^ v2,
-                            .ShiftLeft => op1 << @intCast(v2),
-                            .ShiftRight, .ShiftRightArithmetic => op1 >> @intCast(v2),
-                            else => return RuntimeError.InvalidSpirV,
-                        }
-                    else
-                        RuntimeError.InvalidSpirV;
-                }
-
-                fn process(rt2: *Runtime, bit_count: SpvWord, v: *Result.Value, op1_v: *const Result.Value, op2_v: ?*const Result.Value) RuntimeError!void {
-                    switch (bit_count) {
-                        inline 8, 16, 32, 64 => |i| {
-                            (try getValuePrimitiveField(T, i, v)).* = try operation(
-                                getValuePrimitiveFieldType(T, i),
-                                rt2,
-                                (try getValuePrimitiveField(T, i, @constCast(op1_v))).*,
-                                if (op2_v) |v2|
-                                    (try getValuePrimitiveField(T, i, @constCast(v2))).*
-                                else
-                                    null,
-                            );
-                        },
-                        else => return RuntimeError.InvalidSpirV,
-                    }
-                }
+                else => RuntimeError.InvalidSpirV,
             };
+        }
 
-            switch (value.*) {
-                .Int => try operator.process(rt, size, value, op1_value, op2_value),
-                .Vector => |vec| for (vec, op1_value.Vector, 0..) |*val, op1_v, i|
-                    try operator.process(rt, size, val, &op1_v, if (op2_value) |op2_v| &op2_v.Vector[i] else null),
-                // No bit manipulation on VectorXf32
-                .Vector4i32 => |*vec| inline for (0..4) |i| {
-                    vec[i] = try operator.operation(i32, rt, op1_value.Vector4i32[i], if (op2_value) |op2_v| op2_v.Vector4i32[i] else null);
-                },
-                .Vector3i32 => |*vec| inline for (0..3) |i| {
-                    vec[i] = try operator.operation(i32, rt, op1_value.Vector3i32[i], if (op2_value) |op2_v| op2_v.Vector3i32[i] else null);
-                },
-                .Vector2i32 => |*vec| inline for (0..2) |i| {
-                    vec[i] = try operator.operation(i32, rt, op1_value.Vector2i32[i], if (op2_value) |op2_v| op2_v.Vector2i32[i] else null);
-                },
-                .Vector4u32 => |*vec| inline for (0..4) |i| {
-                    vec[i] = try operator.operation(u32, rt, op1_value.Vector4u32[i], if (op2_value) |op2_v| op2_v.Vector4u32[i] else null);
-                },
-                .Vector3u32 => |*vec| inline for (0..3) |i| {
-                    vec[i] = try operator.operation(u32, rt, op1_value.Vector3u32[i], if (op2_value) |op2_v| op2_v.Vector3u32[i] else null);
-                },
-                .Vector2u32 => |*vec| inline for (0..2) |i| {
-                    vec[i] = try operator.operation(u32, rt, op1_value.Vector2u32[i], if (op2_value) |op2_v| op2_v.Vector2u32[i] else null);
+        fn applyScalarBits(rt: *Runtime, bit_count: SpvWord, dst: *Result.Value, op1_v: *const Result.Value, op2_v: ?*const Result.Value) RuntimeError!void {
+            switch (bit_count) {
+                inline 8, 16, 32, 64 => |bits| {
+                    const TT = getValuePrimitiveFieldType(T, bits);
+                    const a = (try getValuePrimitiveField(T, bits, @constCast(op1_v))).*;
+
+                    const out = if (comptime isUnaryOp()) blk: {
+                        break :blk try operationUnary(TT, a);
+                    } else blk: {
+                        const b_ptr = op2_v orelse return RuntimeError.InvalidSpirV;
+                        const b = (try getValuePrimitiveField(T, bits, @constCast(b_ptr))).*;
+                        break :blk try operationBinary(TT, rt, a, b);
+                    };
+
+                    (try getValuePrimitiveField(T, bits, dst)).* = out;
                 },
                 else => return RuntimeError.InvalidSpirV,
             }
+        }
+
+        fn laneRhsPtr(op2_value: ?*Result.Value, index: usize) ?*const Result.Value {
+            if (comptime isUnaryOp()) return null;
+            const v = op2_value orelse return null;
+            return &v.Vector[index];
+        }
+
+        fn applyFixedVector(comptime ElemT: type, comptime N: usize, dst: *[N]ElemT, op1: *[N]ElemT, op2_value: ?*Result.Value) RuntimeError!void {
+            if (comptime isUnaryOp()) {
+                inline for (0..N) |i| dst[i] = try operationUnary(ElemT, op1[i]);
+            } else {
+                const op2 = op2_value orelse return RuntimeError.InvalidSpirV;
+                const b: *const [N]ElemT = switch (N) {
+                    2 => &op2.*.Vector2u32, // will be overridden by call sites per ElemT/tag
+                    3 => &op2.*.Vector3u32,
+                    4 => &op2.*.Vector4u32,
+                    else => unreachable,
+                };
+                // NOTE: the above dummy mapping isn’t type-correct for i32; call sites below pass correct rhs pointer.
+                _ = b;
+                return RuntimeError.InvalidSpirV;
+            }
+        }
+
+        fn applyFixedVectorBinary(
+            comptime ElemT: type,
+            comptime N: usize,
+            rt: *Runtime,
+            dst: *[N]ElemT,
+            op1: *[N]ElemT,
+            op2: *[N]ElemT,
+        ) RuntimeError!void {
+            inline for (0..N) |i| dst[i] = try operationBinary(ElemT, rt, op1[i], op2[i]);
+        }
+
+        fn applyFixedVectorUnary(
+            comptime ElemT: type,
+            comptime N: usize,
+            dst: *[N]ElemT,
+            op1: *[N]ElemT,
+        ) RuntimeError!void {
+            inline for (0..N) |i| dst[i] = try operationUnary(ElemT, op1[i]);
+        }
+    };
+}
+
+fn BitEngine(comptime T: ValueType, comptime Op: BitOp) type {
+    return struct {
+        fn op(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+            const target_type = (try rt.results[try rt.it.next()].getVariant()).Type;
+            const dst = try rt.results[try rt.it.next()].getValue();
+            const op1 = try rt.results[try rt.it.next()].getValue();
+
+            const operator = BitOperator(T, Op);
+
+            const op2_value: ?*Result.Value = if (comptime operator.isUnaryOp()) null else try rt.results[try rt.it.next()].getValue();
+
+            const lane_bits = try Result.resolveLaneBitWidth(target_type, rt);
+
+            switch (dst.*) {
+                .Int => try operator.applyScalarBits(rt, lane_bits, dst, op1, if (comptime operator.isUnaryOp()) null else op2_value),
+
+                .Vector => |dst_vec| {
+                    const op1_vec = op1.Vector;
+                    if (dst_vec.len != op1_vec.len) return RuntimeError.InvalidSpirV;
+
+                    for (dst_vec, op1_vec, 0..) |*d_lane, a_lane, i| {
+                        var tmp_a = a_lane;
+                        const b_ptr = operator.laneRhsPtr(op2_value, i);
+                        try operator.applyScalarBits(rt, lane_bits, d_lane, &tmp_a, b_ptr);
+                    }
+                },
+
+                .Vector4i32 => |*d| {
+                    if (comptime operator.isUnaryOp())
+                        try operator.applyFixedVectorUnary(i32, 4, d, &op1.Vector4i32)
+                    else
+                        try operator.applyFixedVectorBinary(i32, 4, rt, d, &op1.Vector4i32, &op2_value.?.Vector4i32);
+                },
+                .Vector3i32 => |*d| {
+                    if (comptime operator.isUnaryOp())
+                        try operator.applyFixedVectorUnary(i32, 3, d, &op1.Vector3i32)
+                    else
+                        try operator.applyFixedVectorBinary(i32, 3, rt, d, &op1.Vector3i32, &op2_value.?.Vector3i32);
+                },
+                .Vector2i32 => |*d| {
+                    if (comptime operator.isUnaryOp())
+                        try operator.applyFixedVectorUnary(i32, 2, d, &op1.Vector2i32)
+                    else
+                        try operator.applyFixedVectorBinary(i32, 2, rt, d, &op1.Vector2i32, &op2_value.?.Vector2i32);
+                },
+
+                .Vector4u32 => |*d| {
+                    if (comptime operator.isUnaryOp())
+                        try operator.applyFixedVectorUnary(u32, 4, d, &op1.Vector4u32)
+                    else
+                        try operator.applyFixedVectorBinary(u32, 4, rt, d, &op1.Vector4u32, &op2_value.?.Vector4u32);
+                },
+                .Vector3u32 => |*d| {
+                    if (comptime operator.isUnaryOp())
+                        try operator.applyFixedVectorUnary(u32, 3, d, &op1.Vector3u32)
+                    else
+                        try operator.applyFixedVectorBinary(u32, 3, rt, d, &op1.Vector3u32, &op2_value.?.Vector3u32);
+                },
+                .Vector2u32 => |*d| {
+                    if (comptime operator.isUnaryOp())
+                        try operator.applyFixedVectorUnary(u32, 2, d, &op1.Vector2u32)
+                    else
+                        try operator.applyFixedVectorBinary(u32, 2, rt, d, &op1.Vector2u32, &op2_value.?.Vector2u32);
+                },
+
+                else => return RuntimeError.InvalidSpirV,
+            }
+        }
+    };
+}
+
+fn CondOperator(comptime T: ValueType, comptime Op: CondOp) type {
+    return struct {
+        fn operation(comptime TT: type, a: TT, b: TT) RuntimeError!bool {
+            return switch (Op) {
+                .Equal, .LogicalEqual => a == b,
+                .NotEqual, .LogicalNotEqual => a != b,
+                .Greater => a > b,
+                .GreaterEqual => a >= b,
+                .Less => a < b,
+                .LessEqual => a <= b,
+                .LogicalAnd => a and b,
+                .LogicalOr => a or b,
+                else => RuntimeError.InvalidSpirV,
+            };
+        }
+
+        fn operationUnary(comptime TT: type, a: TT) RuntimeError!bool {
+            return switch (Op) {
+                .LogicalNot => !a,
+                else => RuntimeError.InvalidSpirV,
+            };
+        }
+
+        fn applyLane(bit_count: SpvWord, dst_bool: *Result.Value, a_v: *const Result.Value, b_v: ?*const Result.Value) RuntimeError!void {
+            switch (bit_count) {
+                inline 8, 16, 32, 64 => |bits| {
+                    if (bits == 8 and T == .Float) return RuntimeError.InvalidSpirV;
+
+                    const TT = getValuePrimitiveFieldType(T, bits);
+                    const a = (try getValuePrimitiveField(T, bits, @constCast(a_v))).*;
+
+                    if (comptime Op == .LogicalNot) {
+                        dst_bool.Bool = try operationUnary(TT, a);
+                    } else {
+                        const b_ptr = b_v orelse return RuntimeError.InvalidSpirV;
+                        const b = (try getValuePrimitiveField(T, bits, @constCast(b_ptr))).*;
+                        dst_bool.Bool = try operation(TT, a, b);
+                    }
+                },
+                else => return RuntimeError.InvalidSpirV,
+            }
+        }
+
+        fn laneRhsPtr(op2_value: ?*Result.Value, index: usize) ?*const Result.Value {
+            if (comptime Op == .LogicalNot) return null;
+            const v = op2_value orelse return null;
+            return &v.Vector[index];
         }
     };
 }
@@ -397,199 +534,151 @@ fn CondEngine(comptime T: ValueType, comptime Op: CondOp) type {
                 else => return RuntimeError.InvalidSpirV,
             }
 
-            const value = try rt.results[try rt.it.next()].getValue();
+            const dst = try rt.results[try rt.it.next()].getValue();
+
             const op1_result = &rt.results[try rt.it.next()];
             const op1_type = try op1_result.getValueTypeWord();
             const op1_value = try op1_result.getValue();
-            const op2_value: ?*Result.Value = switch (Op) {
-                .LogicalNot => null,
-                else => try rt.results[try rt.it.next()].getValue(),
-            };
 
-            const size = sw: switch ((try rt.results[op1_type].getVariant()).Type) {
-                .Vector => |v| continue :sw (try rt.results[v.components_type_word].getVariant()).Type,
-                .Vector4f32,
-                .Vector3f32,
-                .Vector2f32,
-                .Vector4i32,
-                .Vector3i32,
-                .Vector2i32,
-                .Vector4u32,
-                .Vector3u32,
-                .Vector2u32,
-                => 32,
-                .Float => |f| if (T == .Float) f.bit_length else return RuntimeError.InvalidSpirV,
-                .Int => |i| if (T == .SInt or T == .UInt) i.bit_length else return RuntimeError.InvalidSpirV,
-                else => return RuntimeError.InvalidSpirV,
-            };
+            const op2_value: ?*Result.Value = if (comptime Op == .LogicalNot) null else try rt.results[try rt.it.next()].getValue();
 
-            const operator = struct {
-                fn operation(comptime TT: type, op1: TT, op2: ?TT) RuntimeError!bool {
-                    return switch (Op) {
-                        .Equal, .LogicalEqual => op1 == op2 orelse return RuntimeError.InvalidSpirV,
-                        .NotEqual, .LogicalNotEqual => op1 != op2 orelse return RuntimeError.InvalidSpirV,
-                        .Greater => op1 > op2 orelse return RuntimeError.InvalidSpirV,
-                        .GreaterEqual => op1 >= op2 orelse return RuntimeError.InvalidSpirV,
-                        .Less => op1 < op2 orelse return RuntimeError.InvalidSpirV,
-                        .LessEqual => op1 <= op2 orelse return RuntimeError.InvalidSpirV,
-                        .LogicalAnd => (op1 != @as(TT, 0)) and ((op2 orelse return RuntimeError.InvalidSpirV) != @as(TT, 0)),
-                        .LogicalOr => (op1 != @as(TT, 0)) or ((op2 orelse return RuntimeError.InvalidSpirV) != @as(TT, 0)),
-                        .LogicalNot => (op1 == @as(TT, 0)),
-                    };
-                }
+            const lane_bits = try Result.resolveLaneBitWidth((try rt.results[op1_type].getVariant()).Type, rt);
 
-                fn process(bit_count: SpvWord, v: *Result.Value, op1_v: *const Result.Value, op2_v: ?*const Result.Value) RuntimeError!void {
-                    switch (bit_count) {
-                        inline 8, 16, 32, 64 => |i| {
-                            if (i == 8 and T == .Float) { // No f8
-                                return RuntimeError.InvalidSpirV;
-                            }
-                            v.Bool = try operation(
-                                getValuePrimitiveFieldType(T, i),
-                                (try getValuePrimitiveField(T, i, @constCast(op1_v))).*,
-                                if (op2_v) |val| (try getValuePrimitiveField(T, i, @constCast(val))).* else null,
-                            );
-                        },
-                        else => return RuntimeError.InvalidSpirV,
-                    }
-                }
-            };
+            const operator = CondOperator(T, Op);
 
-            switch (value.*) {
-                .Bool => try operator.process(size, value, op1_value, op2_value),
-                .Vector => |vec| for (vec, op1_value.Vector, 0..) |*val, op1_v, i| {
-                    try operator.process(size, val, &op1_v, if (op2_value) |op2_v| &op2_v.Vector[i] else null);
+            switch (dst.*) {
+                .Bool => try operator.applyLane(lane_bits, dst, op1_value, op2_value),
+
+                .Vector => |dst_vec| for (dst_vec, op1_value.Vector, 0..) |*d_lane, a_lane, i| {
+                    const b_ptr = operator.laneRhsPtr(op2_value, i);
+                    try operator.applyLane(lane_bits, d_lane, &a_lane, b_ptr);
                 },
-                // No Vector specializations for booleans
+
                 else => return RuntimeError.InvalidSpirV,
             }
         }
     };
 }
 
-fn ConversionEngine(comptime From: ValueType, comptime To: ValueType) type {
+fn ConversionEngine(comptime from_kind: ValueType, comptime to_kind: ValueType) type {
     return struct {
         fn op(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
             const target_type = (try rt.results[try rt.it.next()].getVariant()).Type;
-            const value = try rt.results[try rt.it.next()].getValue();
-            const op_result = &rt.results[try rt.it.next()];
-            const op_type = try op_result.getValueTypeWord();
-            const op_value = try op_result.getValue();
+            const dst_value = try rt.results[try rt.it.next()].getValue();
 
-            const from_size = sw: switch ((try rt.results[op_type].getVariant()).Type) {
-                .Vector => |v| continue :sw (try rt.results[v.components_type_word].getVariant()).Type,
-                .Vector4f32,
-                .Vector3f32,
-                .Vector2f32,
-                .Vector4i32,
-                .Vector3i32,
-                .Vector2i32,
-                .Vector4u32,
-                .Vector3u32,
-                .Vector2u32,
-                => 32,
-                .Float => |f| if (From == .Float) f.bit_length else return RuntimeError.InvalidSpirV,
-                .Int => |i| if (From == .SInt or From == .UInt) i.bit_length else return RuntimeError.InvalidSpirV,
-                else => return RuntimeError.InvalidSpirV,
-            };
+            const src_result = &rt.results[try rt.it.next()];
+            const src_type_word = try src_result.getValueTypeWord();
+            const src_value = try src_result.getValue();
 
-            const to_size = sw: switch (target_type) {
-                .Vector => |v| continue :sw (try rt.results[v.components_type_word].getVariant()).Type,
-                .Vector4f32,
-                .Vector3f32,
-                .Vector2f32,
-                .Vector4i32,
-                .Vector3i32,
-                .Vector2i32,
-                .Vector4u32,
-                .Vector3u32,
-                .Vector2u32,
-                => 32,
-                .Float => |f| if (To == .Float) f.bit_length else return RuntimeError.InvalidSpirV,
-                .Int => |i| if (To == .SInt or To == .UInt) i.bit_length else return RuntimeError.InvalidSpirV,
-                else => return RuntimeError.InvalidSpirV,
-            };
+            const from_bits = try Result.resolveLaneBitWidth((try rt.results[src_type_word].getVariant()).Type, rt);
+            const to_bits = try Result.resolveLaneBitWidth(target_type, rt);
 
-            const operator = struct {
-                fn process(from_bit_count: SpvWord, to_bit_count: SpvWord, to: *Result.Value, from: *Result.Value) RuntimeError!void {
+            const caster = struct {
+                fn castLane(comptime ToT: type, from_bit_count: SpvWord, from: *Result.Value) RuntimeError!ToT {
+                    return switch (from_bit_count) {
+                        inline 8, 16, 32, 64 => |bits| blk: {
+                            if (bits == 8 and from_kind == .Float) return RuntimeError.InvalidSpirV; // No f8
+                            const v = (try getValuePrimitiveField(from_kind, bits, from)).*;
+                            break :blk std.math.lossyCast(ToT, v);
+                        },
+                        else => return RuntimeError.InvalidSpirV,
+                    };
+                }
+
+                fn applyScalar(from_bit_count: SpvWord, to_bit_count: SpvWord, dst: *Result.Value, from: *Result.Value) RuntimeError!void {
                     switch (to_bit_count) {
-                        inline 8, 16, 32, 64 => |i| {
-                            if (i == 8 and To == .Float) {
-                                return RuntimeError.InvalidSpirV; // No f8
-                            }
-
-                            const ToType = getValuePrimitiveFieldType(To, i);
-                            (try getValuePrimitiveField(To, i, to)).* = std.math.lossyCast(
-                                ToType,
-                                switch (from_bit_count) {
-                                    inline 8, 16, 32, 64 => |j| blk: {
-                                        if (j == 8 and From == .Float) {
-                                            return RuntimeError.InvalidSpirV; // Same
-                                        }
-                                        break :blk (try getValuePrimitiveField(From, j, from)).*;
-                                    },
-                                    else => return RuntimeError.InvalidSpirV,
-                                },
-                            );
+                        inline 8, 16, 32, 64 => |bits| {
+                            if (bits == 8 and to_kind == .Float) return RuntimeError.InvalidSpirV; // No f8
+                            const ToT = getValuePrimitiveFieldType(to_kind, bits);
+                            (try getValuePrimitiveField(to_kind, bits, dst)).* = try castLane(ToT, from_bit_count, from);
                         },
                         else => return RuntimeError.InvalidSpirV,
                     }
                 }
 
-                fn processVecSpe(comptime T: type, from_bit_count: SpvWord, from: *Result.Value, index: usize) RuntimeError!T {
-                    return switch (from.*) {
-                        .Vector3f32 => |vec| std.math.lossyCast(T, vec[index]),
-                        .Vector2f32 => |vec| std.math.lossyCast(T, vec[index]),
-                        .Vector4i32 => |vec| std.math.lossyCast(T, vec[index]),
-                        .Vector3i32 => |vec| std.math.lossyCast(T, vec[index]),
-                        .Vector2i32 => |vec| std.math.lossyCast(T, vec[index]),
-                        .Vector4u32 => |vec| std.math.lossyCast(T, vec[index]),
-                        .Vector3u32 => |vec| std.math.lossyCast(T, vec[index]),
-                        .Vector2u32 => |vec| std.math.lossyCast(T, vec[index]),
-                        inline else => switch (from_bit_count) {
-                            inline 8, 16, 32, 64 => |i| std.math.lossyCast(T, blk: {
-                                if (i == 8 and From == .Float) {
-                                    return RuntimeError.InvalidSpirV;
-                                }
-                                break :blk (try getValuePrimitiveField(From, i, from)).*;
-                            }),
-                            else => return RuntimeError.InvalidSpirV,
-                        },
-                    };
+                fn castSIMDVector(comptime ToT: type, comptime N: usize, dst_arr: *[N]ToT, src_arr: *const [N]ToT) void {
+                    inline for (0..N) |i| dst_arr[i] = std.math.lossyCast(ToT, src_arr[i]);
+                }
+
+                fn castSIMDVectorFromOther(comptime ToT: type, comptime FromT: type, comptime N: usize, dst_arr: *[N]ToT, src_arr: *const [N]FromT) void {
+                    inline for (0..N) |i| dst_arr[i] = std.math.lossyCast(ToT, src_arr[i]);
                 }
             };
 
-            switch (value.*) {
-                .Float => if (To == .Float) try operator.process(from_size, to_size, value, op_value) else return RuntimeError.InvalidSpirV,
-                .Int => if (To == .SInt or To == .UInt) try operator.process(from_size, to_size, value, op_value) else return RuntimeError.InvalidSpirV,
-                .Vector => |vec| for (vec, op_value.Vector) |*val, *op_v| try operator.process(from_size, to_size, val, op_v),
-                .Vector4f32 => |*vec| inline for (0..4) |i| {
-                    vec[i] = try operator.processVecSpe(f32, from_size, op_value, i);
+            switch (dst_value.*) {
+                .Float => {
+                    if (to_kind != .Float) return RuntimeError.InvalidSpirV;
+                    try caster.applyScalar(from_bits, to_bits, dst_value, src_value);
                 },
-                .Vector3f32 => |*vec| inline for (0..3) |i| {
-                    vec[i] = try operator.processVecSpe(f32, from_size, op_value, i);
+                .Int => {
+                    if (to_kind != .SInt and to_kind != .UInt) return RuntimeError.InvalidSpirV;
+                    try caster.applyScalar(from_bits, to_bits, dst_value, src_value);
                 },
-                .Vector2f32 => |*vec| inline for (0..2) |i| {
-                    vec[i] = try operator.processVecSpe(f32, from_size, op_value, i);
+                .Vector => |dst_vec| {
+                    const src_vec = src_value.Vector;
+                    if (dst_vec.len != src_vec.len) return RuntimeError.InvalidSpirV;
+                    for (dst_vec, src_vec) |*d_lane, *s_lane| {
+                        try caster.applyScalar(from_bits, to_bits, d_lane, s_lane);
+                    }
                 },
-                .Vector4i32 => |*vec| inline for (0..4) |i| {
-                    vec[i] = try operator.processVecSpe(i32, from_size, op_value, i);
+
+                .Vector4f32 => |*dst| switch (src_value.*) {
+                    .Vector4f32 => caster.castSIMDVector(f32, 4, dst, &src_value.Vector4f32),
+                    .Vector4i32 => caster.castSIMDVectorFromOther(f32, i32, 4, dst, &src_value.Vector4i32),
+                    .Vector4u32 => caster.castSIMDVectorFromOther(f32, u32, 4, dst, &src_value.Vector4u32),
+                    else => return RuntimeError.InvalidSpirV,
                 },
-                .Vector3i32 => |*vec| inline for (0..3) |i| {
-                    vec[i] = try operator.processVecSpe(i32, from_size, op_value, i);
+                .Vector3f32 => |*dst| switch (src_value.*) {
+                    .Vector3f32 => caster.castSIMDVector(f32, 3, dst, &src_value.Vector3f32),
+                    .Vector3i32 => caster.castSIMDVectorFromOther(f32, i32, 3, dst, &src_value.Vector3i32),
+                    .Vector3u32 => caster.castSIMDVectorFromOther(f32, u32, 3, dst, &src_value.Vector3u32),
+                    else => return RuntimeError.InvalidSpirV,
                 },
-                .Vector2i32 => |*vec| inline for (0..2) |i| {
-                    vec[i] = try operator.processVecSpe(i32, from_size, op_value, i);
+                .Vector2f32 => |*dst| switch (src_value.*) {
+                    .Vector2f32 => caster.castSIMDVector(f32, 2, dst, &src_value.Vector2f32),
+                    .Vector2i32 => caster.castSIMDVectorFromOther(f32, i32, 2, dst, &src_value.Vector2i32),
+                    .Vector2u32 => caster.castSIMDVectorFromOther(f32, u32, 2, dst, &src_value.Vector2u32),
+                    else => return RuntimeError.InvalidSpirV,
                 },
-                .Vector4u32 => |*vec| inline for (0..4) |i| {
-                    vec[i] = try operator.processVecSpe(u32, from_size, op_value, i);
+
+                .Vector4i32 => |*dst| switch (src_value.*) {
+                    .Vector4f32 => caster.castSIMDVectorFromOther(i32, f32, 4, dst, &src_value.Vector4f32),
+                    .Vector4i32 => caster.castSIMDVector(i32, 4, dst, &src_value.Vector4i32),
+                    .Vector4u32 => caster.castSIMDVectorFromOther(i32, u32, 4, dst, &src_value.Vector4u32),
+                    else => return RuntimeError.InvalidSpirV,
                 },
-                .Vector3u32 => |*vec| inline for (0..3) |i| {
-                    vec[i] = try operator.processVecSpe(u32, from_size, op_value, i);
+                .Vector3i32 => |*dst| switch (src_value.*) {
+                    .Vector3f32 => caster.castSIMDVectorFromOther(i32, f32, 3, dst, &src_value.Vector3f32),
+                    .Vector3i32 => caster.castSIMDVector(i32, 3, dst, &src_value.Vector3i32),
+                    .Vector3u32 => caster.castSIMDVectorFromOther(i32, u32, 3, dst, &src_value.Vector3u32),
+                    else => return RuntimeError.InvalidSpirV,
                 },
-                .Vector2u32 => |*vec| inline for (0..2) |i| {
-                    vec[i] = try operator.processVecSpe(u32, from_size, op_value, i);
+                .Vector2i32 => |*dst| switch (src_value.*) {
+                    .Vector2f32 => caster.castSIMDVectorFromOther(i32, f32, 2, dst, &src_value.Vector2f32),
+                    .Vector2i32 => caster.castSIMDVector(i32, 2, dst, &src_value.Vector2i32),
+                    .Vector2u32 => caster.castSIMDVectorFromOther(i32, u32, 2, dst, &src_value.Vector2u32),
+                    else => return RuntimeError.InvalidSpirV,
                 },
+
+                .Vector4u32 => |*dst| switch (src_value.*) {
+                    .Vector4f32 => caster.castSIMDVectorFromOther(u32, f32, 4, dst, &src_value.Vector4f32),
+                    .Vector4i32 => caster.castSIMDVectorFromOther(u32, i32, 4, dst, &src_value.Vector4i32),
+                    .Vector4u32 => caster.castSIMDVector(u32, 4, dst, &src_value.Vector4u32),
+                    else => return RuntimeError.InvalidSpirV,
+                },
+                .Vector3u32 => |*dst| switch (src_value.*) {
+                    .Vector3f32 => caster.castSIMDVectorFromOther(u32, f32, 3, dst, &src_value.Vector3f32),
+                    .Vector3i32 => caster.castSIMDVectorFromOther(u32, i32, 3, dst, &src_value.Vector3i32),
+                    .Vector3u32 => caster.castSIMDVector(u32, 3, dst, &src_value.Vector3u32),
+                    else => return RuntimeError.InvalidSpirV,
+                },
+                .Vector2u32 => |*dst| switch (src_value.*) {
+                    .Vector2f32 => caster.castSIMDVectorFromOther(u32, f32, 2, dst, &src_value.Vector2f32),
+                    .Vector2i32 => caster.castSIMDVectorFromOther(u32, i32, 2, dst, &src_value.Vector2i32),
+                    .Vector2u32 => caster.castSIMDVector(u32, 2, dst, &src_value.Vector2u32),
+                    else => return RuntimeError.InvalidSpirV,
+                },
+
                 else => return RuntimeError.InvalidSpirV,
             }
         }
@@ -600,26 +689,11 @@ fn MathEngine(comptime T: ValueType, comptime Op: MathOp) type {
     return struct {
         fn op(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
             const target_type = (try rt.results[try rt.it.next()].getVariant()).Type;
-            const value = try rt.results[try rt.it.next()].getValue();
-            const op1_value = try rt.results[try rt.it.next()].getValue();
-            const op2_value = try rt.results[try rt.it.next()].getValue();
+            const dst = try rt.results[try rt.it.next()].getValue();
+            const lhs = try rt.results[try rt.it.next()].getValue();
+            const rhs = try rt.results[try rt.it.next()].getValue();
 
-            const size = sw: switch (target_type) {
-                .Vector => |v| continue :sw (try rt.results[v.components_type_word].getVariant()).Type,
-                .Vector4f32,
-                .Vector3f32,
-                .Vector2f32,
-                .Vector4i32,
-                .Vector3i32,
-                .Vector2i32,
-                .Vector4u32,
-                .Vector3u32,
-                .Vector2u32,
-                => 32,
-                .Float => |f| if (T == .Float) f.bit_length else return RuntimeError.InvalidSpirV,
-                .Int => |i| if (T == .SInt or T == .UInt) i.bit_length else return RuntimeError.InvalidSpirV,
-                else => return RuntimeError.InvalidSpirV,
-            };
+            const lane_bits = try Result.resolveLaneBitWidth(target_type, rt);
 
             const operator = struct {
                 fn operation(comptime TT: type, op1: TT, op2: TT) RuntimeError!TT {
@@ -637,68 +711,77 @@ fn MathEngine(comptime T: ValueType, comptime Op: MathOp) type {
                     };
                 }
 
-                fn process(bit_count: SpvWord, v: *Result.Value, op1_v: *const Result.Value, op2_v: *const Result.Value) RuntimeError!void {
+                fn applyScalar(bit_count: SpvWord, d: *Result.Value, l: *Result.Value, r: *Result.Value) RuntimeError!void {
                     switch (bit_count) {
-                        inline 8, 16, 32, 64 => |i| {
-                            if (i == 8 and T == .Float) { // No f8
-                                return RuntimeError.InvalidSpirV;
-                            }
-                            (try getValuePrimitiveField(T, i, v)).* = try operation(
-                                getValuePrimitiveFieldType(T, i),
-                                (try getValuePrimitiveField(T, i, @constCast(op1_v))).*,
-                                (try getValuePrimitiveField(T, i, @constCast(op2_v))).*,
-                            );
+                        inline 8, 16, 32, 64 => |bits| {
+                            if (bits == 8 and T == .Float) return RuntimeError.InvalidSpirV;
+
+                            const ScalarT = getValuePrimitiveFieldType(T, bits);
+                            const d_field = try getValuePrimitiveField(T, bits, d);
+                            const l_field = try getValuePrimitiveField(T, bits, l);
+                            const r_field = try getValuePrimitiveField(T, bits, r);
+                            d_field.* = try operation(ScalarT, l_field.*, r_field.*);
                         },
                         else => return RuntimeError.InvalidSpirV,
                     }
                 }
+
+                inline fn applyVectorTimesScalarF32(d: []Result.Value, l: []const Result.Value, r: f32) void {
+                    for (d, l) |*d_v, l_v| {
+                        d_v.Float.float32 = l_v.Float.float32 * r;
+                    }
+                }
+
+                inline fn applySIMDVector(comptime ElemT: type, comptime N: usize, d: *@Vector(N, ElemT), l: *const @Vector(N, ElemT), r: *const @Vector(N, ElemT)) RuntimeError!void {
+                    inline for (0..N) |i| {
+                        d[i] = try operation(ElemT, l[i], r[i]);
+                    }
+                }
+
+                inline fn applyVectorSIMDTimesScalarF32(comptime N: usize, d: *@Vector(N, f32), l: *const @Vector(N, f32), r: f32) void {
+                    inline for (0..N) |i| {
+                        d[i] = l[i] * r;
+                    }
+                }
+
+                inline fn applySIMDVectorf32(comptime N: usize, d: *@Vector(N, f32), l: *const @Vector(N, f32), r: *const Result.Value) RuntimeError!void {
+                    switch (Op) {
+                        .VectorTimesScalar => applyVectorSIMDTimesScalarF32(N, d, l, r.Float.float32),
+                        else => {
+                            const rh: *const @Vector(N, f32) = switch (N) {
+                                2 => &r.Vector2f32,
+                                3 => &r.Vector3f32,
+                                4 => &r.Vector4f32,
+                                else => unreachable,
+                            };
+                            try applySIMDVector(f32, N, d, l, rh);
+                        },
+                    }
+                }
             };
 
-            switch (value.*) {
-                .Float => if (T == .Float) try operator.process(size, value, op1_value, op2_value) else return RuntimeError.InvalidSpirV,
-                .Int => if (T == .SInt or T == .UInt) try operator.process(size, value, op1_value, op2_value) else return RuntimeError.InvalidSpirV,
-                .Vector => |vec| for (vec, op1_value.Vector, 0..) |*val, op1_v, i| {
-                    switch (Op) {
-                        .VectorTimesScalar => try operator.process(size, val, &op1_v, op2_value),
-                        else => try operator.process(size, val, &op1_v, &op2_value.Vector[i]),
-                    }
+            switch (dst.*) {
+                .Int, .Float => try operator.applyScalar(lane_bits, dst, lhs, rhs),
+
+                .Vector => |dst_vec| switch (Op) {
+                    .VectorTimesScalar => operator.applyVectorTimesScalarF32(dst_vec, lhs.Vector, rhs.Float.float32),
+                    else => for (dst_vec, lhs.Vector, rhs.Vector) |*d_lane, *l_lane, *r_lane| {
+                        try operator.applyScalar(lane_bits, d_lane, l_lane, r_lane);
+                    },
                 },
-                .Vector4f32 => |*vec| inline for (0..4) |i| {
-                    switch (Op) {
-                        .VectorTimesScalar => vec[i] = op1_value.Vector4f32[i] * op2_value.Float.float32,
-                        else => vec[i] = try operator.operation(f32, op1_value.Vector4f32[i], op2_value.Vector4f32[i]),
-                    }
-                },
-                .Vector3f32 => |*vec| inline for (0..3) |i| {
-                    switch (Op) {
-                        .VectorTimesScalar => vec[i] = op1_value.Vector3f32[i] * op2_value.Float.float32,
-                        else => vec[i] = try operator.operation(f32, op1_value.Vector3f32[i], op2_value.Vector3f32[i]),
-                    }
-                },
-                .Vector2f32 => |*vec| inline for (0..2) |i| {
-                    switch (Op) {
-                        .VectorTimesScalar => vec[i] = op1_value.Vector2f32[i] * op2_value.Float.float32,
-                        else => vec[i] = try operator.operation(f32, op1_value.Vector2f32[i], op2_value.Vector2f32[i]),
-                    }
-                },
-                .Vector4i32 => |*vec| inline for (0..4) |i| {
-                    vec[i] = try operator.operation(i32, op1_value.Vector4i32[i], op2_value.Vector4i32[i]);
-                },
-                .Vector3i32 => |*vec| inline for (0..3) |i| {
-                    vec[i] = try operator.operation(i32, op1_value.Vector3i32[i], op2_value.Vector3i32[i]);
-                },
-                .Vector2i32 => |*vec| inline for (0..2) |i| {
-                    vec[i] = try operator.operation(i32, op1_value.Vector2i32[i], op2_value.Vector2i32[i]);
-                },
-                .Vector4u32 => |*vec| inline for (0..4) |i| {
-                    vec[i] = try operator.operation(u32, op1_value.Vector4u32[i], op2_value.Vector4u32[i]);
-                },
-                .Vector3u32 => |*vec| inline for (0..3) |i| {
-                    vec[i] = try operator.operation(u32, op1_value.Vector3u32[i], op2_value.Vector3u32[i]);
-                },
-                .Vector2u32 => |*vec| inline for (0..2) |i| {
-                    vec[i] = try operator.operation(u32, op1_value.Vector2u32[i], op2_value.Vector2u32[i]);
-                },
+
+                .Vector4f32 => |*d| try operator.applySIMDVectorf32(4, d, &lhs.Vector4f32, rhs),
+                .Vector3f32 => |*d| try operator.applySIMDVectorf32(3, d, &lhs.Vector3f32, rhs),
+                .Vector2f32 => |*d| try operator.applySIMDVectorf32(2, d, &lhs.Vector2f32, rhs),
+
+                .Vector4i32 => |*d| try operator.applySIMDVector(i32, 4, d, &lhs.Vector4i32, &rhs.Vector4i32),
+                .Vector3i32 => |*d| try operator.applySIMDVector(i32, 3, d, &lhs.Vector3i32, &rhs.Vector3i32),
+                .Vector2i32 => |*d| try operator.applySIMDVector(i32, 2, d, &lhs.Vector2i32, &rhs.Vector2i32),
+
+                .Vector4u32 => |*d| try operator.applySIMDVector(u32, 4, d, &lhs.Vector4u32, &rhs.Vector4u32),
+                .Vector3u32 => |*d| try operator.applySIMDVector(u32, 3, d, &lhs.Vector3u32, &rhs.Vector3u32),
+                .Vector2u32 => |*d| try operator.applySIMDVector(u32, 2, d, &lhs.Vector2u32, &rhs.Vector2u32),
+
                 else => return RuntimeError.InvalidSpirV,
             }
         }
@@ -784,20 +867,21 @@ fn opBitcast(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
 }
 
 fn copyValue(dst: *Result.Value, src: *const Result.Value) void {
-    if (src.getCompositeDataOrNull()) |src_slice| {
-        if (dst.getCompositeDataOrNull()) |dst_slice| {
+    switch (src.*) {
+        .Vector, .Matrix, .Array, .Structure => |src_slice| {
+            const dst_slice = switch (dst.*) {
+                .Vector, .Matrix, .Array, .Structure => |d| d,
+                else => unreachable,
+            };
             for (0..@min(dst_slice.len, src_slice.len)) |i| {
                 copyValue(&dst_slice[i], &src_slice[i]);
             }
-        } else {
-            unreachable;
-        }
-    } else {
-        dst.* = src.*;
+        },
+        else => dst.* = src.*,
     }
 }
 
-fn getValuePrimitiveField(comptime T: ValueType, comptime BitCount: SpvWord, v: *Result.Value) RuntimeError!*getValuePrimitiveFieldType(T, BitCount) {
+pub fn getValuePrimitiveField(comptime T: ValueType, comptime BitCount: SpvWord, v: *Result.Value) RuntimeError!*getValuePrimitiveFieldType(T, BitCount) {
     return switch (T) {
         .Bool => &v.Bool,
         .Float => switch (BitCount) {
@@ -815,7 +899,7 @@ fn getValuePrimitiveField(comptime T: ValueType, comptime BitCount: SpvWord, v: 
     };
 }
 
-fn getValuePrimitiveFieldType(comptime T: ValueType, comptime BitCount: SpvWord) type {
+pub fn getValuePrimitiveFieldType(comptime T: ValueType, comptime BitCount: SpvWord) type {
     return switch (T) {
         .Bool => bool,
         .Float => std.meta.Float(BitCount),
@@ -1112,7 +1196,7 @@ fn opExtInst(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) Ru
     const set = try rt.it.next();
     const inst = try rt.it.next();
 
-    switch (try rt.results[set].getVariant()) {
+    switch ((try rt.results[set].getVariant()).*) {
         .Extension => |ext| if (ext.dispatcher[inst]) |pfn| {
             try pfn(allocator, target_type, id, word_count, rt);
         },
@@ -1122,10 +1206,11 @@ fn opExtInst(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) Ru
 
 fn opExtInstImport(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
     const id = try rt.it.next();
-    rt.mod.results[id].name = try readStringN(allocator, &rt.it, word_count - 1);
+    const name = try readStringN(allocator, &rt.it, word_count - 1);
+    rt.mod.results[id].name = name;
     rt.mod.results[id].variant = .{
         .Extension = .{
-            .dispatcher = undefined,
+            .dispatcher = if (extensions_map.get(name)) |map| map else return RuntimeError.UnsupportedExtension,
         },
     };
 }
