@@ -37,7 +37,7 @@ const SpvSource = struct {
     source: []const u8,
 };
 
-const ModuleError = error{
+pub const ModuleError = error{
     InvalidSpirV,
     InvalidMagic,
     UnsupportedEndianness,
