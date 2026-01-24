@@ -4,8 +4,8 @@ const spv = @import("spv");
 
 const shader_source = @embedFile("shader.spv");
 
-const screen_width = 480;
-const screen_height = 240;
+const screen_width = 300;
+const screen_height = 300;
 
 pub fn main() !void {
     {

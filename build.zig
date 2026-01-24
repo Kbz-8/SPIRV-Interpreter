@@ -97,22 +97,27 @@ pub fn build(b: *std.Build) void {
 
     // Zig unit tests setup
 
-    const nzsl = b.lazyDependency("NZSL", .{ .target = target, .optimize = optimize }) orelse return;
-    const lib_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("test/root.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "spv", .module = mod },
-                .{ .name = "nzsl", .module = nzsl.module("nzigsl") },
-            },
-        }),
-        .test_runner = .{ .path = b.path("test/test_runner.zig"), .mode = .simple },
-    });
-    const run_tests = b.addRunArtifact(lib_tests);
-    const test_step = b.step("test", "Run Zig unit tests");
-    test_step.dependOn(&run_tests.step);
+    const no_test = b.option(bool, "no-test", "skips unit test dependencies fetch") orelse false;
+
+    if (!no_test) {
+        const nzsl = b.lazyDependency("NZSL", .{ .target = target, .optimize = optimize }) orelse return;
+        const lib_tests = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/root.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "spv", .module = mod },
+                    .{ .name = "nzsl", .module = nzsl.module("nzigsl") },
+                    .{ .name = "zmath", .module = zmath.module("root") },
+                },
+            }),
+            .test_runner = .{ .path = b.path("test/test_runner.zig"), .mode = .simple },
+        });
+        const run_tests = b.addRunArtifact(lib_tests);
+        const test_step = b.step("test", "Run Zig unit tests");
+        test_step.dependOn(&run_tests.step);
+    }
 
     // Docs generation
 
