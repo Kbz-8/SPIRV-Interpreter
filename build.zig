@@ -6,7 +6,7 @@ pub fn build(b: *std.Build) void {
 
     const use_llvm = b.option(bool, "use-llvm", "use llvm") orelse (b.release_mode != .off);
 
-    const mod = b.createModule(.{
+    const mod = b.addModule("spv", .{
         .root_source_file = b.path("src/lib.zig"),
         .target = target,
         .optimize = optimize,
