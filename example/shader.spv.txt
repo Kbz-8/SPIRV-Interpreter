@@ -55,11 +55,11 @@ Schema: 0
  %29 = OpConstant %3 f32(0.2)
  %30 = OpConstant %3 f32(4)
  %31 = OpTypePointer StorageClass(Function) %6
- %32 = OpConstant %6 i32(32)
+ %32 = OpConstant %6 i32(128)
  %33 = OpTypeBool
  %34 = OpConstant %3 f32(0.001)
  %35 = OpConstant %3 f32(0.35)
- %36 = OpConstant %3 f32(20)
+ %36 = OpConstant %3 f32(100)
  %37 = OpConstant %3 f32(0.15)
  %38 = OpConstant %3 f32(0.05)
  %39 = OpConstant %3 f32(1.15)

@@ -1,5 +1,6 @@
 const std = @import("std");
 const spv = @import("spv.zig");
+const zm = @import("zmath");
 
 const GLSL_std_450 = @import("GLSL_std_450/opcodes.zig");
 
@@ -1141,14 +1142,14 @@ fn opDot(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
                 else => return RuntimeError.InvalidSpirV,
             }
         },
-        .Vector4f32 => |*vec| inline for (0..4) |i| {
-            value.Float.float32 += vec[i] * op2_value.Vector4f32[i];
+        .Vector4f32 => |vec| value.Float.float32 = zm.dot4(vec, op2_value.Vector4f32)[0],
+        .Vector3f32 => |vec| {
+            const op2_vec = op2_value.Vector3f32;
+            value.Float.float32 = zm.dot3(zm.f32x4(vec[0], vec[1], vec[2], 0.0), zm.f32x4(op2_vec[0], op2_vec[1], op2_vec[2], 0.0))[0];
         },
-        .Vector3f32 => |*vec| inline for (0..3) |i| {
-            value.Float.float32 += vec[i] * op2_value.Vector3f32[i];
-        },
-        .Vector2f32 => |*vec| inline for (0..2) |i| {
-            value.Float.float32 += vec[i] * op2_value.Vector2f32[i];
+        .Vector2f32 => |vec| {
+            const op2_vec = op2_value.Vector2f32;
+            value.Float.float32 = zm.dot2(zm.f32x4(vec[0], vec[1], 0.0, 0.0), zm.f32x4(op2_vec[0], op2_vec[1], 0.0, 0.0))[0];
         },
         else => return RuntimeError.InvalidSpirV,
     }

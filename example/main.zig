@@ -4,8 +4,8 @@ const spv = @import("spv");
 
 const shader_source = @embedFile("shader.spv");
 
-const screen_width = 200;
-const screen_height = 200;
+const screen_width = 480;
+const screen_height = 240;
 
 pub fn main() !void {
     {
@@ -50,9 +50,7 @@ pub fn main() !void {
         }
 
         var thread_pool: std.Thread.Pool = undefined;
-        try thread_pool.init(.{
-            .allocator = allocator,
-        });
+        try thread_pool.init(.{ .allocator = allocator });
 
         var timer = try std.time.Timer.start();
 
@@ -73,14 +71,14 @@ pub fn main() !void {
 
                 const pixel_map: [*]u32 = @as([*]u32, @ptrCast(@alignCast((surface.getPixels() orelse return).ptr)));
 
+                const delta: f32 = @as(f32, @floatFromInt(timer.read())) / std.time.ns_per_s;
+
                 var frame_timer = try std.time.Timer.start();
                 defer {
                     const ns = frame_timer.lap();
                     const ms = @as(f32, @floatFromInt(ns)) / std.time.ns_per_s;
-                    std.log.info("Took {d:.3}s - {d:.3}fps to render", .{ ms, 1.0 / ms });
+                    std.log.info("Took {d:.3}s - {d:.3}fps to render {d:.2}", .{ ms, 1.0 / ms, delta });
                 }
-
-                const delta: f32 = @as(f32, @floatFromInt(timer.read())) / std.time.ns_per_s;
 
                 var wait_group: std.Thread.WaitGroup = .{};
                 for (0..screen_height) |y| {
@@ -131,10 +129,10 @@ const Runner = struct {
             try rt.readOutput(f32, output[0..], self.color);
 
             const rgba = self.surface.mapRgba(
-                @truncate(@as(u32, @intFromFloat(output[0] * 255.0))),
-                @truncate(@as(u32, @intFromFloat(output[1] * 255.0))),
-                @truncate(@as(u32, @intFromFloat(output[2] * 255.0))),
-                @truncate(@as(u32, @intFromFloat(output[3] * 255.0))),
+                @intCast(@max(@min(@as(i32, @intFromFloat(output[0] * 255.0)), 255), 0)),
+                @intCast(@max(@min(@as(i32, @intFromFloat(output[1] * 255.0)), 255), 0)),
+                @intCast(@max(@min(@as(i32, @intFromFloat(output[2] * 255.0)), 255), 0)),
+                @intCast(@max(@min(@as(i32, @intFromFloat(output[3] * 255.0)), 255), 0)),
             );
 
             pixel_map[(y * self.surface.getWidth()) + x] = rgba.value;

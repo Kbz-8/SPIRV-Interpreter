@@ -12,6 +12,9 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const zmath = b.dependency("zmath", .{});
+    mod.addImport("zmath", zmath.module("root"));
+
     const pretty = b.dependency("pretty", .{ .target = target, .optimize = optimize });
     mod.addImport("pretty", pretty.module("pretty"));
 

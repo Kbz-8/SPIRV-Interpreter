@@ -1,4 +1,4 @@
-//! A small footprint SPIR-V interpreter with zero dependencies to execute SPIR-V shaders on the CPU. It is designed to be used with multiple runtimes concurrently.
+//! A small footprint SPIR-V interpreter to execute SPIR-V shaders on the CPU. It is designed to be used with multiple runtimes concurrently.
 //!
 //! ```zig
 //! const std = @import("std");

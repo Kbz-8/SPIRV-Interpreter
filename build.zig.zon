@@ -2,6 +2,10 @@
     .name = .SPIRV_Interpreter,
     .version = "0.0.1",
     .dependencies = .{
+        .zmath = .{
+            .url = "git+https://github.com/zig-gamedev/zmath.git#3a5955b2b72cd081563fbb084eff05bffd1e3fbb",
+            .hash = "zmath-0.11.0-dev-wjwivdMsAwD-xaLj76YHUq3t9JDH-X16xuMTmnDzqbu2",
+        },
         .pretty = .{ // For debugging purposes
             .url = "git+https://github.com/Kbz-8/pretty#117674465efd4d07d5ae9d9d8ca59c2c323a65ba",
             .hash = "pretty-0.10.6-Tm65r99UAQDEJMgZysD10qE8dinBHr064fPM6YkxVPfB",
