@@ -1330,7 +1330,6 @@ fn opMemberName(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime)
             .Type = .{
                 .Structure = .{
                     .members_type_word = undefined,
-                    .members = undefined,
                     .member_names = .empty,
                 },
             },
@@ -1522,18 +1521,14 @@ fn opTypePointer(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!vo
 
 fn opTypeStruct(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
     const id = try rt.it.next();
-    const members_type_word, const members = blk: {
+    const members_type_word = blk: {
         const members_type_word = allocator.alloc(SpvWord, word_count - 1) catch return RuntimeError.OutOfMemory;
         errdefer allocator.free(members_type_word);
 
-        const members = allocator.alloc(Result.Type, word_count - 1) catch return RuntimeError.OutOfMemory;
-        errdefer allocator.free(members);
-
-        for (members_type_word, members) |*member_type_word, *member| {
+        for (members_type_word) |*member_type_word| {
             member_type_word.* = try rt.it.next();
-            member.* = rt.mod.results[member_type_word.*].variant.?.Type;
         }
-        break :blk .{ members_type_word, members };
+        break :blk members_type_word;
     };
 
     if (rt.mod.results[id].variant) |*variant| {
@@ -1541,7 +1536,6 @@ fn opTypeStruct(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime)
             .Type => |*t| switch (t.*) {
                 .Structure => |*s| {
                     s.members_type_word = members_type_word;
-                    s.members = members;
                 },
                 else => unreachable,
             },
@@ -1552,7 +1546,6 @@ fn opTypeStruct(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime)
             .Type = .{
                 .Structure = .{
                     .members_type_word = members_type_word,
-                    .members = members,
                     .member_names = .empty,
                 },
             },

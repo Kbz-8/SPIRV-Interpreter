@@ -77,7 +77,7 @@ pub fn main() !void {
                 defer {
                     const ns = frame_timer.lap();
                     const ms = @as(f32, @floatFromInt(ns)) / std.time.ns_per_s;
-                    std.log.info("Took {d:.3}s - {d:.3}fps to render {d:.2}", .{ ms, 1.0 / ms, delta });
+                    std.log.info("Took {d:.3}s - {d:.3}fps to render", .{ ms, 1.0 / ms });
                 }
 
                 var wait_group: std.Thread.WaitGroup = .{};

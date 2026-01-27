@@ -265,7 +265,6 @@ pub const TypeData = union(Type) {
     RuntimeArray: struct {},
     Structure: struct {
         members_type_word: []const SpvWord,
-        members: []Type,
         member_names: std.ArrayList([]const u8),
     },
     Function: struct {
@@ -326,14 +325,11 @@ name: ?[]const u8,
 
 decorations: std.ArrayList(Decoration),
 
-parent: ?*const Self,
-
 variant: ?VariantData,
 
 pub fn init() Self {
     return .{
         .name = null,
-        .parent = null,
         .decorations = .empty,
         .variant = null,
     };
@@ -349,7 +345,6 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
                 .Function => |data| allocator.free(data.params),
                 .Structure => |*data| {
                     allocator.free(data.members_type_word);
-                    allocator.free(data.members);
                     for (data.member_names.items) |name| {
                         allocator.free(name);
                     }
@@ -409,7 +404,6 @@ pub fn dupe(self: *const Self, allocator: std.mem.Allocator) RuntimeError!Self {
     return .{
         .name = if (self.name) |name| allocator.dupe(u8, name) catch return RuntimeError.OutOfMemory else null,
         .decorations = self.decorations.clone(allocator) catch return RuntimeError.OutOfMemory,
-        .parent = self.parent,
         .variant = blk: {
             if (self.variant) |variant| {
                 switch (variant) {
@@ -421,7 +415,6 @@ pub fn dupe(self: *const Self, allocator: std.mem.Allocator) RuntimeError!Self {
                             .Type = .{
                                 .Structure = .{
                                     .members_type_word = allocator.dupe(SpvWord, s.members_type_word) catch return RuntimeError.OutOfMemory,
-                                    .members = allocator.dupe(Type, s.members) catch return RuntimeError.OutOfMemory,
                                     .member_names = blk2: {
                                         const member_names = s.member_names.clone(allocator) catch return RuntimeError.OutOfMemory;
                                         for (member_names.items, s.member_names.items) |*new_name, name| {
@@ -519,7 +512,7 @@ pub fn getMemberCounts(self: *const Self) usize {
                 .Matrix => |m| return m.member_count,
                 .Array => |a| return a.member_count,
                 .SampledImage => return 2,
-                .Structure => |s| return s.members.len,
+                .Structure => |s| return s.members_type_word.len,
                 .Function => |f| return f.params.len,
                 else => {},
             },
