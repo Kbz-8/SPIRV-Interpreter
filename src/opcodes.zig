@@ -158,6 +158,7 @@ pub const SetupDispatcher = block: {
         .TypeInt = opTypeInt,
         .TypeMatrix = opTypeMatrix,
         .TypePointer = opTypePointer,
+        .TypeRuntimeArray = opTypeRuntimeArray,
         .TypeStruct = opTypeStruct,
         .TypeVector = opTypeVector,
         .TypeVoid = opTypeVoid,
@@ -1248,6 +1249,7 @@ fn opFunction(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeErr
     rt.mod.results[function_type_id].variant.?.Type.Function.source_location = source_location;
 
     rt.current_function = &rt.mod.results[id];
+    rt.current_parameter_index = 0;
 }
 
 fn opFunctionCall(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
@@ -1515,6 +1517,15 @@ fn opTypePointer(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!vo
                 .storage_class = try rt.it.nextAs(spv.SpvStorageClass),
                 .target = try rt.it.next(),
             },
+        },
+    };
+}
+
+fn opTypeRuntimeArray(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const id = try rt.it.next();
+    rt.mod.results[id].variant = .{
+        .Type = .{
+            .RuntimeArray = .{},
         },
     };
 }

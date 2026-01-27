@@ -18,11 +18,6 @@ pub fn build(b: *std.Build) void {
     const pretty = b.dependency("pretty", .{ .target = target, .optimize = optimize });
     mod.addImport("pretty", pretty.module("pretty"));
 
-    var it = b.user_input_options.iterator();
-    while (it.next()) |entry| {
-        std.debug.print("{s} - {s} {any}", .{ entry.key_ptr.*, entry.value_ptr.name, entry.value_ptr.used });
-    }
-
     const lib = b.addLibrary(.{
         .name = "spirv_interpreter",
         .root_module = mod,

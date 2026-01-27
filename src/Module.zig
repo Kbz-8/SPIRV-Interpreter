@@ -99,7 +99,7 @@ pub fn init(allocator: std.mem.Allocator, source: []const SpvWord, options: Modu
         .output_locations = std.ArrayList(SpvWord).empty,
         .bindings = std.AutoHashMap(SpvBinding, Value).init(allocator),
     });
-    errdefer self.deinit(allocator);
+    errdefer allocator.free(self.code);
 
     op.initRuntimeDispatcher();
 
@@ -123,8 +123,15 @@ pub fn init(allocator: std.mem.Allocator, source: []const SpvWord, options: Modu
 
     self.bound = self.it.next() catch return ModuleError.InvalidSpirV;
     self.results = allocator.alloc(Result, self.bound) catch return ModuleError.OutOfMemory;
+    errdefer allocator.free(self.results);
+
     for (self.results) |*result| {
         result.* = Result.init();
+    }
+    errdefer {
+        for (self.results) |*result| {
+            result.deinit(allocator);
+        }
     }
 
     _ = self.it.skip(); // Skip schema

@@ -176,6 +176,7 @@ pub const Value = union(Type) {
                     }
                     break :blk self;
                 },
+                .RuntimeArray => .{ .RuntimeArray = .{} },
                 else => unreachable,
             },
             else => unreachable,
@@ -322,9 +323,7 @@ pub const VariantData = union(Variant) {
 const Self = @This();
 
 name: ?[]const u8,
-
 decorations: std.ArrayList(Decoration),
-
 variant: ?VariantData,
 
 pub fn init() Self {
