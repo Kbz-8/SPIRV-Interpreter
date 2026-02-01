@@ -30,13 +30,6 @@ const SpvEntryPoint = struct {
     globals: []SpvWord,
 };
 
-const SpvSource = struct {
-    file_name: []const u8,
-    lang: spv.SpvSourceLanguage,
-    lang_version: SpvWord,
-    source: []const u8,
-};
-
 pub const ModuleError = error{
     InvalidSpirV,
     InvalidMagic,
@@ -62,7 +55,6 @@ code: []const SpvWord,
 addressing: spv.SpvAddressingModel,
 memory_model: spv.SpvMemoryModel,
 
-files: std.ArrayList(SpvSource),
 extensions: std.ArrayList([]const u8),
 
 results: []Result,
@@ -79,25 +71,21 @@ geometry_output_count: SpvWord,
 geometry_input: SpvWord,
 geometry_output: SpvWord,
 
-input_locations: std.ArrayList(SpvWord),
-output_locations: std.ArrayList(SpvWord),
-bindings: std.AutoHashMap(SpvBinding, Value),
+input_locations: [lib.SPIRV_MAX_INPUT_LOCATIONS]SpvWord,
+output_locations: [lib.SPIRV_MAX_OUTPUT_LOCATIONS]SpvWord,
+bindings: [lib.SPIRV_MAX_SET][lib.SPIRV_MAX_SET_BINDINGS]SpvWord,
 push_constants: []Value,
 
 pub fn init(allocator: std.mem.Allocator, source: []const SpvWord, options: ModuleOptions) ModuleError!Self {
     var self: Self = std.mem.zeroInit(Self, .{
         .options = options,
         .code = allocator.dupe(SpvWord, source) catch return ModuleError.OutOfMemory,
-        .files = std.ArrayList(SpvSource).empty,
         .extensions = std.ArrayList([]const u8).empty,
         .entry_points = std.ArrayList(SpvEntryPoint).empty,
         .capabilities = std.EnumSet(spv.SpvCapability).initEmpty(),
         .local_size_x = 1,
         .local_size_y = 1,
         .local_size_z = 1,
-        .input_locations = std.ArrayList(SpvWord).empty,
-        .output_locations = std.ArrayList(SpvWord).empty,
-        .bindings = std.AutoHashMap(SpvBinding, Value).init(allocator),
     });
     errdefer allocator.free(self.code);
 
@@ -137,7 +125,7 @@ pub fn init(allocator: std.mem.Allocator, source: []const SpvWord, options: Modu
     _ = self.it.skip(); // Skip schema
 
     try self.pass(allocator); // Setup pass
-    try self.populateMaps(allocator);
+    try self.populateMaps();
 
     if (std.process.hasEnvVarConstant("SPIRV_INTERPRETER_DEBUG_LOGS")) {
         var capability_set_names: std.ArrayList([]const u8) = .empty;
@@ -218,34 +206,46 @@ fn pass(self: *Self, allocator: std.mem.Allocator) ModuleError!void {
     }
 }
 
-fn populateMaps(self: *Self, allocator: std.mem.Allocator) ModuleError!void {
+fn populateMaps(self: *Self) ModuleError!void {
     for (self.results, 0..) |result, id| {
-        if (result.variant == null or std.meta.activeTag(result.variant.?) != .Variable) continue;
-        switch (result.variant.?.Variable.storage_class) {
-            .Input => for (result.decorations.items) |decoration| switch (decoration.rtype) {
-                .Location => self.input_locations.append(allocator, @intCast(id)) catch return ModuleError.OutOfMemory,
+        if (result.variant == null or std.meta.activeTag(result.variant.?) != .Variable)
+            continue;
+
+        var current_set: usize = 0;
+
+        for (result.decorations.items) |decoration| {
+            switch (result.variant.?.Variable.storage_class) {
+                .Input => {
+                    if (decoration.rtype == .Location)
+                        self.input_locations[decoration.literal_1] = @intCast(id);
+                },
+                .Output => {
+                    if (decoration.rtype == .Location)
+                        self.output_locations[decoration.literal_1] = @intCast(id);
+                },
+                .StorageBuffer,
+                .Uniform,
+                .UniformConstant,
+                => {
+                    switch (decoration.rtype) {
+                        .Binding => self.bindings[current_set][decoration.literal_1] = @intCast(id),
+                        .DescriptorSet => current_set = decoration.literal_1,
+                        else => {},
+                    }
+                },
                 else => {},
-            },
-            .Output => for (result.decorations.items) |decoration| switch (decoration.rtype) {
-                .Location => self.output_locations.append(allocator, @intCast(id)) catch return ModuleError.OutOfMemory,
-                else => {},
-            },
-            else => {},
+            }
         }
     }
 }
 
 pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
     allocator.free(self.code);
-    self.input_locations.deinit(allocator);
-    self.output_locations.deinit(allocator);
-    self.bindings.deinit();
     for (self.entry_points.items) |entry| {
         allocator.free(entry.name);
         allocator.free(entry.globals);
     }
     self.entry_points.deinit(allocator);
-    self.files.deinit(allocator);
 
     for (self.extensions.items) |ext| {
         allocator.free(ext);

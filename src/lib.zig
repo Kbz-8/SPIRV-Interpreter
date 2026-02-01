@@ -43,3 +43,15 @@ pub const SpvWord = spv.SpvWord;
 pub const SpvBool = spv.SpvBool;
 
 pub const GLSL_std_450 = @import("GLSL_std_450/opcodes.zig");
+
+/// Maximum number of input locations per module
+pub const SPIRV_MAX_INPUT_LOCATIONS: usize = 32;
+
+/// Maximum number of output locations per module
+pub const SPIRV_MAX_OUTPUT_LOCATIONS: usize = 32;
+
+/// Maximum number of descriptor set per module
+pub const SPIRV_MAX_SET: usize = 32;
+
+/// Maximum number of bindings per descriptor set
+pub const SPIRV_MAX_SET_BINDINGS: usize = 32;

@@ -3,6 +3,7 @@
 const std = @import("std");
 const spv = @import("spv.zig");
 const op = @import("opcodes.zig");
+const lib = @import("lib.zig");
 
 const SpvVoid = spv.SpvVoid;
 const SpvByte = spv.SpvByte;
@@ -150,7 +151,7 @@ pub fn callEntryPoint(self: *Self, allocator: std.mem.Allocator, entry_point_ind
 }
 
 pub fn readOutput(self: *const Self, comptime T: type, output: []T, result: SpvWord) RuntimeError!void {
-    if (std.mem.indexOf(SpvWord, self.mod.output_locations.items, &.{result})) |_| {
+    if (std.mem.indexOfScalar(SpvWord, &self.mod.output_locations, result)) |_| {
         try self.readValue(T, output, &self.results[result].variant.?.Variable.value);
     } else {
         return RuntimeError.NotFound;
@@ -158,8 +159,34 @@ pub fn readOutput(self: *const Self, comptime T: type, output: []T, result: SpvW
 }
 
 pub fn writeInput(self: *const Self, comptime T: type, input: []const T, result: SpvWord) RuntimeError!void {
-    if (std.mem.indexOf(SpvWord, self.mod.input_locations.items, &.{result})) |_| {
+    if (std.mem.indexOfScalar(SpvWord, &self.mod.input_locations, result)) |_| {
         try self.writeValue(T, input, &self.results[result].variant.?.Variable.value);
+    } else {
+        return RuntimeError.NotFound;
+    }
+}
+
+pub fn readDescriptorSet(self: *const Self, comptime T: type, output: *T, set: SpvWord, binding: SpvWord) RuntimeError!void {
+    if (set < lib.SPIRV_MAX_SET and binding < lib.SPIRV_MAX_SET_BINDINGS) {
+        try self.readValue(T, output, &self.results[self.mod.bindings[set][binding]].variant.?.Variable.value);
+    } else {
+        return RuntimeError.NotFound;
+    }
+}
+
+pub fn writeDescriptorSet(self: *const Self, comptime T: type, allocator: std.mem.Allocator, input: *const T, set: SpvWord, binding: SpvWord) RuntimeError!void {
+    if (set < lib.SPIRV_MAX_SET and binding < lib.SPIRV_MAX_SET_BINDINGS) {
+        const variable = &self.results[self.mod.bindings[set][binding]].variant.?.Variable;
+        switch (variable.value) {
+            .RuntimeArray => {
+                const resolved = self.results[variable.type_word].resolveType(self.results);
+                variable.value = try Result.initValue(allocator, input.len, self.results, resolved);
+            },
+            .Vector, .Matrix, .Array, .Structure => |v| {
+                
+            },
+        }
+        try self.writeValue(T, input, &variable.value);
     } else {
         return RuntimeError.NotFound;
     }
@@ -236,7 +263,15 @@ fn readValue(self: *const Self, comptime T: type, output: []T, value: *const Res
             u32 => output[i] = vec[i],
             inline else => return RuntimeError.InvalidValueType,
         },
-        .Vector, .Matrix, .Array, .Structure => |values| for (values, 0..) |v, i| try self.readValue(T, output[i..], &v),
+        .Array,
+        .Matrix,
+        .Structure,
+        .Vector,
+        => |values| for (values, 0..) |v, i| try self.readValue(T, output[i..], &v),
+        .RuntimeArray => |opt_values| if (opt_values) |values| {
+            for (values, 0..) |v, i|
+                try self.readValue(T, output[i..], &v);
+        },
         else => return RuntimeError.InvalidValueType,
     }
 }
@@ -307,7 +342,15 @@ fn writeValue(self: *const Self, comptime T: type, input: []const T, value: *Res
             u32 => vec[i] = input[i],
             inline else => return RuntimeError.InvalidValueType,
         },
-        .Vector, .Matrix, .Array, .Structure => |*values| for (values.*, 0..) |*v, i| try self.writeValue(T, input[i..], v),
+        .Array,
+        .Matrix,
+        .Structure,
+        .Vector,
+        => |*values| for (values.*, 0..) |*v, i| try self.writeValue(T, input[i..], v),
+        .RuntimeArray => |opt_values| if (opt_values) |*values| {
+            for (values.*, 0..) |*v, i|
+                try self.writeValue(T, input[i..], v);
+        },
         else => return RuntimeError.InvalidValueType,
     }
 }

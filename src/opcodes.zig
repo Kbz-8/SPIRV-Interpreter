@@ -149,7 +149,6 @@ pub const SetupDispatcher = block: {
         .ShiftLeftLogical = autoSetupConstant,
         .ShiftRightArithmetic = autoSetupConstant,
         .ShiftRightLogical = autoSetupConstant,
-        .Source = opSource,
         .SourceExtension = opSourceExtension,
         .TypeArray = opTypeArray,
         .TypeBool = opTypeBool,
@@ -377,7 +376,6 @@ fn BitOperator(comptime T: ValueType, comptime Op: BitOp) type {
                     4 => &op2.*.Vector4u32,
                     else => unreachable,
                 };
-                // NOTE: the above dummy mapping isn’t type-correct for i32; call sites below pass correct rhs pointer.
                 _ = b;
                 return RuntimeError.InvalidSpirV;
             }
@@ -796,32 +794,32 @@ fn addDecoration(allocator: std.mem.Allocator, rt: *Runtime, target: SpvWord, de
     decoration.index = if (member) |memb| memb else 0;
 
     switch (decoration_type) {
-        .SpecId,
-        .ArrayStride,
-        .MatrixStride,
-        .BuiltIn,
-        .UniformId,
-        .Stream,
-        .Location,
-        .Component,
-        .Index,
-        .Binding,
-        .DescriptorSet,
-        .Offset,
-        .XfbBuffer,
-        .XfbStride,
-        .FuncParamAttr,
-        .FPRoundingMode,
-        .FPFastMathMode,
-        .InputAttachmentIndex,
         .Alignment,
-        .MaxByteOffset,
         .AlignmentId,
-        .MaxByteOffsetId,
-        .SecondaryViewportRelativeNV,
+        .ArrayStride,
+        .Binding,
+        .BuiltIn,
+        .Component,
         .CounterBuffer,
+        .DescriptorSet,
+        .FPFastMathMode,
+        .FPRoundingMode,
+        .FuncParamAttr,
+        .Index,
+        .InputAttachmentIndex,
+        .Location,
+        .MatrixStride,
+        .MaxByteOffset,
+        .MaxByteOffsetId,
+        .Offset,
+        .SecondaryViewportRelativeNV,
+        .SpecId,
+        .Stream,
+        .UniformId,
         .UserSemantic,
         .UserTypeGOOGLE,
+        .XfbBuffer,
+        .XfbStride,
         => {
             decoration.literal_1 = try rt.it.next();
             decoration.literal_2 = null;
@@ -869,21 +867,123 @@ fn opBitcast(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
 }
 
 fn copyValue(dst: *Result.Value, src: *const Result.Value) void {
-    switch (src.*) {
-        .Vector, .Matrix, .Array, .Structure => |src_slice| {
-            const dst_slice = switch (dst.*) {
-                .Vector, .Matrix, .Array, .Structure => |d| d,
-                else => unreachable,
-            };
+    const helpers = struct {
+        fn copySlice(dst_slice: []Result.Value, src_slice: []const Result.Value) void {
             for (0..@min(dst_slice.len, src_slice.len)) |i| {
                 copyValue(&dst_slice[i], &src_slice[i]);
             }
+        }
+
+        fn getDstSlice(v: *Result.Value) ?[]Result.Value {
+            return switch (v.*) {
+                .Vector, .Matrix, .Array, .Structure => |s| s,
+                .RuntimeArray => |s| s,
+                else => null,
+            };
+        }
+
+        fn writeF32(dst_f32_ptr: *f32, src_v: *const Result.Value) void {
+            switch (src_v.*) {
+                .Pointer => |src_ptr| switch (src_ptr) {
+                    .f32_ptr => |src_f32_ptr| dst_f32_ptr.* = src_f32_ptr.*,
+                    .common => |src_val_ptr| switch (src_val_ptr.*) {
+                        .Float => |f| dst_f32_ptr.* = f.float32,
+                        else => unreachable,
+                    },
+                    else => unreachable,
+                },
+                .Float => |f| dst_f32_ptr.* = f.float32,
+                else => unreachable,
+            }
+        }
+
+        fn writeI32(dst_i32_ptr: *i32, src_v: *const Result.Value) void {
+            switch (src_v.*) {
+                .Pointer => |src_ptr| switch (src_ptr) {
+                    .i32_ptr => |src_i32_ptr| dst_i32_ptr.* = src_i32_ptr.*,
+                    .common => |src_val_ptr| switch (src_val_ptr.*) {
+                        .Int => |i| dst_i32_ptr.* = i.sint32,
+                        else => unreachable,
+                    },
+                    else => unreachable,
+                },
+                .Int => |i| dst_i32_ptr.* = i.sint32,
+                else => unreachable,
+            }
+        }
+
+        fn writeU32(dst_u32_ptr: *u32, src_v: *const Result.Value) void {
+            switch (src_v.*) {
+                .Pointer => |src_ptr| switch (src_ptr) {
+                    .u32_ptr => |src_u32_ptr| dst_u32_ptr.* = src_u32_ptr.*,
+                    .common => |src_val_ptr| switch (src_val_ptr.*) {
+                        .Int => |i| dst_u32_ptr.* = i.uint32,
+                        else => unreachable,
+                    },
+                    else => unreachable,
+                },
+                .Int => |i| dst_u32_ptr.* = i.uint32,
+                else => unreachable,
+            }
+        }
+    };
+
+    if (std.meta.activeTag(dst.*) == .Pointer) {
+        switch (dst.Pointer) {
+            .common => |dst_val_ptr| return switch (src.*) {
+                .Pointer => |src_ptr| switch (src_ptr) {
+                    .common => |src_val_ptr| copyValue(dst_val_ptr, src_val_ptr),
+                    else => dst_val_ptr.* = src.*,
+                },
+                else => copyValue(dst_val_ptr, src),
+            },
+            .f32_ptr => |dst_f32_ptr| {
+                helpers.writeF32(dst_f32_ptr, src);
+                return;
+            },
+            .i32_ptr => |dst_i32_ptr| {
+                helpers.writeI32(dst_i32_ptr, src);
+                return;
+            },
+            .u32_ptr => |dst_u32_ptr| {
+                helpers.writeU32(dst_u32_ptr, src);
+                return;
+            },
+        }
+    }
+
+    if (std.meta.activeTag(src.*) == .Pointer) {
+        switch (src.Pointer) {
+            .common => |src_val_ptr| {
+                copyValue(dst, src_val_ptr);
+                return;
+            },
+            else => {},
+        }
+    }
+
+    const dst_slice = helpers.getDstSlice(dst);
+
+    switch (src.*) {
+        .Vector, .Matrix, .Array, .Structure => |src_slice| {
+            helpers.copySlice(dst_slice.?, src_slice);
         },
+        .RuntimeArray => |opt_src_slice| if (opt_src_slice) |src_slice| {
+            helpers.copySlice(dst_slice.?, src_slice);
+        } else unreachable,
         else => dst.* = src.*,
     }
 }
 
 pub fn getValuePrimitiveField(comptime T: ValueType, comptime BitCount: SpvWord, v: *Result.Value) RuntimeError!*getValuePrimitiveFieldType(T, BitCount) {
+    if (std.meta.activeTag(v.*) == .Pointer) {
+        return switch (v.Pointer) {
+            .common => |value| getValuePrimitiveField(T, BitCount, value),
+            .f32_ptr => |ptr| @ptrCast(@alignCast(ptr)),
+            .u32_ptr => |ptr| @ptrCast(@alignCast(ptr)),
+            .i32_ptr => |ptr| @ptrCast(@alignCast(ptr)),
+        };
+    }
     return switch (T) {
         .Bool => &v.Bool,
         .Float => switch (BitCount) {
@@ -937,25 +1037,53 @@ fn opAccessChain(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) Runtim
                                     if (i.uint32 > v.len) return RuntimeError.InvalidSpirV;
                                     value_ptr = &v[i.uint32];
                                 },
-                                //.Vector4f32 => |v| {
-                                //    if (i.uint32 > 4) return RuntimeError.InvalidSpirV;
-                                //    break :blk .{
-                                //        .Float = .{ .float32 = v[i.uint32] },
-                                //    };
-                                //},
-                                //.Vector2f32 => |v| {
-                                //    if (i.uint32 > 2) return RuntimeError.InvalidSpirV;
-                                //    break :blk .{
-                                //        .Float = .{ .float32 = v[i.uint32] },
-                                //    };
-                                //},
+                                .RuntimeArray => |opt_v| if (opt_v) |v| {
+                                    if (i.uint32 > v.len) return RuntimeError.InvalidSpirV;
+                                    value_ptr = &v[i.uint32];
+                                } else return RuntimeError.InvalidSpirV,
+                                .Vector4f32 => |*v| {
+                                    if (i.uint32 > 4) return RuntimeError.InvalidSpirV;
+                                    break :blk .{ .Pointer = .{ .f32_ptr = &v[i.uint32] } };
+                                },
+                                .Vector3f32 => |*v| {
+                                    if (i.uint32 > 3) return RuntimeError.InvalidSpirV;
+                                    break :blk .{ .Pointer = .{ .f32_ptr = &v[i.uint32] } };
+                                },
+                                .Vector2f32 => |*v| {
+                                    if (i.uint32 > 2) return RuntimeError.InvalidSpirV;
+                                    break :blk .{ .Pointer = .{ .f32_ptr = &v[i.uint32] } };
+                                },
+                                .Vector4i32 => |*v| {
+                                    if (i.uint32 > 4) return RuntimeError.InvalidSpirV;
+                                    break :blk .{ .Pointer = .{ .i32_ptr = &v[i.uint32] } };
+                                },
+                                .Vector3i32 => |*v| {
+                                    if (i.uint32 > 3) return RuntimeError.InvalidSpirV;
+                                    break :blk .{ .Pointer = .{ .i32_ptr = &v[i.uint32] } };
+                                },
+                                .Vector2i32 => |*v| {
+                                    if (i.uint32 > 2) return RuntimeError.InvalidSpirV;
+                                    break :blk .{ .Pointer = .{ .i32_ptr = &v[i.uint32] } };
+                                },
+                                .Vector4u32 => |*v| {
+                                    if (i.uint32 > 4) return RuntimeError.InvalidSpirV;
+                                    break :blk .{ .Pointer = .{ .u32_ptr = &v[i.uint32] } };
+                                },
+                                .Vector3u32 => |*v| {
+                                    if (i.uint32 > 3) return RuntimeError.InvalidSpirV;
+                                    break :blk .{ .Pointer = .{ .u32_ptr = &v[i.uint32] } };
+                                },
+                                .Vector2u32 => |*v| {
+                                    if (i.uint32 > 2) return RuntimeError.InvalidSpirV;
+                                    break :blk .{ .Pointer = .{ .u32_ptr = &v[i.uint32] } };
+                                },
                                 else => return RuntimeError.InvalidSpirV,
                             }
                         },
                         else => return RuntimeError.InvalidSpirV,
                     }
                 }
-                break :blk value_ptr;
+                break :blk .{ .Pointer = .{ .common = value_ptr } };
             },
         },
     };
@@ -1186,8 +1314,16 @@ fn opExecutionMode(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!
         },
         .Invocations => rt.mod.geometry_invocations = try rt.it.next(),
         .OutputVertices => rt.mod.geometry_output_count = try rt.it.next(),
-        .InputPoints, .InputLines, .Triangles, .InputLinesAdjacency, .InputTrianglesAdjacency => rt.mod.geometry_input = @intFromEnum(mode),
-        .OutputPoints, .OutputLineStrip, .OutputTriangleStrip => rt.mod.geometry_output = @intFromEnum(mode),
+        .InputPoints,
+        .InputLines,
+        .Triangles,
+        .InputLinesAdjacency,
+        .InputTrianglesAdjacency,
+        => rt.mod.geometry_input = @intFromEnum(mode),
+        .OutputPoints,
+        .OutputLineStrip,
+        .OutputTriangleStrip,
+        => rt.mod.geometry_output = @intFromEnum(mode),
         else => {},
     }
 }
@@ -1393,26 +1529,6 @@ fn opReturnValue(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!vo
     }
 }
 
-fn opSource(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
-    var file = rt.mod.files.addOne(allocator) catch return RuntimeError.OutOfMemory;
-    file.lang = try rt.it.nextAs(spv.SpvSourceLanguage);
-    file.lang_version = try rt.it.next();
-    if (word_count > 2) {
-        const id = try rt.it.next();
-        if (id >= rt.mod.results.len) return RuntimeError.InvalidSpirV;
-        if (rt.mod.results[id].name) |name| {
-            file.file_name = name;
-        }
-    }
-    if (word_count > 3) {
-        const id = try rt.it.next();
-        if (id >= rt.mod.results.len) return RuntimeError.InvalidSpirV;
-        if (rt.mod.results[id].name) |name| {
-            file.source = name;
-        }
-    }
-}
-
 fn opSourceExtension(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
     rt.mod.extensions.append(allocator, try readStringN(allocator, &rt.it, word_count)) catch return RuntimeError.OutOfMemory;
 }
@@ -1523,9 +1639,16 @@ fn opTypePointer(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!vo
 
 fn opTypeRuntimeArray(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     const id = try rt.it.next();
+    const components_type_word = try rt.it.next();
     rt.mod.results[id].variant = .{
         .Type = .{
-            .RuntimeArray = .{},
+            .RuntimeArray = .{
+                .components_type_word = components_type_word,
+                .components_type = switch ((try rt.mod.results[components_type_word].getVariant()).*) {
+                    .Type => |t| @as(Result.Type, t),
+                    else => return RuntimeError.InvalidSpirV,
+                },
+            },
         },
     };
 }
@@ -1631,9 +1754,6 @@ fn opVariable(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) R
 
     const resolved = rt.mod.results[var_type].resolveType(rt.mod.results);
     const member_count = resolved.getMemberCounts();
-    if (member_count == 0) {
-        return RuntimeError.InvalidSpirV;
-    }
     target.variant = .{
         .Variable = .{
             .storage_class = storage_class,

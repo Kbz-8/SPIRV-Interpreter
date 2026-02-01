@@ -3,6 +3,14 @@ const spv = @import("spv");
 
 const shader_source = @embedFile("shader.spv");
 
+const Input = struct {
+    value: [4]i32 = [4]i32{ 0, 0, 0, 0 },
+};
+
+const Output = struct {
+    value: [4]i32 = [4]i32{ 0, 0, 0, 0 },
+};
+
 pub fn main() !void {
     {
         var gpa: std.heap.DebugAllocator(.{
@@ -19,21 +27,18 @@ pub fn main() !void {
         defer rt.deinit(allocator);
 
         const entry = try rt.getEntryPointByName("main");
-        const color = try rt.getResultByName("color");
-        const time = try rt.getResultByName("time");
-        const pos = try rt.getResultByName("pos");
-        const res = try rt.getResultByName("res");
 
-        var output: [4]f32 = undefined;
+        var input: Input = .{};
+        var output: Output = .{};
 
-        try rt.writeInput(f32, &.{@as(f32, @floatFromInt(std.time.milliTimestamp()))}, time);
-        try rt.writeInput(f32, &.{ 1250.0, 720.0 }, res);
-        try rt.writeInput(f32, &.{ 0.0, 0.0 }, pos);
+        try rt.writeDescriptorSet(Input, allocator, &input, 0, 0);
+        try rt.writeDescriptorSet(Output, allocator, &output, 0, 1);
 
         try rt.callEntryPoint(allocator, entry);
 
-        try rt.readOutput(f32, output[0..output.len], color);
-        std.log.info("Output: Vec4{any}", .{output});
+        try rt.readDescriptorSet(Output, allocator, &output, 0, 1);
+
+        std.log.info("Output: {any}", .{output});
 
         std.log.info("\nTotal memory used: {d:.3} KB\n", .{@as(f32, @floatFromInt(gpa.total_requested_bytes)) / 1000.0});
     }

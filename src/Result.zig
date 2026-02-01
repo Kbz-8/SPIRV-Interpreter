@@ -107,17 +107,23 @@ pub const Value = union(Type) {
     Vector2u32: Vec2u32,
     Matrix: []Value,
     Array: []Value,
-    RuntimeArray: struct {},
+    RuntimeArray: ?[]Value,
     Structure: []Value,
     Function: noreturn,
     Image: struct {},
     Sampler: struct {},
     SampledImage: struct {},
-    Pointer: noreturn,
+    Pointer: union(enum) {
+        common: *Value,
+        f32_ptr: *f32,
+        i32_ptr: *i32, //< For vectors specializations
+        u32_ptr: *u32,
+    },
 
     pub inline fn getCompositeDataOrNull(self: *const Value) ?[]Value {
         return switch (self.*) {
             .Vector, .Matrix, .Array, .Structure => |v| v,
+            .RuntimeArray => |v| v,
             else => null,
         };
     }
@@ -176,7 +182,7 @@ pub const Value = union(Type) {
                     }
                     break :blk self;
                 },
-                .RuntimeArray => .{ .RuntimeArray = .{} },
+                .RuntimeArray => .{ .RuntimeArray = null },
                 else => unreachable,
             },
             else => unreachable,
@@ -207,6 +213,17 @@ pub const Value = union(Type) {
                     break :blk values;
                 },
             },
+            .RuntimeArray => |opt_a| .{
+                .RuntimeArray = blk: {
+                    if (opt_a) |a| {
+                        const values = allocator.dupe(Value, a) catch return RuntimeError.OutOfMemory;
+                        for (values, a) |*new_value, value| new_value.* = try value.dupe(allocator);
+                        break :blk values;
+                    } else {
+                        break :blk null;
+                    }
+                },
+            },
             .Structure => |s| .{
                 .Structure = blk: {
                     const values = allocator.dupe(Value, s) catch return RuntimeError.OutOfMemory;
@@ -221,6 +238,10 @@ pub const Value = union(Type) {
     fn deinit(self: *Value, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .Vector, .Matrix, .Array, .Structure => |values| {
+                for (values) |*value| value.deinit(allocator);
+                allocator.free(values);
+            },
+            .RuntimeArray => |opt_values| if (opt_values) |values| {
                 for (values) |*value| value.deinit(allocator);
                 allocator.free(values);
             },
@@ -263,7 +284,10 @@ pub const TypeData = union(Type) {
         components_type: Type,
         member_count: SpvWord,
     },
-    RuntimeArray: struct {},
+    RuntimeArray: struct {
+        components_type_word: SpvWord,
+        components_type: Type,
+    },
     Structure: struct {
         members_type_word: []const SpvWord,
         member_names: std.ArrayList([]const u8),
@@ -308,7 +332,7 @@ pub const VariantData = union(Variant) {
     },
     AccessChain: struct {
         target: SpvWord,
-        value: *Value,
+        value: Value,
     },
     FunctionParameter: struct {
         type_word: SpvWord,
@@ -353,7 +377,6 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
             },
             .Constant => |*c| c.value.deinit(allocator),
             .Variable => |*v| v.value.deinit(allocator),
-            //.AccessChain => |*a| a.value.deinit(allocator),
             .Function => |f| allocator.free(f.params),
             else => {},
         }
@@ -365,7 +388,7 @@ pub inline fn getValueTypeWord(self: *Self) RuntimeError!SpvWord {
     return switch ((try self.getVariant()).*) {
         .Variable => |v| v.type_word,
         .Constant => |c| c.type_word,
-        .AccessChain => |*a| a.target,
+        .AccessChain => |a| a.target,
         .FunctionParameter => |p| p.type_word,
         else => RuntimeError.InvalidSpirV,
     };
@@ -384,8 +407,18 @@ pub inline fn getValue(self: *Self) RuntimeError!*Value {
     return switch ((try self.getVariant()).*) {
         .Variable => |*v| &v.value,
         .Constant => |*c| &c.value,
-        .AccessChain => |a| a.value,
+        .AccessChain => |*a| &a.value,
         .FunctionParameter => |*p| p.value_ptr orelse return RuntimeError.InvalidSpirV,
+        else => RuntimeError.InvalidSpirV,
+    };
+}
+
+pub inline fn getConstValue(self: *Self) RuntimeError!*const Value {
+    return switch ((try self.getVariant()).*) {
+        .Variable => |v| &v.value,
+        .Constant => |c| &c.value,
+        .AccessChain => |a| &a.value,
+        .FunctionParameter => |p| p.value_ptr orelse return RuntimeError.InvalidSpirV,
         else => RuntimeError.InvalidSpirV,
     };
 }
@@ -557,6 +590,18 @@ pub fn initValue(allocator: std.mem.Allocator, member_count: usize, results: []c
                 const value: Value = .{ .Array = allocator.alloc(Value, member_count) catch return RuntimeError.OutOfMemory };
                 errdefer allocator.free(value.Array);
                 for (value.Array) |*val| {
+                    val.* = try Value.init(allocator, results, a.components_type_word);
+                }
+                break :blk value;
+            },
+            .RuntimeArray => |a| blk: {
+                std.debug.print("test {d}\n", .{member_count});
+                if (member_count == 0) {
+                    break :blk Value{ .RuntimeArray = null };
+                }
+                const value: Value = .{ .RuntimeArray = allocator.alloc(Value, member_count) catch return RuntimeError.OutOfMemory };
+                errdefer allocator.free(value.RuntimeArray.?);
+                for (value.RuntimeArray.?) |*val| {
                     val.* = try Value.init(allocator, results, a.components_type_word);
                 }
                 break :blk value;
