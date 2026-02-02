@@ -519,6 +519,20 @@ pub fn resolveLaneBitWidth(target_type: TypeData, rt: *const Runtime) RuntimeErr
     };
 }
 
+pub fn resolveSign(target_type: TypeData, rt: *const Runtime) RuntimeError!enum { signed, unsigned } {
+    return sw: switch (target_type) {
+        .Int => |i| if (i.is_signed) .signed else .unsigned,
+        .Vector => |v| continue :sw (try rt.results[v.components_type_word].getVariant()).Type,
+        .Vector4i32 => .signed,
+        .Vector3i32 => .signed,
+        .Vector2i32 => .signed,
+        .Vector4u32 => .unsigned,
+        .Vector3u32 => .unsigned,
+        .Vector2u32 => .unsigned,
+        else => .unsinged,
+    };
+}
+
 pub fn resolveType(self: *const Self, results: []const Self) *const Self {
     return if (self.variant) |variant|
         switch (variant) {

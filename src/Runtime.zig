@@ -150,9 +150,9 @@ pub fn callEntryPoint(self: *Self, allocator: std.mem.Allocator, entry_point_ind
     //}) catch return RuntimeError.OutOfMemory;
 }
 
-pub fn readOutput(self: *const Self, comptime T: type, output: []T, result: SpvWord) RuntimeError!void {
+pub fn readOutput(self: *const Self, output: []u8, result: SpvWord) RuntimeError!void {
     if (std.mem.indexOfScalar(SpvWord, &self.mod.output_locations, result)) |_| {
-        try self.readValue(T, output, &self.results[result].variant.?.Variable.value);
+        try self.readValue(output, &self.results[result]);
     } else {
         return RuntimeError.NotFound;
     }
@@ -183,7 +183,7 @@ pub fn writeDescriptorSet(self: *const Self, comptime T: type, allocator: std.me
                 variable.value = try Result.initValue(allocator, input.len, self.results, resolved);
             },
             .Vector, .Matrix, .Array, .Structure => |v| {
-                
+                _ = v;
             },
         }
         try self.writeValue(T, input, &variable.value);
@@ -197,70 +197,64 @@ fn reset(self: *Self) void {
     self.current_function = null;
 }
 
-fn readValue(self: *const Self, comptime T: type, output: []T, value: *const Result.Value) RuntimeError!void {
+fn readValue(self: *const Self, output: []u8, value: *const Result.Value) RuntimeError!void {
+    const type_word = try result.getValueTypeWord();
+    const value = try result.getValue();
+    const lane_bits = try Result.resolveLaneBitWidth((try self.results[type_word].getVariant()).Type, self);
+
     switch (value.*) {
-        .Bool => |b| {
-            if (T == bool) {
-                output[0] = b;
-            } else {
-                return RuntimeError.InvalidValueType;
-            }
-        },
+        .Bool => |b| output[0] = if (b == true) 1 else 0,
         .Int => |i| {
-            switch (T) {
-                i8 => output[0] = i.sint8,
-                i16 => output[0] = i.sint16,
-                i32 => output[0] = i.sint32,
-                i64 => output[0] = i.sint64,
-                u8 => output[0] = i.uint8,
-                u16 => output[0] = i.uint16,
-                u32 => output[0] = i.uint32,
-                u64 => output[0] = i.uint64,
+            switch (lane_bits) {
+                8 => output[0] = @bitCast(i.uint8),
+                16 => std.mem.copyForward(u8, output[0..], std.mem.asBytes(i.uint16)),
+                32 => std.mem.copyForward(u8, output[0..], std.mem.asBytes(i.uint32)),
+                64 => std.mem.copyForward(u8, output[0..], std.mem.asBytes(i.uint64)),
                 inline else => return RuntimeError.InvalidValueType,
             }
         },
         .Float => |f| {
-            switch (T) {
-                f16 => output[0] = f.float16,
-                f32 => output[0] = f.float32,
-                f64 => output[0] = f.float64,
+            switch (lane_bits) {
+                16 => std.mem.copyForward(u8, output[0..], std.mem.asBytes(f.float16)),
+                32 => std.mem.copyForward(u8, output[0..], std.mem.asBytes(f.float32)),
+                64 => std.mem.copyForward(u8, output[0..], std.mem.asBytes(f.float64)),
                 inline else => return RuntimeError.InvalidValueType,
             }
         },
-        .Vector4f32 => |vec| inline for (0..4) |i| switch (T) {
-            f32 => output[i] = vec[i],
+        .Vector4f32 => |vec| inline for (0..4) |i| switch (lane_bits) {
+            32 => std.mem.copyForward(u8, output[0..], std.mem.asBytes(vec[i])),
             inline else => return RuntimeError.InvalidValueType,
         },
-        .Vector3f32 => |vec| inline for (0..3) |i| switch (T) {
-            f32 => output[i] = vec[i],
+        .Vector3f32 => |vec| inline for (0..3) |i| switch (lane_bits) {
+            32 => std.mem.copyForward(u8, output[0..], std.mem.asBytes(vec[i])),
             inline else => return RuntimeError.InvalidValueType,
         },
-        .Vector2f32 => |vec| inline for (0..2) |i| switch (T) {
-            f32 => output[i] = vec[i],
+        .Vector2f32 => |vec| inline for (0..2) |i| switch (lane_bits) {
+            32 => std.mem.copyForward(u8, output[0..], std.mem.asBytes(vec[i])),
             inline else => return RuntimeError.InvalidValueType,
         },
-        .Vector4i32 => |vec| inline for (0..4) |i| switch (T) {
-            i32 => output[i] = vec[i],
+        .Vector4i32 => |vec| inline for (0..4) |i| switch (lane_bits) {
+            32 => std.mem.copyForward(u8, output[0..], std.mem.asBytes(vec[i])),
             inline else => return RuntimeError.InvalidValueType,
         },
-        .Vector3i32 => |vec| inline for (0..3) |i| switch (T) {
-            i32 => output[i] = vec[i],
+        .Vector3i32 => |vec| inline for (0..3) |i| switch (lane_bits) {
+            32 => std.mem.copyForward(u8, output[0..], std.mem.asBytes(vec[i])),
             inline else => return RuntimeError.InvalidValueType,
         },
-        .Vector2i32 => |vec| inline for (0..2) |i| switch (T) {
-            i32 => output[i] = vec[i],
+        .Vector2i32 => |vec| inline for (0..2) |i| switch (lane_bits) {
+            32 => std.mem.copyForward(u8, output[0..], std.mem.asBytes(vec[i])),
             inline else => return RuntimeError.InvalidValueType,
         },
-        .Vector4u32 => |vec| inline for (0..4) |i| switch (T) {
-            u32 => output[i] = vec[i],
+        .Vector4u32 => |vec| inline for (0..4) |i| switch (lane_bits) {
+            32 => std.mem.copyForward(u8, output[0..], std.mem.asBytes(vec[i])),
             inline else => return RuntimeError.InvalidValueType,
         },
-        .Vector3u32 => |vec| inline for (0..3) |i| switch (T) {
-            u32 => output[i] = vec[i],
+        .Vector3u32 => |vec| inline for (0..3) |i| switch (lane_bits) {
+            32 => std.mem.copyForward(u8, output[0..], std.mem.asBytes(vec[i])),
             inline else => return RuntimeError.InvalidValueType,
         },
-        .Vector2u32 => |vec| inline for (0..2) |i| switch (T) {
-            u32 => output[i] = vec[i],
+        .Vector2u32 => |vec| inline for (0..2) |i| switch (lane_bits) {
+            32 => std.mem.copyForward(u8, output[0..], std.mem.asBytes(vec[i])),
             inline else => return RuntimeError.InvalidValueType,
         },
         .Array,
@@ -270,7 +264,7 @@ fn readValue(self: *const Self, comptime T: type, output: []T, value: *const Res
         => |values| for (values, 0..) |v, i| try self.readValue(T, output[i..], &v),
         .RuntimeArray => |opt_values| if (opt_values) |values| {
             for (values, 0..) |v, i|
-                try self.readValue(T, output[i..], &v);
+                try self.readValue(output[i..], result);
         },
         else => return RuntimeError.InvalidValueType,
     }
