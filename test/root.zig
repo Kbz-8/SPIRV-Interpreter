@@ -50,6 +50,7 @@ pub const case = struct {
     pub fn expectOutputWithInput(comptime T: type, comptime len: usize, source: []const u32, output_name: []const u8, expected: []const T, input_name: []const u8, input: []const T) !void {
         const allocator = std.testing.allocator;
 
+        // To test with all important module options
         const module_options = [_]spv.Module.ModuleOptions{
             .{
                 .use_simd_vectors_specializations = true,
