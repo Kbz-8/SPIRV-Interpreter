@@ -31,12 +31,12 @@ pub fn main() !void {
         var input: Input = .{};
         var output: Output = .{};
 
-        try rt.writeDescriptorSet(Input, allocator, &input, 0, 0);
-        try rt.writeDescriptorSet(Output, allocator, &output, 0, 1);
+        try rt.writeDescriptorSet(allocator, std.mem.asBytes(&input), 0, 0);
+        try rt.writeDescriptorSet(allocator, std.mem.asBytes(&output), 0, 1);
 
         try rt.callEntryPoint(allocator, entry);
 
-        try rt.readDescriptorSet(Output, allocator, &output, 0, 1);
+        try rt.readDescriptorSet(std.mem.asBytes(&output), 0, 1);
 
         std.log.info("Output: {any}", .{output});
 

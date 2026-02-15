@@ -41,7 +41,7 @@ pub const case = struct {
 
             try rt.callEntryPoint(allocator, try rt.getEntryPointByName("main"));
             var output: [len]T = undefined;
-            try rt.readOutput(T, output[0..len], try rt.getResultByName(output_name));
+            try rt.readOutput(std.mem.sliceAsBytes(output[0..]), try rt.getResultByName(output_name));
 
             try std.testing.expectEqualSlices(T, expected, &output);
         }
@@ -67,11 +67,11 @@ pub const case = struct {
             var rt = try spv.Runtime.init(allocator, &module);
             defer rt.deinit(allocator);
 
-            try rt.writeInput(T, input[0..len], try rt.getResultByName(input_name));
+            try rt.writeInput(std.mem.sliceAsBytes(input[0..len]), try rt.getResultByName(input_name));
 
             try rt.callEntryPoint(allocator, try rt.getEntryPointByName("main"));
             var output: [len]T = undefined;
-            try rt.readOutput(T, output[0..len], try rt.getResultByName(output_name));
+            try rt.readOutput(std.mem.sliceAsBytes(output[0..]), try rt.getResultByName(output_name));
 
             try std.testing.expectEqualSlices(T, expected, &output);
         }

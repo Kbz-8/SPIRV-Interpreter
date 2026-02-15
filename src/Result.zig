@@ -80,20 +80,26 @@ const Decoration = struct {
 pub const Value = union(Type) {
     Void: struct {},
     Bool: bool,
-    Int: extern union {
-        sint8: i8,
-        sint16: i16,
-        sint32: i32,
-        sint64: i64,
-        uint8: u8,
-        uint16: u16,
-        uint32: u32,
-        uint64: u64,
+    Int: struct {
+        bit_count: usize,
+        value: extern union {
+            sint8: i8,
+            sint16: i16,
+            sint32: i32,
+            sint64: i64,
+            uint8: u8,
+            uint16: u16,
+            uint32: u32,
+            uint64: u64,
+        },
     },
-    Float: extern union {
-        float16: f16,
-        float32: f32,
-        float64: f64,
+    Float: struct {
+        bit_count: usize,
+        value: extern union {
+            float16: f16,
+            float32: f32,
+            float64: f64,
+        },
     },
     Vector: []Value,
     Vector4f32: Vec4f32,
@@ -116,7 +122,7 @@ pub const Value = union(Type) {
     Pointer: union(enum) {
         common: *Value,
         f32_ptr: *f32,
-        i32_ptr: *i32, //< For vectors specializations
+        i32_ptr: *i32, //< For vector specializations
         u32_ptr: *u32,
     },
 
@@ -135,8 +141,14 @@ pub const Value = union(Type) {
         return switch (resolved.variant.?) {
             .Type => |t| switch (t) {
                 .Bool => .{ .Bool = false },
-                .Int => .{ .Int = .{ .uint64 = 0 } },
-                .Float => .{ .Float = .{ .float64 = 0.0 } },
+                .Int => |i| .{ .Int = .{
+                    .bit_count = i.bit_length,
+                    .value = .{ .uint64 = 0 },
+                } },
+                .Float => |f| .{ .Float = .{
+                    .bit_count = f.bit_length,
+                    .value = .{ .float64 = 0 },
+                } },
                 .Vector => |v| blk: {
                     var self: Value = .{ .Vector = allocator.alloc(Value, member_count) catch return RuntimeError.OutOfMemory };
                     errdefer self.deinit(allocator);
@@ -529,7 +541,7 @@ pub fn resolveSign(target_type: TypeData, rt: *const Runtime) RuntimeError!enum 
         .Vector4u32 => .unsigned,
         .Vector3u32 => .unsigned,
         .Vector2u32 => .unsigned,
-        else => .unsinged,
+        else => .unsigned,
     };
 }
 
@@ -573,8 +585,14 @@ pub fn initValue(allocator: std.mem.Allocator, member_count: usize, results: []c
         .Type => |t| switch (t) {
             .Void => .{ .Void = .{} },
             .Bool => .{ .Bool = false },
-            .Int => .{ .Int = .{ .uint64 = 0 } },
-            .Float => .{ .Float = .{ .float64 = 0.0 } },
+            .Int => |i| .{ .Int = .{
+                .bit_count = i.bit_length,
+                .value = .{ .uint64 = 0 },
+            } },
+            .Float => |f| .{ .Float = .{
+                .bit_count = f.bit_length,
+                .value = .{ .float64 = 0 },
+            } },
             .Vector => |v| blk: {
                 const value: Value = .{ .Vector = allocator.alloc(Value, member_count) catch return RuntimeError.OutOfMemory };
                 errdefer allocator.free(value.Vector);
@@ -609,7 +627,6 @@ pub fn initValue(allocator: std.mem.Allocator, member_count: usize, results: []c
                 break :blk value;
             },
             .RuntimeArray => |a| blk: {
-                std.debug.print("test {d}\n", .{member_count});
                 if (member_count == 0) {
                     break :blk Value{ .RuntimeArray = null };
                 }
