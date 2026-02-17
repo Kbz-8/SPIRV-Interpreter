@@ -24,6 +24,7 @@ pub const RuntimeError = error{
     Killed,
     NotFound,
     OutOfMemory,
+    OutOfBounds,
     ToDo,
     Unreachable,
     UnsupportedSpirV,
@@ -167,8 +168,9 @@ pub fn writeDescriptorSet(self: *const Self, allocator: std.mem.Allocator, input
                 const resolved = results[type_word].resolveType(results);
 
                 switch (value.*) {
-                    .RuntimeArray => {
-                        value.* = try Result.initValue(allocator2, len, results, resolved);
+                    .RuntimeArray => |a| if (a == null) {
+                        const elem_size = resolved.variant.?.Type.getSize(results);
+                        value.* = try Result.initValue(allocator2, @divExact(len, elem_size), results, resolved);
                     },
                     .Structure => |*s| for (s.*, 0..) |*elem, i| {
                         try @This().init(allocator2, len, elem, resolved.variant.?.Type.Structure.members_type_word[i], results);
@@ -179,12 +181,12 @@ pub fn writeDescriptorSet(self: *const Self, allocator: std.mem.Allocator, input
         };
         try helper.init(allocator, input.len, &variable.value, variable.type_word, self.results);
 
-        @import("pretty").print(allocator, variable, .{
-            .tab_size = 4,
-            .max_depth = 0,
-            .struct_max_len = 0,
-            .array_max_len = 0,
-        }) catch return RuntimeError.OutOfMemory;
+        //@import("pretty").print(allocator, variable, .{
+        //    .tab_size = 4,
+        //    .max_depth = 0,
+        //    .struct_max_len = 0,
+        //    .array_max_len = 0,
+        //}) catch return RuntimeError.OutOfMemory;
         _ = try self.writeValue(input, &variable.value);
     } else {
         return RuntimeError.NotFound;
@@ -192,7 +194,7 @@ pub fn writeDescriptorSet(self: *const Self, allocator: std.mem.Allocator, input
 }
 
 pub fn readOutput(self: *const Self, output: []u8, result: SpvWord) RuntimeError!void {
-    if (std.mem.indexOf(SpvWord, &self.mod.output_locations, &.{result})) |_| {
+    if (std.mem.indexOfScalar(SpvWord, &self.mod.output_locations, result)) |_| {
         _ = try self.readValue(output, &self.results[result].variant.?.Variable.value);
     } else {
         return RuntimeError.NotFound;
@@ -200,7 +202,15 @@ pub fn readOutput(self: *const Self, output: []u8, result: SpvWord) RuntimeError
 }
 
 pub fn writeInput(self: *const Self, input: []const u8, result: SpvWord) RuntimeError!void {
-    if (std.mem.indexOf(SpvWord, &self.mod.input_locations, &.{result})) |_| {
+    if (std.mem.indexOfScalar(SpvWord, &self.mod.input_locations, result)) |_| {
+        _ = try self.writeValue(input, &self.results[result].variant.?.Variable.value);
+    } else {
+        return RuntimeError.NotFound;
+    }
+}
+
+pub fn writeBuiltIn(self: *const Self, input: []const u8, builtin: spv.SpvBuiltIn) RuntimeError!void {
+    if (self.mod.builtins.get(builtin)) |result| {
         _ = try self.writeValue(input, &self.results[result].variant.?.Variable.value);
     } else {
         return RuntimeError.NotFound;

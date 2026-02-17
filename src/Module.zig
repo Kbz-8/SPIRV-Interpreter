@@ -74,6 +74,7 @@ geometry_output: SpvWord,
 input_locations: [lib.SPIRV_MAX_INPUT_LOCATIONS]SpvWord,
 output_locations: [lib.SPIRV_MAX_OUTPUT_LOCATIONS]SpvWord,
 bindings: [lib.SPIRV_MAX_SET][lib.SPIRV_MAX_SET_BINDINGS]SpvWord,
+builtins: std.EnumMap(spv.SpvBuiltIn, SpvWord),
 push_constants: []Value,
 
 pub fn init(allocator: std.mem.Allocator, source: []const SpvWord, options: ModuleOptions) ModuleError!Self {
@@ -216,8 +217,14 @@ fn populateMaps(self: *Self) ModuleError!void {
         for (result.decorations.items) |decoration| {
             switch (result.variant.?.Variable.storage_class) {
                 .Input => {
-                    if (decoration.rtype == .Location)
-                        self.input_locations[decoration.literal_1] = @intCast(id);
+                    switch (decoration.rtype) {
+                        .BuiltIn => self.builtins.put(
+                            std.enums.fromInt(spv.SpvBuiltIn, decoration.literal_1) orelse return ModuleError.InvalidSpirV,
+                            @intCast(id),
+                        ),
+                        .Location => self.input_locations[decoration.literal_1] = @intCast(id),
+                        else => {},
+                    }
                 },
                 .Output => {
                     if (decoration.rtype == .Location)

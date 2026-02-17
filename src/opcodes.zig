@@ -1030,51 +1030,56 @@ fn opAccessChain(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) Runtim
                         .Variable => |v| &v.value,
                         else => return RuntimeError.InvalidSpirV,
                     };
+
                     switch (member_value.*) {
                         .Int => |i| {
+                            if (std.meta.activeTag(value_ptr.*) == .Pointer) {
+                                value_ptr = value_ptr.Pointer.common; // Don't know if I should check for specialized pointers
+                            }
+
                             switch (value_ptr.*) {
                                 .Vector, .Matrix, .Array, .Structure => |v| {
-                                    if (i.value.uint32 > v.len) return RuntimeError.InvalidSpirV;
+                                    if (i.value.uint32 >= v.len) return RuntimeError.OutOfBounds;
                                     value_ptr = &v[i.value.uint32];
                                 },
-                                .RuntimeArray => |opt_v| if (opt_v) |v| {
-                                    if (i.value.uint32 > v.len) return RuntimeError.InvalidSpirV;
-                                    value_ptr = &v[i.value.uint32];
+                                .RuntimeArray => |opt_a| if (opt_a) |a| {
+                                    if (i.value.uint32 >= a.len) return RuntimeError.OutOfBounds;
+                                    value_ptr = &a[i.value.uint32];
                                 } else return RuntimeError.InvalidSpirV,
                                 .Vector4f32 => |*v| {
-                                    if (i.value.uint32 > 4) return RuntimeError.InvalidSpirV;
+                                    if (i.value.uint32 > 4) return RuntimeError.OutOfBounds;
                                     break :blk .{ .Pointer = .{ .f32_ptr = &v[i.value.uint32] } };
                                 },
                                 .Vector3f32 => |*v| {
-                                    if (i.value.uint32 > 3) return RuntimeError.InvalidSpirV;
+                                    if (i.value.uint32 > 3) return RuntimeError.OutOfBounds;
                                     break :blk .{ .Pointer = .{ .f32_ptr = &v[i.value.uint32] } };
                                 },
                                 .Vector2f32 => |*v| {
-                                    if (i.value.uint32 > 2) return RuntimeError.InvalidSpirV;
+                                    if (i.value.uint32 > 2) return RuntimeError.OutOfBounds;
                                     break :blk .{ .Pointer = .{ .f32_ptr = &v[i.value.uint32] } };
                                 },
                                 .Vector4i32 => |*v| {
-                                    if (i.value.uint32 > 4) return RuntimeError.InvalidSpirV;
+                                    if (i.value.uint32 > 4) return RuntimeError.OutOfBounds;
                                     break :blk .{ .Pointer = .{ .i32_ptr = &v[i.value.uint32] } };
                                 },
                                 .Vector3i32 => |*v| {
-                                    if (i.value.uint32 > 3) return RuntimeError.InvalidSpirV;
+                                    if (i.value.uint32 > 3) return RuntimeError.OutOfBounds;
                                     break :blk .{ .Pointer = .{ .i32_ptr = &v[i.value.uint32] } };
                                 },
                                 .Vector2i32 => |*v| {
-                                    if (i.value.uint32 > 2) return RuntimeError.InvalidSpirV;
+                                    if (i.value.uint32 > 2) return RuntimeError.OutOfBounds;
                                     break :blk .{ .Pointer = .{ .i32_ptr = &v[i.value.uint32] } };
                                 },
                                 .Vector4u32 => |*v| {
-                                    if (i.value.uint32 > 4) return RuntimeError.InvalidSpirV;
+                                    if (i.value.uint32 > 4) return RuntimeError.OutOfBounds;
                                     break :blk .{ .Pointer = .{ .u32_ptr = &v[i.value.uint32] } };
                                 },
                                 .Vector3u32 => |*v| {
-                                    if (i.value.uint32 > 3) return RuntimeError.InvalidSpirV;
+                                    if (i.value.uint32 > 3) return RuntimeError.OutOfBounds;
                                     break :blk .{ .Pointer = .{ .u32_ptr = &v[i.value.uint32] } };
                                 },
                                 .Vector2u32 => |*v| {
-                                    if (i.value.uint32 > 2) return RuntimeError.InvalidSpirV;
+                                    if (i.value.uint32 > 2) return RuntimeError.OutOfBounds;
                                     break :blk .{ .Pointer = .{ .u32_ptr = &v[i.value.uint32] } };
                                 },
                                 else => return RuntimeError.InvalidSpirV,

@@ -1,68 +1,25 @@
-[sudo mkswap /swapfilenzsl_version("1.1")]
+[nzsl_version("1.1")]
 module;
 
-struct FragIn
+struct Input
 {
-    [location(0)] time: f32,
-    [location(1)] res: vec2[f32],
-    [location(2)] pos: vec2[f32],
+    [builtin(global_invocation_indices)] indices: vec3[u32]
 }
 
-struct FragOut
+[layout(std430)]
+struct SSBO
 {
-    [location(0)] color: vec4[f32]
+    data: dyn_array[i32]
 }
 
-[entry(frag)]
-fn main(input: FragIn) -> FragOut
+external
 {
-    const I: i32 = 32;
-    const A: f32 = 7.5;
-    const MA: f32 = 2.0;
-    const MI: f32 = 0.001;
+    [set(0), binding(0)] ssbo: storage[SSBO],
+}
 
-    let uv0 = input.pos / input.res * 2.0 - vec2[f32](1.0, 1.0);
-    let uv  = vec2[f32](uv0.x * (input.res.x / input.res.y), uv0.y);
-
-    let col = vec4[f32](0.0, 0.0, 0.0, 0.0);
-    let ro  = vec4[f32](0.0, 0.0, -2.0, 0.0);
-    let rd  = vec4[f32](uv.x, uv.y, 1.0, 0.0);
-    let dt  = 0.0;
-    let ds  = 0.0;
-    let dm  = -1.0;
-    let p   = ro;
-    let c   = vec4[f32](0.0, 0.0, 0.0, 0.0);
-
-    let l = vec4[f32](0.0, sin(input.time * 0.2) * 4.0, cos(input.time * 0.2) * 4.0, 0.0);
-
-    for i in 0 -> I
-    {
-        p = ro + rd * dt;
-        ds = length(c - p) - 1.0;
-        dt += ds;
-
-        if (dm == -1.0 || ds < dm)
-            dm = ds;
-
-        if (ds <= MI)
-        {
-            let value = max(dot(normalize(c - p), normalize(p - l)), 0.0);
-            col = vec4[f32](value, value, value, 1.0);
-            break;
-        }
-
-        if (ds >= MA)
-        {
-            if (dot(normalize(rd), normalize(l - ro)) < 1.0)
-            {
-                let value = max(dot(normalize(rd), normalize(l - ro)) + 0.15, 0.0) / 1.15 * max(1.0 - dm * A, 0.0);
-                col = vec4[f32](value, value, value, 1.0);
-            }
-            break;
-        }
-    }
-
-    let output: FragOut;
-    output.color = col;
-    return output;
+[entry(compute)]
+[workgroup(16, 16, 1)]
+fn main(input: Input)
+{
+	ssbo.data[input.indices.x * input.indices.y] = i32(input.indices.x * input.indices.y);
 }

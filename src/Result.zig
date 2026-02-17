@@ -316,6 +316,29 @@ pub const TypeData = union(Type) {
         storage_class: spv.SpvStorageClass,
         target: SpvWord,
     },
+
+    pub fn getSize(self: *const TypeData, results: []const Self) usize {
+        return switch (self.*) {
+            .Bool => 1,
+            .Int => |i| @divExact(i.bit_length, 8),
+            .Float => |f| @divExact(f.bit_length, 8),
+            .Vector => |v| results[v.components_type_word].variant.?.Type.getSize(results),
+            .Array => |a| results[a.components_type_word].variant.?.Type.getSize(results),
+            .Matrix => |m| results[m.column_type_word].variant.?.Type.getSize(results),
+            .RuntimeArray => |a| results[a.components_type_word].variant.?.Type.getSize(results),
+            .Structure => |s| blk: {
+                var total: usize = 0;
+                for (s.members_type_word) |type_word| {
+                    total += results[type_word].variant.?.Type.getSize(results);
+                }
+                break :blk total;
+            },
+            .Vector4f32, .Vector4i32, .Vector4u32 => 4 * 4,
+            .Vector3f32, .Vector3i32, .Vector3u32 => 3 * 4,
+            .Vector2f32, .Vector2i32, .Vector2u32 => 2 * 4,
+            else => 0,
+        };
+    }
 };
 
 pub const VariantData = union(Variant) {
