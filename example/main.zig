@@ -122,11 +122,11 @@ const Runner = struct {
         var output: [4]f32 = undefined;
 
         for (0..screen_width) |x| {
-            try rt.writeInput(f32, &.{timer}, self.time);
-            try rt.writeInput(f32, &.{ @floatFromInt(screen_width), @floatFromInt(screen_height) }, self.res);
-            try rt.writeInput(f32, &.{ @floatFromInt(x), @floatFromInt(y) }, self.pos);
+            try rt.writeInput(&.{timer}, self.time);
+            try rt.writeInput(&.{ @floatFromInt(screen_width), @floatFromInt(screen_height) }, self.res);
+            try rt.writeInput(&.{ @floatFromInt(x), @floatFromInt(y) }, self.pos);
             try rt.callEntryPoint(self.allocator, self.entry);
-            try rt.readOutput(f32, output[0..], self.color);
+            try rt.readOutput(output[0..], self.color);
 
             const rgba = self.surface.mapRgba(
                 @intCast(@max(@min(@as(i32, @intFromFloat(output[0] * 255.0)), 255), 0)),

@@ -170,7 +170,7 @@ pub fn writeDescriptorSet(self: *const Self, allocator: std.mem.Allocator, input
                 switch (value.*) {
                     .RuntimeArray => |a| if (a == null) {
                         const elem_size = resolved.variant.?.Type.getSize(results);
-                        value.* = try Result.initValue(allocator2, @divExact(len, elem_size), results, resolved);
+                        value.* = try Result.initValue(allocator2, std.math.divCeil(usize, len, elem_size) catch unreachable, results, resolved);
                     },
                     .Structure => |*s| for (s.*, 0..) |*elem, i| {
                         try @This().init(allocator2, len, elem, resolved.variant.?.Type.Structure.members_type_word[i], results);

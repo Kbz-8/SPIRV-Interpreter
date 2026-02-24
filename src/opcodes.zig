@@ -35,6 +35,7 @@ const MathOp = enum {
     Sub,
     VectorTimesMatrix,
     VectorTimesScalar,
+    Negate,
 };
 
 const CondOp = enum {
@@ -94,11 +95,14 @@ pub const SetupDispatcher = block: {
         .Dot = autoSetupConstant,
         .EntryPoint = opEntryPoint,
         .ExecutionMode = opExecutionMode,
+        .ExtInst = autoSetupConstant,
+        .ExtInstImport = opExtInstImport,
         .FAdd = autoSetupConstant,
         .FConvert = autoSetupConstant,
         .FDiv = autoSetupConstant,
         .FMod = autoSetupConstant,
         .FMul = autoSetupConstant,
+        .FNegate = autoSetupConstant,
         .FOrdEqual = autoSetupConstant,
         .FOrdGreaterThan = autoSetupConstant,
         .FOrdGreaterThanEqual = autoSetupConstant,
@@ -144,6 +148,7 @@ pub const SetupDispatcher = block: {
         .SLessThan = autoSetupConstant,
         .SLessThanEqual = autoSetupConstant,
         .SMod = autoSetupConstant,
+        .SNegate = autoSetupConstant,
         .SatConvertSToU = autoSetupConstant,
         .SatConvertUToS = autoSetupConstant,
         .ShiftLeftLogical = autoSetupConstant,
@@ -171,8 +176,6 @@ pub const SetupDispatcher = block: {
         .Variable = opVariable,
         .VectorTimesMatrix = autoSetupConstant,
         .VectorTimesScalar = autoSetupConstant,
-        .ExtInst = autoSetupConstant,
-        .ExtInstImport = opExtInstImport,
     });
 };
 
@@ -201,11 +204,13 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ConvertUToF)]            = ConversionEngine(.UInt, .Float).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.CopyMemory)]             = opCopyMemory;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Dot)]                    = opDot;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ExtInst)]                = opExtInst;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.FAdd)]                   = MathEngine(.Float, .Add).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.FConvert)]               = ConversionEngine(.Float, .Float).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.FDiv)]                   = MathEngine(.Float, .Div).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.FMod)]                   = MathEngine(.Float, .Mod).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.FMul)]                   = MathEngine(.Float, .Mul).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.FNegate)]                = MathEngine(.Float, .Negate).opSingle;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.FOrdEqual)]              = CondEngine(.Float, .Equal).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.FOrdGreaterThan)]        = CondEngine(.Float, .Greater).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.FOrdGreaterThanEqual)]   = CondEngine(.Float, .GreaterEqual).op;
@@ -245,6 +250,7 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.SLessThan)]              = CondEngine(.SInt, .Less).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.SLessThanEqual)]         = CondEngine(.SInt, .LessEqual).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.SMod)]                   = MathEngine(.SInt, .Mod).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.SNegate)]                = MathEngine(.SInt, .Negate).opSingle;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ShiftLeftLogical)]       = BitEngine(.UInt, .ShiftLeft).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ShiftRightArithmetic)]   = BitEngine(.SInt, .ShiftRightArithmetic).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ShiftRightLogical)]      = BitEngine(.UInt, .ShiftRight).op;
@@ -258,7 +264,6 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.UMod)]                   = MathEngine(.UInt, .Mod).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorTimesMatrix)]      = MathEngine(.Float, .VectorTimesMatrix).op; // TODO
     runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorTimesScalar)]      = MathEngine(.Float, .VectorTimesScalar).op;
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.ExtInst)]                = opExtInst;
     // zig fmt: on
 
     // Extensions init
@@ -781,6 +786,69 @@ fn MathEngine(comptime T: ValueType, comptime Op: MathOp) type {
                 .Vector4u32 => |*d| try operator.applySIMDVector(u32, 4, d, &lhs.Vector4u32, &rhs.Vector4u32),
                 .Vector3u32 => |*d| try operator.applySIMDVector(u32, 3, d, &lhs.Vector3u32, &rhs.Vector3u32),
                 .Vector2u32 => |*d| try operator.applySIMDVector(u32, 2, d, &lhs.Vector2u32, &rhs.Vector2u32),
+
+                else => return RuntimeError.InvalidSpirV,
+            }
+        }
+
+        fn opSingle(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+            const target_type = (try rt.results[try rt.it.next()].getVariant()).Type;
+            const dst = try rt.results[try rt.it.next()].getValue();
+            const val = try rt.results[try rt.it.next()].getValue();
+
+            const lane_bits = try Result.resolveLaneBitWidth(target_type, rt);
+
+            const operator = struct {
+                fn operation(comptime TT: type, ope: TT) RuntimeError!TT {
+                    return switch (Op) {
+                        .Negate => if (@typeInfo(TT) == .int) std.math.negate(ope) catch return RuntimeError.InvalidSpirV else -ope,
+                        else => return RuntimeError.InvalidSpirV,
+                    };
+                }
+
+                fn applyScalar(bit_count: SpvWord, d: *Result.Value, v: *Result.Value) RuntimeError!void {
+                    switch (bit_count) {
+                        inline 8, 16, 32, 64 => |bits| {
+                            if (bits == 8 and T == .Float) return RuntimeError.InvalidSpirV;
+
+                            const ScalarT = getValuePrimitiveFieldType(T, bits);
+                            const d_field = try getValuePrimitiveField(T, bits, d);
+                            const v_field = try getValuePrimitiveField(T, bits, v);
+                            d_field.* = try operation(ScalarT, v_field.*);
+                        },
+                        else => return RuntimeError.InvalidSpirV,
+                    }
+                }
+
+                inline fn applySIMDVector(comptime ElemT: type, comptime N: usize, d: *@Vector(N, ElemT), v: *const @Vector(N, ElemT)) RuntimeError!void {
+                    inline for (0..N) |i| {
+                        d[i] = try operation(ElemT, v[i]);
+                    }
+                }
+
+                inline fn applySIMDVectorf32(comptime N: usize, d: *@Vector(N, f32), v: *const @Vector(N, f32)) RuntimeError!void {
+                    try applySIMDVector(f32, N, d, v);
+                }
+            };
+
+            switch (dst.*) {
+                .Int, .Float => try operator.applyScalar(lane_bits, dst, val),
+
+                .Vector => |dst_vec| for (dst_vec, val.Vector) |*d_lane, *v_lane| {
+                    try operator.applyScalar(lane_bits, d_lane, v_lane);
+                },
+
+                .Vector4f32 => |*d| try operator.applySIMDVector(f32, 4, d, &val.Vector4f32),
+                .Vector3f32 => |*d| try operator.applySIMDVector(f32, 3, d, &val.Vector3f32),
+                .Vector2f32 => |*d| try operator.applySIMDVector(f32, 2, d, &val.Vector2f32),
+
+                .Vector4i32 => |*d| try operator.applySIMDVector(i32, 4, d, &val.Vector4i32),
+                .Vector3i32 => |*d| try operator.applySIMDVector(i32, 3, d, &val.Vector3i32),
+                .Vector2i32 => |*d| try operator.applySIMDVector(i32, 2, d, &val.Vector2i32),
+
+                .Vector4u32 => |*d| try operator.applySIMDVector(u32, 4, d, &val.Vector4u32),
+                .Vector3u32 => |*d| try operator.applySIMDVector(u32, 3, d, &val.Vector3u32),
+                .Vector2u32 => |*d| try operator.applySIMDVector(u32, 2, d, &val.Vector2u32),
 
                 else => return RuntimeError.InvalidSpirV,
             }

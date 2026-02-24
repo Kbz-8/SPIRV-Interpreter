@@ -26,6 +26,8 @@ pub fn main() !void {
 
         var ssbo: SSBO = .{};
 
+        try rt.writeDescriptorSet(allocator, std.mem.asBytes(&ssbo), 0, 0);
+
         for (0..16) |i| {
             for (0..16) |x| {
                 for (0..16) |y| {
@@ -36,7 +38,6 @@ pub fn main() !void {
                     };
 
                     try rt.writeBuiltIn(std.mem.asBytes(&global_invocation_indices), .GlobalInvocationId);
-                    try rt.writeDescriptorSet(allocator, std.mem.asBytes(&ssbo), 0, 0);
                     rt.callEntryPoint(allocator, entry) catch |err| switch (err) {
                         spv.Runtime.RuntimeError.OutOfBounds => continue,
                         else => return err,
