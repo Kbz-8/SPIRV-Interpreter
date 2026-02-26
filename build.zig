@@ -64,7 +64,7 @@ pub fn build(b: *std.Build) void {
     // Zig sandbox setup
 
     const sandbox_exe = b.addExecutable(.{
-        .name = "spirv_interpreter_sandbpx",
+        .name = "spirv_interpreter_sandbox",
         .root_module = b.createModule(.{
             .root_source_file = b.path("sandbox/main.zig"),
             .target = target,

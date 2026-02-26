@@ -1,11 +1,11 @@
 Version 1.0
 Generator: 2560130
-Bound: 41
+Bound: 32
 Schema: 0
       OpCapability Capability(Shader)
       OpMemoryModel AddressingModel(Logical) MemoryModel(GLSL450)
-      OpEntryPoint ExecutionModel(GLCompute) %18 "main" %11
-      OpExecutionMode %18 ExecutionMode(LocalSize) 16 16 1
+      OpEntryPoint ExecutionModel(GLCompute) %17 "main" %11
+      OpExecutionMode %17 ExecutionMode(LocalSize) 16 1 1
       OpSource SourceLanguage(NZSL) 4198400
       OpSourceExtension "Version: 1.1"
       OpName %3 "SSBO"
@@ -14,7 +14,7 @@ Schema: 0
       OpMemberName %14 0 "indices"
       OpName %5 "ssbo"
       OpName %11 "global_invocation_indices"
-      OpName %18 "main"
+      OpName %17 "main"
       OpDecorate %5 Decoration(Binding) 0
       OpDecorate %5 Decoration(DescriptorSet) 0
       OpDecorate %11 Decoration(BuiltIn) BuiltIn(GlobalInvocationId)
@@ -36,33 +36,24 @@ Schema: 0
 %14 = OpTypeStruct %9
 %15 = OpTypePointer StorageClass(Function) %14
 %16 = OpTypeRuntimeArray %1
-%17 = OpConstant %1 i32(1)
-%31 = OpTypePointer StorageClass(Uniform) %2
-%40 = OpTypePointer StorageClass(Uniform) %1
+%26 = OpTypePointer StorageClass(Uniform) %2
+%31 = OpTypePointer StorageClass(Uniform) %1
  %5 = OpVariable %4 StorageClass(Uniform)
 %11 = OpVariable %10 StorageClass(Input)
-%18 = OpFunction %6 FunctionControl(0) %7
-%19 = OpLabel
-%20 = OpVariable %15 StorageClass(Function)
-%21 = OpAccessChain %13 %20 %12
-      OpCopyMemory %21 %11
-%22 = OpAccessChain %13 %20 %12
-%23 = OpLoad %9 %22
-%24 = OpCompositeExtract %8 %23 0
-%25 = OpAccessChain %13 %20 %12
-%26 = OpLoad %9 %25
-%27 = OpCompositeExtract %8 %26 1
-%28 = OpIMul %8 %24 %27
-%29 = OpBitcast %1 %28
-%30 = OpAccessChain %31 %5 %12
-%32 = OpAccessChain %13 %20 %12
-%33 = OpLoad %9 %32
-%34 = OpCompositeExtract %8 %33 0
-%35 = OpAccessChain %13 %20 %12
-%36 = OpLoad %9 %35
-%37 = OpCompositeExtract %8 %36 1
-%38 = OpIMul %8 %34 %37
-%39 = OpAccessChain %40 %30 %38
-      OpStore %39 %29
+%17 = OpFunction %6 FunctionControl(0) %7
+%18 = OpLabel
+%19 = OpVariable %15 StorageClass(Function)
+%20 = OpAccessChain %13 %19 %12
+      OpCopyMemory %20 %11
+%21 = OpAccessChain %13 %19 %12
+%22 = OpLoad %9 %21
+%23 = OpCompositeExtract %8 %22 0
+%24 = OpBitcast %1 %23
+%25 = OpAccessChain %26 %5 %12
+%27 = OpAccessChain %13 %19 %12
+%28 = OpLoad %9 %27
+%29 = OpCompositeExtract %8 %28 0
+%30 = OpAccessChain %31 %25 %29
+      OpStore %30 %24
       OpReturn
       OpFunctionEnd

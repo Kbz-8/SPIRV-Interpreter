@@ -26,24 +26,21 @@ pub fn main() !void {
 
         var ssbo: SSBO = .{};
 
-        try rt.writeDescriptorSet(allocator, std.mem.asBytes(&ssbo), 0, 0);
-
         for (0..16) |i| {
             for (0..16) |x| {
-                for (0..16) |y| {
-                    const global_invocation_indices = [3]i32{
-                        @as(i32, @intCast(i * 16 + x)),
-                        @as(i32, @intCast(y)),
-                        1,
-                    };
+                const global_invocation_indices = [3]i32{
+                    @as(i32, @intCast(i * 16 + x)),
+                    1,
+                    1,
+                };
 
-                    try rt.writeBuiltIn(std.mem.asBytes(&global_invocation_indices), .GlobalInvocationId);
-                    rt.callEntryPoint(allocator, entry) catch |err| switch (err) {
-                        spv.Runtime.RuntimeError.OutOfBounds => continue,
-                        else => return err,
-                    };
-                    try rt.readDescriptorSet(std.mem.asBytes(&ssbo), 0, 0);
-                }
+                try rt.writeBuiltIn(std.mem.asBytes(&global_invocation_indices), .GlobalInvocationId);
+                try rt.writeDescriptorSet(allocator, std.mem.asBytes(&ssbo), 0, 0);
+                rt.callEntryPoint(allocator, entry) catch |err| switch (err) {
+                    spv.Runtime.RuntimeError.OutOfBounds => continue,
+                    else => return err,
+                };
+                try rt.readDescriptorSet(std.mem.asBytes(&ssbo), 0, 0);
             }
         }
 

@@ -212,7 +212,8 @@ fn populateMaps(self: *Self) ModuleError!void {
         if (result.variant == null or std.meta.activeTag(result.variant.?) != .Variable)
             continue;
 
-        var current_set: usize = 0;
+        var set: ?usize = null;
+        var binding: ?usize = null;
 
         for (result.decorations.items) |decoration| {
             switch (result.variant.?.Variable.storage_class) {
@@ -235,13 +236,16 @@ fn populateMaps(self: *Self) ModuleError!void {
                 .UniformConstant,
                 => {
                     switch (decoration.rtype) {
-                        .Binding => self.bindings[current_set][decoration.literal_1] = @intCast(id),
-                        .DescriptorSet => current_set = decoration.literal_1,
+                        .Binding => binding = decoration.literal_1,
+                        .DescriptorSet => set = decoration.literal_1,
                         else => {},
                     }
                 },
                 else => {},
             }
+        }
+        if (set != null and binding != null) {
+            self.bindings[set.?][binding.?] = @intCast(id);
         }
     }
 }
