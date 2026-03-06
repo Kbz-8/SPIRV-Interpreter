@@ -93,7 +93,12 @@ test "Simple branching" {
                 defer allocator.free(shader);
                 const code = try compileNzsl(allocator, shader);
                 defer allocator.free(code);
-                try case.expectOutput(T, 4, code, "color", &.{ expected, expected, expected, expected });
+                try case.expect(.{
+                    .source = code,
+                    .expected_outputs = &.{
+                        std.mem.asBytes(&[_]T{ expected, expected, expected, expected }),
+                    },
+                });
             }
         }
     }

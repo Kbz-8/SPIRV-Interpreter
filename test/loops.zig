@@ -47,5 +47,10 @@ test "Simple while loop" {
     defer allocator.free(shader);
     const code = try compileNzsl(allocator, shader);
     defer allocator.free(code);
-    try case.expectOutput(f32, 4, code, "color", &.{ expected, expected, expected, expected });
+    try case.expect(.{
+        .source = code,
+        .expected_outputs = &.{
+            std.mem.asBytes(&[_]f32{ expected, expected, expected, expected }),
+        },
+    });
 }

@@ -20,34 +20,13 @@ pub fn compileNzsl(allocator: std.mem.Allocator, source: []const u8) ![]const u3
 }
 
 pub const case = struct {
-    pub fn expectOutput(comptime T: type, comptime len: usize, source: []const u32, output_name: []const u8, expected: []const T) !void {
-        const allocator = std.testing.allocator;
+    pub const Config = struct {
+        source: []const u32,
+        inputs: []const []const u8 = &.{},
+        expected_outputs: []const []const u8,
+    };
 
-        const module_options = [_]spv.Module.ModuleOptions{
-            .{
-                .use_simd_vectors_specializations = true,
-            },
-            .{
-                .use_simd_vectors_specializations = false,
-            },
-        };
-
-        for (module_options) |opt| {
-            var module = try spv.Module.init(allocator, source, opt);
-            defer module.deinit(allocator);
-
-            var rt = try spv.Runtime.init(allocator, &module);
-            defer rt.deinit(allocator);
-
-            try rt.callEntryPoint(allocator, try rt.getEntryPointByName("main"));
-            var output: [len]T = undefined;
-            try rt.readOutput(std.mem.sliceAsBytes(output[0..]), try rt.getResultByName(output_name));
-
-            try std.testing.expectEqualSlices(T, expected, &output);
-        }
-    }
-
-    pub fn expectOutputWithInput(comptime T: type, comptime len: usize, source: []const u32, output_name: []const u8, expected: []const T, input_name: []const u8, input: []const T) !void {
+    pub fn expect(config: Config) !void {
         const allocator = std.testing.allocator;
 
         // To test with all important module options
@@ -61,19 +40,25 @@ pub const case = struct {
         };
 
         for (module_options) |opt| {
-            var module = try spv.Module.init(allocator, source, opt);
+            var module = try spv.Module.init(allocator, config.source, opt);
             defer module.deinit(allocator);
 
             var rt = try spv.Runtime.init(allocator, &module);
             defer rt.deinit(allocator);
 
-            try rt.writeInput(std.mem.sliceAsBytes(input[0..len]), try rt.getResultByName(input_name));
+            for (config.inputs, 0..) |input, n| {
+                try rt.writeInput(input[0..], module.input_locations[n]);
+            }
 
             try rt.callEntryPoint(allocator, try rt.getEntryPointByName("main"));
-            var output: [len]T = undefined;
-            try rt.readOutput(std.mem.sliceAsBytes(output[0..]), try rt.getResultByName(output_name));
 
-            try std.testing.expectEqualSlices(T, expected, &output);
+            for (config.expected_outputs, 0..) |expected, n| {
+                const output = try allocator.alloc(u8, expected.len);
+                defer allocator.free(output);
+
+                try rt.readOutput(output[0..], module.output_locations[n]);
+                try std.testing.expectEqualSlices(u8, expected, output);
+            }
         }
     }
 

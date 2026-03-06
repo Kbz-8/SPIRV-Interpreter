@@ -45,7 +45,15 @@ test "Inputs" {
             defer allocator.free(shader);
             const code = try compileNzsl(allocator, shader);
             defer allocator.free(code);
-            try case.expectOutputWithInput(T, L, code, "color", &@as([L]T, input.val), "pos", &@as([L]T, input.val));
+            try case.expect(.{
+                .source = code,
+                .inputs = &.{
+                    std.mem.asBytes(&@as([L]T, input.val)),
+                },
+                .expected_outputs = &.{
+                    std.mem.asBytes(&@as([L]T, input.val)),
+                },
+            });
         }
     }
 }

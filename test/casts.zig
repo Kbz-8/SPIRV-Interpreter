@@ -55,7 +55,12 @@ test "Primitives casts" {
         defer allocator.free(shader);
         const code = try compileNzsl(allocator, shader);
         defer allocator.free(code);
-        try case.expectOutput(T[1], 4, code, "color", &.{ expected, expected, expected, expected });
+        try case.expect(.{
+            .source = code,
+            .expected_outputs = &.{
+                std.mem.asBytes(&[_]T[1]{ expected, expected, expected, expected }),
+            },
+        });
     }
 }
 
@@ -103,6 +108,11 @@ test "Primitives bitcasts" {
         defer allocator.free(shader);
         const code = try compileNzsl(allocator, shader);
         defer allocator.free(code);
-        try case.expectOutput(T[1], 4, code, "color", &.{ expected, expected, expected, expected });
+        try case.expect(.{
+            .source = code,
+            .expected_outputs = &.{
+                std.mem.asBytes(&[_]T[1]{ expected, expected, expected, expected }),
+            },
+        });
     }
 }
