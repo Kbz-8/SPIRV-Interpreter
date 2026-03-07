@@ -23,7 +23,9 @@ pub const case = struct {
     pub const Config = struct {
         source: []const u32,
         inputs: []const []const u8 = &.{},
-        expected_outputs: []const []const u8,
+        expected_outputs: []const []const u8 = &.{},
+        descriptor_sets: []const []const []const u8 = &.{},
+        expected_descriptor_sets: []const []const []const u8 = &.{},
     };
 
     pub fn expect(config: Config) !void {
@@ -50,6 +52,12 @@ pub const case = struct {
                 try rt.writeInput(input[0..], module.input_locations[n]);
             }
 
+            for (config.descriptor_sets, 0..) |descriptor_set, set_index| {
+                for (descriptor_set, 0..) |descriptor_binding, binding_index| {
+                    try rt.writeDescriptorSet(allocator, descriptor_binding, @intCast(set_index), @intCast(binding_index));
+                }
+            }
+
             try rt.callEntryPoint(allocator, try rt.getEntryPointByName("main"));
 
             for (config.expected_outputs, 0..) |expected, n| {
@@ -58,6 +66,16 @@ pub const case = struct {
 
                 try rt.readOutput(output[0..], module.output_locations[n]);
                 try std.testing.expectEqualSlices(u8, expected, output);
+            }
+
+            for (config.expected_descriptor_sets, 0..) |expected_descriptor_set, set_index| {
+                for (expected_descriptor_set, 0..) |expected_descriptor_binding, binding_index| {
+                    const data = try allocator.alloc(u8, expected_descriptor_binding.len);
+                    defer allocator.free(data);
+
+                    try rt.readDescriptorSet(data, @intCast(set_index), @intCast(binding_index));
+                    try std.testing.expectEqualSlices(u8, expected_descriptor_binding, data);
+                }
             }
         }
     }
@@ -104,4 +122,5 @@ test {
     std.testing.refAllDecls(@import("inputs.zig"));
     std.testing.refAllDecls(@import("loops.zig"));
     std.testing.refAllDecls(@import("maths.zig"));
+    std.testing.refAllDecls(@import("ssbo.zig"));
 }
