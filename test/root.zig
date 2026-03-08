@@ -24,7 +24,7 @@ pub const case = struct {
         source: []const u32,
         inputs: []const []const u8 = &.{},
         expected_outputs: []const []const u8 = &.{},
-        descriptor_sets: []const []const []const u8 = &.{},
+        descriptor_sets: []const []const []u8 = &.{},
         expected_descriptor_sets: []const []const []const u8 = &.{},
     };
 
@@ -54,11 +54,12 @@ pub const case = struct {
 
             for (config.descriptor_sets, 0..) |descriptor_set, set_index| {
                 for (descriptor_set, 0..) |descriptor_binding, binding_index| {
-                    try rt.writeDescriptorSet(allocator, descriptor_binding, @intCast(set_index), @intCast(binding_index));
+                    try rt.writeDescriptorSet(descriptor_binding, @intCast(set_index), @intCast(binding_index));
                 }
             }
 
             try rt.callEntryPoint(allocator, try rt.getEntryPointByName("main"));
+            try rt.flushDescriptorSets(allocator);
 
             for (config.expected_outputs, 0..) |expected, n| {
                 const output = try allocator.alloc(u8, expected.len);
@@ -68,13 +69,9 @@ pub const case = struct {
                 try std.testing.expectEqualSlices(u8, expected, output);
             }
 
-            for (config.expected_descriptor_sets, 0..) |expected_descriptor_set, set_index| {
-                for (expected_descriptor_set, 0..) |expected_descriptor_binding, binding_index| {
-                    const data = try allocator.alloc(u8, expected_descriptor_binding.len);
-                    defer allocator.free(data);
-
-                    try rt.readDescriptorSet(data, @intCast(set_index), @intCast(binding_index));
-                    try std.testing.expectEqualSlices(u8, expected_descriptor_binding, data);
+            for (config.expected_descriptor_sets, config.descriptor_sets) |expected_descriptor_set, descriptor_set| {
+                for (expected_descriptor_set, descriptor_set) |expected_descriptor_binding, descriptor_binding| {
+                    try std.testing.expectEqualSlices(u8, expected_descriptor_binding, descriptor_binding);
                 }
             }
         }

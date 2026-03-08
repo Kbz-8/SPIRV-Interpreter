@@ -945,14 +945,13 @@ fn copyValue(dst: *Result.Value, src: *const Result.Value) void {
         fn getDstSlice(v: *Result.Value) ?[]Result.Value {
             return switch (v.*) {
                 .Vector, .Matrix, .Array, .Structure => |s| s,
-                .RuntimeArray => |s| s,
                 else => null,
             };
         }
 
         fn writeF32(dst_f32_ptr: *f32, src_v: *const Result.Value) void {
             switch (src_v.*) {
-                .Pointer => |src_ptr| switch (src_ptr) {
+                .Pointer => |src_ptr| switch (src_ptr.ptr) {
                     .f32_ptr => |src_f32_ptr| dst_f32_ptr.* = src_f32_ptr.*,
                     .common => |src_val_ptr| switch (src_val_ptr.*) {
                         .Float => |f| dst_f32_ptr.* = f.value.float32,
@@ -967,7 +966,7 @@ fn copyValue(dst: *Result.Value, src: *const Result.Value) void {
 
         fn writeI32(dst_i32_ptr: *i32, src_v: *const Result.Value) void {
             switch (src_v.*) {
-                .Pointer => |src_ptr| switch (src_ptr) {
+                .Pointer => |src_ptr| switch (src_ptr.ptr) {
                     .i32_ptr => |src_i32_ptr| dst_i32_ptr.* = src_i32_ptr.*,
                     .common => |src_val_ptr| switch (src_val_ptr.*) {
                         .Int => |i| dst_i32_ptr.* = i.value.sint32,
@@ -982,7 +981,7 @@ fn copyValue(dst: *Result.Value, src: *const Result.Value) void {
 
         fn writeU32(dst_u32_ptr: *u32, src_v: *const Result.Value) void {
             switch (src_v.*) {
-                .Pointer => |src_ptr| switch (src_ptr) {
+                .Pointer => |src_ptr| switch (src_ptr.ptr) {
                     .u32_ptr => |src_u32_ptr| dst_u32_ptr.* = src_u32_ptr.*,
                     .common => |src_val_ptr| switch (src_val_ptr.*) {
                         .Int => |i| dst_u32_ptr.* = i.value.uint32,
@@ -997,9 +996,9 @@ fn copyValue(dst: *Result.Value, src: *const Result.Value) void {
     };
 
     if (std.meta.activeTag(dst.*) == .Pointer) {
-        switch (dst.Pointer) {
+        switch (dst.Pointer.ptr) {
             .common => |dst_val_ptr| return switch (src.*) {
-                .Pointer => |src_ptr| switch (src_ptr) {
+                .Pointer => |src_ptr| switch (src_ptr.ptr) {
                     .common => |src_val_ptr| copyValue(dst_val_ptr, src_val_ptr),
                     else => dst_val_ptr.* = src.*,
                 },
@@ -1021,7 +1020,7 @@ fn copyValue(dst: *Result.Value, src: *const Result.Value) void {
     }
 
     if (std.meta.activeTag(src.*) == .Pointer) {
-        switch (src.Pointer) {
+        switch (src.Pointer.ptr) {
             .common => |src_val_ptr| {
                 copyValue(dst, src_val_ptr);
                 return;
@@ -1036,16 +1035,13 @@ fn copyValue(dst: *Result.Value, src: *const Result.Value) void {
         .Vector, .Matrix, .Array, .Structure => |src_slice| {
             helpers.copySlice(dst_slice.?, src_slice);
         },
-        .RuntimeArray => |opt_src_slice| if (opt_src_slice) |src_slice| {
-            helpers.copySlice(dst_slice.?, src_slice);
-        } else unreachable,
         else => dst.* = src.*,
     }
 }
 
 pub fn getValuePrimitiveField(comptime T: ValueType, comptime BitCount: SpvWord, v: *Result.Value) RuntimeError!*getValuePrimitiveFieldType(T, BitCount) {
     if (std.meta.activeTag(v.*) == .Pointer) {
-        return switch (v.Pointer) {
+        return switch (v.Pointer.ptr) {
             .common => |value| getValuePrimitiveField(T, BitCount, value),
             .f32_ptr => |ptr| @ptrCast(@alignCast(ptr)),
             .u32_ptr => |ptr| @ptrCast(@alignCast(ptr)),
@@ -1078,7 +1074,7 @@ pub fn getValuePrimitiveFieldType(comptime T: ValueType, comptime BitCount: SpvW
     };
 }
 
-fn opAccessChain(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
+fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
     const var_type = try rt.it.next();
     const id = try rt.it.next();
     const base_id = try rt.it.next();
@@ -1086,12 +1082,29 @@ fn opAccessChain(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) Runtim
     const base = &rt.results[base_id];
     var value_ptr = try base.getValue();
 
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const arena_allocator = arena.allocator();
+
     const index_count = word_count - 3;
+
+    if (rt.results[id].variant) |*variant| {
+        switch (variant.*) {
+            .AccessChain => |*a| try a.value.flushPtr(allocator),
+            else => {},
+        }
+    }
+
     rt.results[id].variant = .{
         .AccessChain = .{
             .target = var_type,
             .value = blk: {
-                for (0..index_count) |_| {
+                var runtime_array_window: ?[]u8 = null;
+
+                for (0..index_count) |index| {
+                    const is_last = (index == index_count - 1);
+
                     const member = &rt.results[try rt.it.next()];
                     const member_value = switch ((try member.getVariant()).*) {
                         .Constant => |c| &c.value,
@@ -1102,7 +1115,7 @@ fn opAccessChain(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) Runtim
                     switch (member_value.*) {
                         .Int => |i| {
                             if (std.meta.activeTag(value_ptr.*) == .Pointer) {
-                                value_ptr = value_ptr.Pointer.common; // Don't know if I should check for specialized pointers
+                                value_ptr = value_ptr.Pointer.ptr.common; // Don't know if I should check for specialized pointers
                             }
 
                             switch (value_ptr.*) {
@@ -1110,45 +1123,54 @@ fn opAccessChain(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) Runtim
                                     if (i.value.uint32 >= v.len) return RuntimeError.OutOfBounds;
                                     value_ptr = &v[i.value.uint32];
                                 },
-                                .RuntimeArray => |opt_a| if (opt_a) |a| {
-                                    if (i.value.uint32 >= a.len) return RuntimeError.OutOfBounds;
-                                    value_ptr = &a[i.value.uint32];
-                                } else return RuntimeError.InvalidSpirV,
+                                .RuntimeArray => |*arr| {
+                                    const concrete_allocator = if (is_last) allocator else arena_allocator;
+                                    const type_size = (try rt.results[arr.type_word].getVariant()).Type.getSize(rt.results);
+
+                                    value_ptr = concrete_allocator.create(Result.Value) catch return RuntimeError.OutOfMemory;
+                                    errdefer concrete_allocator.destroy(value_ptr);
+
+                                    value_ptr.* = try Result.Value.init(concrete_allocator, rt.results, arr.type_word);
+                                    _ = try value_ptr.writeConst(arr.data[(type_size * i.value.uint32)..]);
+
+                                    if (is_last)
+                                        runtime_array_window = arr.data[(type_size * i.value.uint32)..];
+                                },
                                 .Vector4f32 => |*v| {
                                     if (i.value.uint32 > 4) return RuntimeError.OutOfBounds;
-                                    break :blk .{ .Pointer = .{ .f32_ptr = &v[i.value.uint32] } };
+                                    break :blk .{ .Pointer = .{ .ptr = .{ .f32_ptr = &v[i.value.uint32] } } };
                                 },
                                 .Vector3f32 => |*v| {
                                     if (i.value.uint32 > 3) return RuntimeError.OutOfBounds;
-                                    break :blk .{ .Pointer = .{ .f32_ptr = &v[i.value.uint32] } };
+                                    break :blk .{ .Pointer = .{ .ptr = .{ .f32_ptr = &v[i.value.uint32] } } };
                                 },
                                 .Vector2f32 => |*v| {
                                     if (i.value.uint32 > 2) return RuntimeError.OutOfBounds;
-                                    break :blk .{ .Pointer = .{ .f32_ptr = &v[i.value.uint32] } };
+                                    break :blk .{ .Pointer = .{ .ptr = .{ .f32_ptr = &v[i.value.uint32] } } };
                                 },
                                 .Vector4i32 => |*v| {
                                     if (i.value.uint32 > 4) return RuntimeError.OutOfBounds;
-                                    break :blk .{ .Pointer = .{ .i32_ptr = &v[i.value.uint32] } };
+                                    break :blk .{ .Pointer = .{ .ptr = .{ .i32_ptr = &v[i.value.uint32] } } };
                                 },
                                 .Vector3i32 => |*v| {
                                     if (i.value.uint32 > 3) return RuntimeError.OutOfBounds;
-                                    break :blk .{ .Pointer = .{ .i32_ptr = &v[i.value.uint32] } };
+                                    break :blk .{ .Pointer = .{ .ptr = .{ .i32_ptr = &v[i.value.uint32] } } };
                                 },
                                 .Vector2i32 => |*v| {
                                     if (i.value.uint32 > 2) return RuntimeError.OutOfBounds;
-                                    break :blk .{ .Pointer = .{ .i32_ptr = &v[i.value.uint32] } };
+                                    break :blk .{ .Pointer = .{ .ptr = .{ .i32_ptr = &v[i.value.uint32] } } };
                                 },
                                 .Vector4u32 => |*v| {
                                     if (i.value.uint32 > 4) return RuntimeError.OutOfBounds;
-                                    break :blk .{ .Pointer = .{ .u32_ptr = &v[i.value.uint32] } };
+                                    break :blk .{ .Pointer = .{ .ptr = .{ .u32_ptr = &v[i.value.uint32] } } };
                                 },
                                 .Vector3u32 => |*v| {
                                     if (i.value.uint32 > 3) return RuntimeError.OutOfBounds;
-                                    break :blk .{ .Pointer = .{ .u32_ptr = &v[i.value.uint32] } };
+                                    break :blk .{ .Pointer = .{ .ptr = .{ .u32_ptr = &v[i.value.uint32] } } };
                                 },
                                 .Vector2u32 => |*v| {
                                     if (i.value.uint32 > 2) return RuntimeError.OutOfBounds;
-                                    break :blk .{ .Pointer = .{ .u32_ptr = &v[i.value.uint32] } };
+                                    break :blk .{ .Pointer = .{ .ptr = .{ .u32_ptr = &v[i.value.uint32] } } };
                                 },
                                 else => return RuntimeError.InvalidSpirV,
                             }
@@ -1156,7 +1178,12 @@ fn opAccessChain(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) Runtim
                         else => return RuntimeError.InvalidSpirV,
                     }
                 }
-                break :blk .{ .Pointer = .{ .common = value_ptr } };
+                break :blk .{
+                    .Pointer = .{
+                        .ptr = .{ .common = value_ptr },
+                        .runtime_array_window = runtime_array_window,
+                    },
+                };
             },
         },
     };
@@ -1206,6 +1233,16 @@ fn opCompositeConstruct(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime)
     }
 
     switch (value.*) {
+        .RuntimeArray => |arr| {
+            const type_size = (try rt.results[arr.type_word].getVariant()).Type.getSize(rt.results);
+            var offset: usize = 0;
+
+            for (0..index_count) |_| {
+                const elem_value = (try rt.results[try rt.it.next()].getVariant()).Constant.value;
+                std.mem.copyForwards(u8, arr.data[offset..(offset + type_size)], std.mem.asBytes(&elem_value));
+                offset += type_size;
+            }
+        },
         .Vector4f32 => |*vec| inline for (0..4) |i| {
             vec[i] = (try rt.results[try rt.it.next()].getVariant()).Constant.value.Float.value.float32;
         },
@@ -1233,7 +1270,7 @@ fn opCompositeConstruct(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime)
         .Vector2u32 => |*vec| inline for (0..2) |i| {
             vec[i] = (try rt.results[try rt.it.next()].getVariant()).Constant.value.Int.value.uint32;
         },
-        else => return RuntimeError.InvalidSpirV,
+        else => return RuntimeError.InvalidValueType,
     }
 }
 
@@ -1242,6 +1279,11 @@ fn opCompositeExtract(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Ru
     const id = try rt.it.next();
     const composite_id = try rt.it.next();
     const index_count = word_count - 3;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const arena_allocator = arena.allocator();
 
     rt.results[id].variant = .{
         .Constant = .{
@@ -1259,6 +1301,11 @@ fn opCompositeExtract(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Ru
                         continue;
                     }
                     switch (composite) {
+                        .RuntimeArray => |arr| {
+                            const type_size = (try rt.results[arr.type_word].getVariant()).Type.getSize(rt.results);
+                            composite = try Result.Value.init(arena_allocator, rt.results, arr.type_word);
+                            _ = try composite.writeConst(arr.data[(type_size * member_id)..]);
+                        },
                         .Vector4f32 => |v| break :blk .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = v[member_id] } } },
                         .Vector3f32 => |v| break :blk .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = v[member_id] } } },
                         .Vector2f32 => |v| break :blk .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = v[member_id] } } },
@@ -1268,7 +1315,7 @@ fn opCompositeExtract(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Ru
                         .Vector4u32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .value = .{ .uint32 = v[member_id] } } },
                         .Vector3u32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .value = .{ .uint32 = v[member_id] } } },
                         .Vector2u32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .value = .{ .uint32 = v[member_id] } } },
-                        else => return RuntimeError.InvalidSpirV,
+                        else => return RuntimeError.InvalidValueType,
                     }
                 }
                 break :blk try composite.dupe(allocator);

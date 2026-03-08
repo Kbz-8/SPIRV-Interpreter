@@ -33,6 +33,8 @@ test "Simple SSBO" {
     const code = try compileNzsl(allocator, shader);
     defer allocator.free(code);
 
+    var ssbo = [_]u32{0} ** 256;
+
     var expected = [_]u32{0} ** 256;
     for (expected[0..], 0..) |*val, i| {
         val.* = @intCast(i);
@@ -44,7 +46,7 @@ test "Simple SSBO" {
             // Set 0
             &.{
                 // Binding 0
-                std.mem.asBytes(&[_]u32{0} ** 256),
+                std.mem.asBytes(&ssbo),
             },
         },
         .expected_descriptor_sets = &.{

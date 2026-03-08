@@ -35,12 +35,12 @@ pub fn main() !void {
                 };
 
                 try rt.writeBuiltIn(std.mem.asBytes(&global_invocation_indices), .GlobalInvocationId);
-                try rt.writeDescriptorSet(allocator, std.mem.asBytes(&ssbo), 0, 0);
+                try rt.writeDescriptorSet(std.mem.asBytes(&ssbo), 0, 0);
                 rt.callEntryPoint(allocator, entry) catch |err| switch (err) {
                     spv.Runtime.RuntimeError.OutOfBounds => continue,
                     else => return err,
                 };
-                try rt.readDescriptorSet(std.mem.asBytes(&ssbo), 0, 0);
+                try rt.flushDescriptorSets(allocator);
             }
         }
 

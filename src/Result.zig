@@ -113,28 +113,33 @@ pub const Value = union(Type) {
     Vector2u32: Vec2u32,
     Matrix: []Value,
     Array: []Value,
-    RuntimeArray: ?[]Value,
+    RuntimeArray: struct {
+        type_word: SpvWord,
+        data: []u8,
+    },
     Structure: []Value,
     Function: noreturn,
     Image: struct {},
     Sampler: struct {},
     SampledImage: struct {},
-    Pointer: union(enum) {
-        common: *Value,
-        f32_ptr: *f32,
-        i32_ptr: *i32, //< For vector specializations
-        u32_ptr: *u32,
+    Pointer: struct {
+        ptr: union(enum) {
+            common: *Value,
+            f32_ptr: *f32,
+            i32_ptr: *i32, //< For vector specializations
+            u32_ptr: *u32,
+        },
+        runtime_array_window: ?[]u8 = null,
     },
 
     pub inline fn getCompositeDataOrNull(self: *const Value) ?[]Value {
         return switch (self.*) {
             .Vector, .Matrix, .Array, .Structure => |v| v,
-            .RuntimeArray => |v| v,
             else => null,
         };
     }
 
-    fn init(allocator: std.mem.Allocator, results: []const Self, target: SpvWord) RuntimeError!Value {
+    pub fn init(allocator: std.mem.Allocator, results: []const Self, target: SpvWord) RuntimeError!Value {
         const resolved = results[target].resolveType(results);
         const member_count = resolved.getMemberCounts();
 
@@ -194,7 +199,12 @@ pub const Value = union(Type) {
                     }
                     break :blk self;
                 },
-                .RuntimeArray => .{ .RuntimeArray = null },
+                .RuntimeArray => |a| .{
+                    .RuntimeArray = .{
+                        .type_word = a.components_type_word,
+                        .data = &.{},
+                    },
+                },
                 else => unreachable,
             },
             else => unreachable,
@@ -225,17 +235,6 @@ pub const Value = union(Type) {
                     break :blk values;
                 },
             },
-            .RuntimeArray => |opt_a| .{
-                .RuntimeArray = blk: {
-                    if (opt_a) |a| {
-                        const values = allocator.dupe(Value, a) catch return RuntimeError.OutOfMemory;
-                        for (values, a) |*new_value, value| new_value.* = try value.dupe(allocator);
-                        break :blk values;
-                    } else {
-                        break :blk null;
-                    }
-                },
-            },
             .Structure => |s| .{
                 .Structure = blk: {
                     const values = allocator.dupe(Value, s) catch return RuntimeError.OutOfMemory;
@@ -247,13 +246,241 @@ pub const Value = union(Type) {
         };
     }
 
+    pub fn read(self: *const Value, output: []u8) RuntimeError!usize {
+        switch (self.*) {
+            .Bool => |b| {
+                output[0] = if (b == true) 1 else 0;
+                return 1;
+            },
+            .Int => |i| {
+                switch (i.bit_count) {
+                    8 => output[0] = @bitCast(i.value.uint8),
+                    16 => std.mem.copyForwards(u8, output[0..], std.mem.asBytes(&i.value.uint16)),
+                    32 => std.mem.copyForwards(u8, output[0..], std.mem.asBytes(&i.value.uint32)),
+                    64 => std.mem.copyForwards(u8, output[0..], std.mem.asBytes(&i.value.uint64)),
+                    else => return RuntimeError.InvalidValueType,
+                }
+                return @divExact(i.bit_count, 8);
+            },
+            .Float => |f| {
+                switch (f.bit_count) {
+                    16 => std.mem.copyForwards(u8, output[0..], std.mem.asBytes(&f.value.float16)),
+                    32 => std.mem.copyForwards(u8, output[0..], std.mem.asBytes(&f.value.float32)),
+                    64 => std.mem.copyForwards(u8, output[0..], std.mem.asBytes(&f.value.float64)),
+                    else => return RuntimeError.InvalidValueType,
+                }
+                return @divExact(f.bit_count, 8);
+            },
+            .Vector4f32 => |vec| {
+                inline for (0..4) |i| {
+                    std.mem.copyForwards(u8, output[(i * 4)..], std.mem.asBytes(&vec[i]));
+                }
+                return 4 * 4;
+            },
+            .Vector3f32 => |vec| {
+                inline for (0..3) |i| {
+                    std.mem.copyForwards(u8, output[(i * 4)..], std.mem.asBytes(&vec[i]));
+                }
+                return 3 * 4;
+            },
+            .Vector2f32 => |vec| {
+                inline for (0..2) |i| {
+                    std.mem.copyForwards(u8, output[(i * 4)..], std.mem.asBytes(&vec[i]));
+                }
+                return 2 * 4;
+            },
+            .Vector4i32 => |vec| {
+                inline for (0..4) |i| {
+                    std.mem.copyForwards(u8, output[(i * 4)..], std.mem.asBytes(&vec[i]));
+                }
+                return 4 * 4;
+            },
+            .Vector3i32 => |vec| {
+                inline for (0..3) |i| {
+                    std.mem.copyForwards(u8, output[(i * 4)..], std.mem.asBytes(&vec[i]));
+                }
+                return 3 * 4;
+            },
+            .Vector2i32 => |vec| {
+                inline for (0..2) |i| {
+                    std.mem.copyForwards(u8, output[(i * 4)..], std.mem.asBytes(&vec[i]));
+                }
+                return 2 * 4;
+            },
+            .Vector4u32 => |vec| {
+                inline for (0..4) |i| {
+                    std.mem.copyForwards(u8, output[(i * 4)..], std.mem.asBytes(&vec[i]));
+                }
+                return 4 * 4;
+            },
+            .Vector3u32 => |vec| {
+                inline for (0..3) |i| {
+                    std.mem.copyForwards(u8, output[(i * 4)..], std.mem.asBytes(&vec[i]));
+                }
+                return 3 * 4;
+            },
+            .Vector2u32 => |vec| {
+                inline for (0..2) |i| {
+                    std.mem.copyForwards(u8, output[(i * 4)..], std.mem.asBytes(&vec[i]));
+                }
+                return 2 * 4;
+            },
+            .Vector,
+            .Matrix,
+            .Array,
+            .Structure,
+            => |values| {
+                var offset: usize = 0;
+                for (values) |v| {
+                    offset += try v.read(output[offset..]);
+                }
+                return offset;
+            },
+            else => return RuntimeError.InvalidValueType,
+        }
+        return 0;
+    }
+
+    pub fn writeConst(self: *Value, input: []const u8) RuntimeError!usize {
+        return self.write(@constCast(input));
+    }
+
+    pub fn write(self: *Value, input: []u8) RuntimeError!usize {
+        switch (self.*) {
+            .Bool => |*b| {
+                b.* = if (input[0] != 0) true else false;
+                return 1;
+            },
+            .Int => |*i| {
+                switch (i.bit_count) {
+                    8 => i.value.uint8 = @bitCast(input[0]),
+                    16 => std.mem.copyForwards(u8, std.mem.asBytes(&i.value.uint16), input[0..2]),
+                    32 => std.mem.copyForwards(u8, std.mem.asBytes(&i.value.uint32), input[0..4]),
+                    64 => std.mem.copyForwards(u8, std.mem.asBytes(&i.value.uint64), input[0..8]),
+                    else => return RuntimeError.InvalidValueType,
+                }
+                return @divExact(i.bit_count, 8);
+            },
+            .Float => |*f| {
+                switch (f.bit_count) {
+                    16 => std.mem.copyForwards(u8, std.mem.asBytes(&f.value.float16), input[0..2]),
+                    32 => std.mem.copyForwards(u8, std.mem.asBytes(&f.value.float32), input[0..4]),
+                    64 => std.mem.copyForwards(u8, std.mem.asBytes(&f.value.float64), input[0..8]),
+                    else => return RuntimeError.InvalidValueType,
+                }
+                return @divExact(f.bit_count, 8);
+            },
+            .Vector4f32 => |*vec| {
+                inline for (0..4) |i| {
+                    const start = i * 4;
+                    const end = (i + 1) * 4;
+                    std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
+                }
+                return 4 * 4;
+            },
+            .Vector3f32 => |*vec| {
+                inline for (0..3) |i| {
+                    const start = i * 4;
+                    const end = (i + 1) * 4;
+                    std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
+                }
+                return 3 * 4;
+            },
+            .Vector2f32 => |*vec| {
+                inline for (0..2) |i| {
+                    const start = i * 4;
+                    const end = (i + 1) * 4;
+                    std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
+                }
+                return 2 * 4;
+            },
+            .Vector4i32 => |*vec| {
+                inline for (0..4) |i| {
+                    const start = i * 4;
+                    const end = (i + 1) * 4;
+                    std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
+                }
+                return 4 * 4;
+            },
+            .Vector3i32 => |*vec| {
+                inline for (0..3) |i| {
+                    const start = i * 4;
+                    const end = (i + 1) * 4;
+                    std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
+                }
+                return 3 * 4;
+            },
+            .Vector2i32 => |*vec| {
+                inline for (0..2) |i| {
+                    const start = i * 4;
+                    const end = (i + 1) * 4;
+                    std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
+                }
+                return 2 * 4;
+            },
+            .Vector4u32 => |*vec| {
+                inline for (0..4) |i| {
+                    const start = i * 4;
+                    const end = (i + 1) * 4;
+                    std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
+                }
+                return 4 * 4;
+            },
+            .Vector3u32 => |*vec| {
+                inline for (0..3) |i| {
+                    const start = i * 4;
+                    const end = (i + 1) * 4;
+                    std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
+                }
+                return 3 * 4;
+            },
+            .Vector2u32 => |*vec| {
+                inline for (0..2) |i| {
+                    const start = i * 4;
+                    const end = (i + 1) * 4;
+                    std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
+                }
+                return 2 * 4;
+            },
+            .Vector,
+            .Matrix,
+            .Array,
+            .Structure,
+            => |*values| {
+                var offset: usize = 0;
+                for (values.*) |*v| {
+                    offset += try v.write(input[offset..]);
+                }
+                return offset;
+            },
+            .RuntimeArray => |*arr| arr.data = input[0..],
+            else => return RuntimeError.InvalidValueType,
+        }
+        return 0;
+    }
+
+    pub fn flushPtr(self: *Value, allocator: std.mem.Allocator) RuntimeError!void {
+        switch (self.*) {
+            .Pointer => |*p| {
+                if (p.runtime_array_window) |window| {
+                    switch (p.ptr) {
+                        .common => |ptr| {
+                            _ = try ptr.read(window);
+                            ptr.deinit(allocator);
+                            allocator.destroy(ptr);
+                        },
+                        else => {},
+                    }
+                }
+                p.runtime_array_window = null;
+            },
+            else => {},
+        }
+    }
+
     fn deinit(self: *Value, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .Vector, .Matrix, .Array, .Structure => |values| {
-                for (values) |*value| value.deinit(allocator);
-                allocator.free(values);
-            },
-            .RuntimeArray => |opt_values| if (opt_values) |values| {
                 for (values) |*value| value.deinit(allocator);
                 allocator.free(values);
             },
@@ -412,6 +639,7 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
             },
             .Constant => |*c| c.value.deinit(allocator),
             .Variable => |*v| v.value.deinit(allocator),
+            .AccessChain => |*a| a.value.deinit(allocator),
             .Function => |f| allocator.free(f.params),
             else => {},
         }
@@ -649,16 +877,11 @@ pub fn initValue(allocator: std.mem.Allocator, member_count: usize, results: []c
                 }
                 break :blk value;
             },
-            .RuntimeArray => |a| blk: {
-                if (member_count == 0) {
-                    break :blk Value{ .RuntimeArray = null };
-                }
-                const value: Value = .{ .RuntimeArray = allocator.alloc(Value, member_count) catch return RuntimeError.OutOfMemory };
-                errdefer allocator.free(value.RuntimeArray.?);
-                for (value.RuntimeArray.?) |*val| {
-                    val.* = try Value.init(allocator, results, a.components_type_word);
-                }
-                break :blk value;
+            .RuntimeArray => |a| .{
+                .RuntimeArray = .{
+                    .type_word = a.components_type_word,
+                    .data = &.{},
+                },
             },
             .Structure => |s| blk: {
                 const value: Value = .{ .Structure = allocator.alloc(Value, member_count) catch return RuntimeError.OutOfMemory };
@@ -675,4 +898,15 @@ pub fn initValue(allocator: std.mem.Allocator, member_count: usize, results: []c
         },
         else => RuntimeError.InvalidSpirV,
     };
+}
+
+pub fn flushPtr(self: *Self, allocator: std.mem.Allocator) RuntimeError!void {
+    if (self.variant) |*variant| {
+        switch (variant.*) {
+            .Constant => |*c| try c.value.flushPtr(allocator),
+            .Variable => |*v| try v.value.flushPtr(allocator),
+            .AccessChain => |*a| try a.value.flushPtr(allocator),
+            else => {},
+        }
+    }
 }
