@@ -54,7 +54,7 @@ pub const case = struct {
 
             for (config.descriptor_sets, 0..) |descriptor_set, set_index| {
                 for (descriptor_set, 0..) |descriptor_binding, binding_index| {
-                    try rt.writeDescriptorSet(descriptor_binding, @intCast(set_index), @intCast(binding_index));
+                    try rt.writeDescriptorSet(descriptor_binding, @intCast(set_index), @intCast(binding_index), 0);
                 }
             }
 

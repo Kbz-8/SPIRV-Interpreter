@@ -104,7 +104,8 @@ pub fn getResultByName(self: *const Self, name: []const u8) error{NotFound}!SpvW
 pub fn callEntryPoint(self: *Self, allocator: std.mem.Allocator, entry_point_index: SpvWord) RuntimeError!void {
     self.reset();
 
-    if (entry_point_index > self.mod.entry_points.items.len) return RuntimeError.InvalidEntryPoint;
+    if (entry_point_index > self.mod.entry_points.items.len)
+        return RuntimeError.InvalidEntryPoint;
 
     {
         const entry_point_desc = &self.mod.entry_points.items[entry_point_index];
@@ -151,9 +152,21 @@ pub fn callEntryPoint(self: *Self, allocator: std.mem.Allocator, entry_point_ind
     //}) catch return RuntimeError.OutOfMemory;
 }
 
-pub fn writeDescriptorSet(self: *const Self, input: []u8, set: SpvWord, binding: SpvWord) RuntimeError!void {
+pub fn writeDescriptorSet(self: *const Self, input: []u8, set: SpvWord, binding: SpvWord, descriptor_index: SpvWord) RuntimeError!void {
     if (set < lib.SPIRV_MAX_SET and binding < lib.SPIRV_MAX_SET_BINDINGS) {
-        _ = try self.results[self.mod.bindings[set][binding]].variant.?.Variable.value.write(input);
+        const value = &self.results[self.mod.bindings[set][binding]].variant.?.Variable.value;
+        switch (value.*) {
+            .Array => |arr| {
+                if (descriptor_index >= arr.len)
+                    return RuntimeError.NotFound;
+                _ = try arr[descriptor_index].write(input);
+            },
+            else => {
+                if (descriptor_index != 0)
+                    return RuntimeError.NotFound;
+                _ = try value.write(input);
+            },
+        }
     } else {
         return RuntimeError.NotFound;
     }
