@@ -374,6 +374,7 @@ pub const Value = union(Type) {
                 inline for (0..4) |i| {
                     const start = i * 4;
                     const end = (i + 1) * 4;
+                    if (start >= input.len or end >= input.len) return RuntimeError.OutOfBounds;
                     std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
                 }
                 return 4 * 4;
@@ -382,6 +383,7 @@ pub const Value = union(Type) {
                 inline for (0..3) |i| {
                     const start = i * 4;
                     const end = (i + 1) * 4;
+                    if (start >= input.len or end >= input.len) return RuntimeError.OutOfBounds;
                     std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
                 }
                 return 3 * 4;
@@ -390,6 +392,7 @@ pub const Value = union(Type) {
                 inline for (0..2) |i| {
                     const start = i * 4;
                     const end = (i + 1) * 4;
+                    if (start >= input.len or end >= input.len) return RuntimeError.OutOfBounds;
                     std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
                 }
                 return 2 * 4;
@@ -398,6 +401,7 @@ pub const Value = union(Type) {
                 inline for (0..4) |i| {
                     const start = i * 4;
                     const end = (i + 1) * 4;
+                    if (start >= input.len or end >= input.len) return RuntimeError.OutOfBounds;
                     std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
                 }
                 return 4 * 4;
@@ -406,6 +410,7 @@ pub const Value = union(Type) {
                 inline for (0..3) |i| {
                     const start = i * 4;
                     const end = (i + 1) * 4;
+                    if (start >= input.len or end >= input.len) return RuntimeError.OutOfBounds;
                     std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
                 }
                 return 3 * 4;
@@ -414,6 +419,7 @@ pub const Value = union(Type) {
                 inline for (0..2) |i| {
                     const start = i * 4;
                     const end = (i + 1) * 4;
+                    if (start >= input.len or end >= input.len) return RuntimeError.OutOfBounds;
                     std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
                 }
                 return 2 * 4;
@@ -422,6 +428,7 @@ pub const Value = union(Type) {
                 inline for (0..4) |i| {
                     const start = i * 4;
                     const end = (i + 1) * 4;
+                    if (start >= input.len or end >= input.len) return RuntimeError.OutOfBounds;
                     std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
                 }
                 return 4 * 4;
@@ -430,6 +437,7 @@ pub const Value = union(Type) {
                 inline for (0..3) |i| {
                     const start = i * 4;
                     const end = (i + 1) * 4;
+                    if (start >= input.len or end >= input.len) return RuntimeError.OutOfBounds;
                     std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
                 }
                 return 3 * 4;
@@ -438,6 +446,7 @@ pub const Value = union(Type) {
                 inline for (0..2) |i| {
                     const start = i * 4;
                     const end = (i + 1) * 4;
+                    if (start >= input.len or end >= input.len) return RuntimeError.OutOfBounds;
                     std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
                 }
                 return 2 * 4;
@@ -796,17 +805,21 @@ pub fn resolveSign(target_type: TypeData, rt: *const Runtime) RuntimeError!enum 
     };
 }
 
-pub fn resolveType(self: *const Self, results: []const Self) *const Self {
+pub inline fn resolveType(self: *const Self, results: []const Self) *const Self {
+    return if (self.resolveTypeWordOrNull()) |word| &results[word] else self;
+}
+
+pub fn resolveTypeWordOrNull(self: *const Self) ?SpvWord {
     return if (self.variant) |variant|
         switch (variant) {
             .Type => |t| switch (t) {
-                .Pointer => |ptr| &results[ptr.target],
-                else => self,
+                .Pointer => |ptr| ptr.target,
+                else => null,
             },
-            else => self,
+            else => null,
         }
     else
-        self;
+        null;
 }
 
 pub fn getMemberCounts(self: *const Self) usize {
