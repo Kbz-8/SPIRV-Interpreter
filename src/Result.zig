@@ -374,7 +374,7 @@ pub const Value = union(Type) {
                 inline for (0..4) |i| {
                     const start = i * 4;
                     const end = (i + 1) * 4;
-                    if (start >= input.len or end >= input.len) return RuntimeError.OutOfBounds;
+                    if (start >= input.len or end > input.len) return RuntimeError.OutOfBounds;
                     std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
                 }
                 return 4 * 4;
@@ -383,7 +383,7 @@ pub const Value = union(Type) {
                 inline for (0..3) |i| {
                     const start = i * 4;
                     const end = (i + 1) * 4;
-                    if (start >= input.len or end >= input.len) return RuntimeError.OutOfBounds;
+                    if (start >= input.len or end > input.len) return RuntimeError.OutOfBounds;
                     std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
                 }
                 return 3 * 4;
@@ -392,7 +392,7 @@ pub const Value = union(Type) {
                 inline for (0..2) |i| {
                     const start = i * 4;
                     const end = (i + 1) * 4;
-                    if (start >= input.len or end >= input.len) return RuntimeError.OutOfBounds;
+                    if (start >= input.len or end > input.len) return RuntimeError.OutOfBounds;
                     std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
                 }
                 return 2 * 4;
@@ -401,7 +401,7 @@ pub const Value = union(Type) {
                 inline for (0..4) |i| {
                     const start = i * 4;
                     const end = (i + 1) * 4;
-                    if (start >= input.len or end >= input.len) return RuntimeError.OutOfBounds;
+                    if (start >= input.len or end > input.len) return RuntimeError.OutOfBounds;
                     std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
                 }
                 return 4 * 4;
@@ -410,7 +410,7 @@ pub const Value = union(Type) {
                 inline for (0..3) |i| {
                     const start = i * 4;
                     const end = (i + 1) * 4;
-                    if (start >= input.len or end >= input.len) return RuntimeError.OutOfBounds;
+                    if (start >= input.len or end > input.len) return RuntimeError.OutOfBounds;
                     std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
                 }
                 return 3 * 4;
@@ -419,7 +419,7 @@ pub const Value = union(Type) {
                 inline for (0..2) |i| {
                     const start = i * 4;
                     const end = (i + 1) * 4;
-                    if (start >= input.len or end >= input.len) return RuntimeError.OutOfBounds;
+                    if (start >= input.len or end > input.len) return RuntimeError.OutOfBounds;
                     std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
                 }
                 return 2 * 4;
@@ -428,7 +428,7 @@ pub const Value = union(Type) {
                 inline for (0..4) |i| {
                     const start = i * 4;
                     const end = (i + 1) * 4;
-                    if (start >= input.len or end >= input.len) return RuntimeError.OutOfBounds;
+                    if (start >= input.len or end > input.len) return RuntimeError.OutOfBounds;
                     std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
                 }
                 return 4 * 4;
@@ -437,7 +437,7 @@ pub const Value = union(Type) {
                 inline for (0..3) |i| {
                     const start = i * 4;
                     const end = (i + 1) * 4;
-                    if (start >= input.len or end >= input.len) return RuntimeError.OutOfBounds;
+                    if (start >= input.len or end > input.len) return RuntimeError.OutOfBounds;
                     std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
                 }
                 return 3 * 4;
@@ -446,7 +446,7 @@ pub const Value = union(Type) {
                 inline for (0..2) |i| {
                     const start = i * 4;
                     const end = (i + 1) * 4;
-                    if (start >= input.len or end >= input.len) return RuntimeError.OutOfBounds;
+                    if (start >= input.len or end > input.len) return RuntimeError.OutOfBounds;
                     std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
                 }
                 return 2 * 4;
