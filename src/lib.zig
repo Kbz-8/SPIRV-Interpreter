@@ -21,7 +21,7 @@
 //!
 //!         try rt.callEntryPoint(allocator, try rt.getEntryPointByName("main"));
 //!         var output: [4]f32 = undefined;
-//!         try rt.readOutput(f32, output[0..output.len], try rt.getResultByName("color"));
+//!         try rt.readOutput(std.mem.asBytes(output[0..output.len]), try rt.getResultByName("color"));
 //!         std.log.info("Output: Vec4{any}", .{output});
 //!     }
 //!     std.log.info("Successfully executed", .{});

@@ -30,13 +30,17 @@ pub fn main() !void {
         var runner_cache: std.ArrayList(Runner) = try .initCapacity(allocator, screen_height);
         defer {
             for (runner_cache.items) |*runner| {
-                runner.rt.deinit(allocator);
+                allocator.free(runner.heap);
             }
             runner_cache.deinit(allocator);
         }
 
         for (0..screen_height) |_| {
-            var rt = try spv.Runtime.init(allocator, &module);
+            const heap = try allocator.alloc(u8, module.needed_runtime_bytes);
+            errdefer allocator.free(heap);
+
+            var buffer_allocator: std.heap.FixedBufferAllocator = .init(heap);
+            var rt = try spv.Runtime.init(buffer_allocator.allocator(), &module);
             (try runner_cache.addOne(allocator)).* = .{
                 .allocator = allocator,
                 .surface = surface,
@@ -46,6 +50,7 @@ pub fn main() !void {
                 .time = try rt.getResultByName("time"),
                 .pos = try rt.getResultByName("pos"),
                 .res = try rt.getResultByName("res"),
+                .heap = heap,
             };
         }
 
@@ -105,6 +110,7 @@ const Runner = struct {
     time: spv.SpvWord,
     pos: spv.SpvWord,
     res: spv.SpvWord,
+    heap: []u8,
 
     fn runWrapper(self: *Self, y: usize, pixel_map: [*]u32, timer: f32) void {
         @call(.always_inline, Self.run, .{ self, y, pixel_map, timer }) catch |err| {
@@ -122,11 +128,11 @@ const Runner = struct {
         var output: [4]f32 = undefined;
 
         for (0..screen_width) |x| {
-            try rt.writeInput(&.{timer}, self.time);
-            try rt.writeInput(&.{ @floatFromInt(screen_width), @floatFromInt(screen_height) }, self.res);
-            try rt.writeInput(&.{ @floatFromInt(x), @floatFromInt(y) }, self.pos);
+            try rt.writeInput(std.mem.asBytes(&timer), self.time);
+            try rt.writeInput(std.mem.asBytes(&[_]f32{ @floatFromInt(screen_width), @floatFromInt(screen_height) }), self.res);
+            try rt.writeInput(std.mem.asBytes(&[_]f32{ @floatFromInt(x), @floatFromInt(y) }), self.pos);
             try rt.callEntryPoint(self.allocator, self.entry);
-            try rt.readOutput(output[0..], self.color);
+            try rt.readOutput(std.mem.asBytes(output[0..]), self.color);
 
             const rgba = self.surface.mapRgba(
                 @intCast(@max(@min(@as(i32, @intFromFloat(output[0] * 255.0)), 255), 0)),

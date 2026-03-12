@@ -113,7 +113,8 @@ pub fn callEntryPoint(self: *Self, allocator: std.mem.Allocator, entry_point_ind
         if (entry_point_result.variant) |variant| {
             switch (variant) {
                 .Function => |f| {
-                    if (!self.it.jumpToSourceLocation(f.source_location)) return RuntimeError.InvalidEntryPoint;
+                    if (!self.it.jumpToSourceLocation(f.source_location))
+                        return RuntimeError.InvalidEntryPoint;
                     self.function_stack.append(allocator, .{
                         .source_location = f.source_location,
                         .result = entry_point_result,
