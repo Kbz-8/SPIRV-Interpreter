@@ -963,27 +963,24 @@ fn opBitcast(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
 
 fn copyValue(dst: *Result.Value, src: *const Result.Value) void {
     const helpers = struct {
-        fn copySlice(dst_slice: []Result.Value, src_slice: []const Result.Value) void {
+        inline fn copySlice(dst_slice: []Result.Value, src_slice: []const Result.Value) void {
             for (0..@min(dst_slice.len, src_slice.len)) |i| {
                 copyValue(&dst_slice[i], &src_slice[i]);
             }
         }
 
-        fn getDstSlice(v: *Result.Value) ?[]Result.Value {
+        inline fn getDstSlice(v: *Result.Value) ?[]Result.Value {
             return switch (v.*) {
                 .Vector, .Matrix, .Array, .Structure => |s| s,
                 else => null,
             };
         }
 
-        fn writeF32(dst_f32_ptr: *f32, src_v: *const Result.Value) void {
+        inline fn writeF32(dst_f32_ptr: *f32, src_v: *const Result.Value) void {
             switch (src_v.*) {
                 .Pointer => |src_ptr| switch (src_ptr.ptr) {
                     .f32_ptr => |src_f32_ptr| dst_f32_ptr.* = src_f32_ptr.*,
-                    .common => |src_val_ptr| switch (src_val_ptr.*) {
-                        .Float => |f| dst_f32_ptr.* = f.value.float32,
-                        else => unreachable,
-                    },
+                    .common => |src_val_ptr| dst_f32_ptr.* = src_val_ptr.Float.value.float32,
                     else => unreachable,
                 },
                 .Float => |f| dst_f32_ptr.* = f.value.float32,
@@ -991,14 +988,11 @@ fn copyValue(dst: *Result.Value, src: *const Result.Value) void {
             }
         }
 
-        fn writeI32(dst_i32_ptr: *i32, src_v: *const Result.Value) void {
+        inline fn writeI32(dst_i32_ptr: *i32, src_v: *const Result.Value) void {
             switch (src_v.*) {
                 .Pointer => |src_ptr| switch (src_ptr.ptr) {
                     .i32_ptr => |src_i32_ptr| dst_i32_ptr.* = src_i32_ptr.*,
-                    .common => |src_val_ptr| switch (src_val_ptr.*) {
-                        .Int => |i| dst_i32_ptr.* = i.value.sint32,
-                        else => unreachable,
-                    },
+                    .common => |src_val_ptr| dst_i32_ptr.* = src_val_ptr.Int.value.sint32,
                     else => unreachable,
                 },
                 .Int => |i| dst_i32_ptr.* = i.value.sint32,
@@ -1006,14 +1000,11 @@ fn copyValue(dst: *Result.Value, src: *const Result.Value) void {
             }
         }
 
-        fn writeU32(dst_u32_ptr: *u32, src_v: *const Result.Value) void {
+        inline fn writeU32(dst_u32_ptr: *u32, src_v: *const Result.Value) void {
             switch (src_v.*) {
                 .Pointer => |src_ptr| switch (src_ptr.ptr) {
                     .u32_ptr => |src_u32_ptr| dst_u32_ptr.* = src_u32_ptr.*,
-                    .common => |src_val_ptr| switch (src_val_ptr.*) {
-                        .Int => |i| dst_u32_ptr.* = i.value.uint32,
-                        else => unreachable,
-                    },
+                    .common => |src_val_ptr| dst_u32_ptr.* = src_val_ptr.Int.value.uint32,
                     else => unreachable,
                 },
                 .Int => |i| dst_u32_ptr.* = i.value.uint32,
@@ -1046,21 +1037,14 @@ fn copyValue(dst: *Result.Value, src: *const Result.Value) void {
         }
     }
 
-    if (std.meta.activeTag(src.*) == .Pointer) {
-        switch (src.Pointer.ptr) {
-            .common => |src_val_ptr| {
-                copyValue(dst, src_val_ptr);
-                return;
-            },
-            else => {},
-        }
-    }
-
-    const dst_slice = helpers.getDstSlice(dst);
-
     switch (src.*) {
         .Vector, .Matrix, .Array, .Structure => |src_slice| {
+            const dst_slice = helpers.getDstSlice(dst);
             helpers.copySlice(dst_slice.?, src_slice);
+        },
+        .Pointer => |ptr| switch (ptr.ptr) {
+            .common => |src_val_ptr| copyValue(dst, src_val_ptr),
+            else => {},
         },
         else => dst.* = src.*,
     }
