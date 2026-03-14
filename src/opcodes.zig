@@ -7,6 +7,7 @@ const GLSL_std_450 = @import("GLSL_std_450/opcodes.zig");
 const Module = @import("Module.zig");
 const Runtime = @import("Runtime.zig");
 const Result = @import("Result.zig");
+const Value = @import("Value.zig").Value;
 const WordIterator = @import("WordIterator.zig");
 
 const RuntimeError = Runtime.RuntimeError;
@@ -359,7 +360,7 @@ fn BitOperator(comptime T: ValueType, comptime Op: BitOp) type {
             };
         }
 
-        fn applyScalarBits(rt: *Runtime, bit_count: SpvWord, dst: *Result.Value, op1_v: *const Result.Value, op2_v: ?*const Result.Value) RuntimeError!void {
+        fn applyScalarBits(rt: *Runtime, bit_count: SpvWord, dst: *Value, op1_v: *const Value, op2_v: ?*const Value) RuntimeError!void {
             switch (bit_count) {
                 inline 8, 16, 32, 64 => |bits| {
                     const TT = getValuePrimitiveFieldType(T, bits);
@@ -379,13 +380,13 @@ fn BitOperator(comptime T: ValueType, comptime Op: BitOp) type {
             }
         }
 
-        fn laneRhsPtr(op2_value: ?*Result.Value, index: usize) ?*const Result.Value {
+        fn laneRhsPtr(op2_value: ?*Value, index: usize) ?*const Value {
             if (comptime isUnaryOp()) return null;
             const v = op2_value orelse return null;
             return &v.Vector[index];
         }
 
-        fn applyFixedVector(comptime ElemT: type, comptime N: usize, dst: *[N]ElemT, op1: *[N]ElemT, op2_value: ?*Result.Value) RuntimeError!void {
+        fn applyFixedVector(comptime ElemT: type, comptime N: usize, dst: *[N]ElemT, op1: *[N]ElemT, op2_value: ?*Value) RuntimeError!void {
             if (comptime isUnaryOp()) {
                 inline for (0..N) |i| dst[i] = try operationUnary(ElemT, op1[i]);
             } else {
@@ -432,7 +433,7 @@ fn BitEngine(comptime T: ValueType, comptime Op: BitOp) type {
 
             const operator = BitOperator(T, Op);
 
-            const op2_value: ?*Result.Value = if (comptime operator.isUnaryOp()) null else try rt.results[try rt.it.next()].getValue();
+            const op2_value: ?*Value = if (comptime operator.isUnaryOp()) null else try rt.results[try rt.it.next()].getValue();
 
             const lane_bits = try Result.resolveLaneBitWidth(target_type, rt);
 
@@ -529,7 +530,7 @@ fn CondOperator(comptime T: ValueType, comptime Op: CondOp) type {
             };
         }
 
-        fn applyLane(bit_count: SpvWord, dst_bool: *Result.Value, a_v: *const Result.Value, b_v: ?*const Result.Value) RuntimeError!void {
+        fn applyLane(bit_count: SpvWord, dst_bool: *Value, a_v: *const Value, b_v: ?*const Value) RuntimeError!void {
             switch (bit_count) {
                 inline 8, 16, 32, 64 => |bits| {
                     if (bits == 8 and T == .Float) return RuntimeError.InvalidSpirV;
@@ -549,7 +550,7 @@ fn CondOperator(comptime T: ValueType, comptime Op: CondOp) type {
             }
         }
 
-        fn laneRhsPtr(op2_value: ?*Result.Value, index: usize) ?*const Result.Value {
+        fn laneRhsPtr(op2_value: ?*Value, index: usize) ?*const Value {
             if (comptime Op == .LogicalNot) return null;
             const v = op2_value orelse return null;
             return &v.Vector[index];
@@ -572,7 +573,7 @@ fn CondEngine(comptime T: ValueType, comptime Op: CondOp) type {
             const op1_type = try op1_result.getValueTypeWord();
             const op1_value = try op1_result.getValue();
 
-            const op2_value: ?*Result.Value = if (unary_condition_set.contains(Op)) null else try rt.results[try rt.it.next()].getValue();
+            const op2_value: ?*Value = if (unary_condition_set.contains(Op)) null else try rt.results[try rt.it.next()].getValue();
 
             const lane_bits = try Result.resolveLaneBitWidth((try rt.results[op1_type].getVariant()).Type, rt);
 
@@ -606,7 +607,7 @@ fn ConversionEngine(comptime from_kind: ValueType, comptime to_kind: ValueType) 
             const to_bits = try Result.resolveLaneBitWidth(target_type, rt);
 
             const caster = struct {
-                fn castLane(comptime ToT: type, from_bit_count: SpvWord, from: *Result.Value) RuntimeError!ToT {
+                fn castLane(comptime ToT: type, from_bit_count: SpvWord, from: *Value) RuntimeError!ToT {
                     return switch (from_bit_count) {
                         inline 8, 16, 32, 64 => |bits| blk: {
                             if (bits == 8 and from_kind == .Float) return RuntimeError.InvalidSpirV; // No f8
@@ -617,7 +618,7 @@ fn ConversionEngine(comptime from_kind: ValueType, comptime to_kind: ValueType) 
                     };
                 }
 
-                fn applyScalar(from_bit_count: SpvWord, to_bit_count: SpvWord, dst: *Result.Value, from: *Result.Value) RuntimeError!void {
+                fn applyScalar(from_bit_count: SpvWord, to_bit_count: SpvWord, dst: *Value, from: *Value) RuntimeError!void {
                     switch (to_bit_count) {
                         inline 8, 16, 32, 64 => |bits| {
                             if (bits == 8 and to_kind == .Float) return RuntimeError.InvalidSpirV; // No f8
@@ -743,7 +744,7 @@ fn MathEngine(comptime T: ValueType, comptime Op: MathOp) type {
                     };
                 }
 
-                fn applyScalar(bit_count: SpvWord, d: *Result.Value, l: *Result.Value, r: *Result.Value) RuntimeError!void {
+                fn applyScalar(bit_count: SpvWord, d: *Value, l: *Value, r: *Value) RuntimeError!void {
                     switch (bit_count) {
                         inline 8, 16, 32, 64 => |bits| {
                             if (bits == 8 and T == .Float) return RuntimeError.InvalidSpirV;
@@ -758,7 +759,7 @@ fn MathEngine(comptime T: ValueType, comptime Op: MathOp) type {
                     }
                 }
 
-                inline fn applyVectorTimesScalarF32(d: []Result.Value, l: []const Result.Value, r: f32) void {
+                inline fn applyVectorTimesScalarF32(d: []Value, l: []const Value, r: f32) void {
                     for (d, l) |*d_v, l_v| {
                         d_v.Float.value.float32 = l_v.Float.value.float32 * r;
                     }
@@ -776,7 +777,7 @@ fn MathEngine(comptime T: ValueType, comptime Op: MathOp) type {
                     }
                 }
 
-                inline fn applySIMDVectorf32(comptime N: usize, d: *@Vector(N, f32), l: *const @Vector(N, f32), r: *const Result.Value) RuntimeError!void {
+                inline fn applySIMDVectorf32(comptime N: usize, d: *@Vector(N, f32), l: *const @Vector(N, f32), r: *const Value) RuntimeError!void {
                     switch (Op) {
                         .VectorTimesScalar => applyVectorSIMDTimesScalarF32(N, d, l, r.Float.value.float32),
                         else => {
@@ -833,7 +834,7 @@ fn MathEngine(comptime T: ValueType, comptime Op: MathOp) type {
                     };
                 }
 
-                fn applyScalar(bit_count: SpvWord, d: *Result.Value, v: *Result.Value) RuntimeError!void {
+                fn applyScalar(bit_count: SpvWord, d: *Value, v: *Value) RuntimeError!void {
                     switch (bit_count) {
                         inline 8, 16, 32, 64 => |bits| {
                             if (bits == 8 and T == .Float) return RuntimeError.InvalidSpirV;
@@ -938,7 +939,7 @@ fn opBitcast(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
 
     const caster = struct {
         /// Asumes that values passed are primitives ints or floats
-        fn cast(to: *Result.Value, from: *const Result.Value) RuntimeError!void {
+        fn cast(to: *Value, from: *const Value) RuntimeError!void {
             const from_bytes: u64 = switch (from.*) {
                 .Float => |f| @bitCast(f.value.float64),
                 .Int => |i| i.value.uint64,
@@ -961,22 +962,22 @@ fn opBitcast(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     }
 }
 
-fn copyValue(dst: *Result.Value, src: *const Result.Value) void {
+fn copyValue(dst: *Value, src: *const Value) void {
     const helpers = struct {
-        inline fn copySlice(dst_slice: []Result.Value, src_slice: []const Result.Value) void {
+        inline fn copySlice(dst_slice: []Value, src_slice: []const Value) void {
             for (0..@min(dst_slice.len, src_slice.len)) |i| {
                 copyValue(&dst_slice[i], &src_slice[i]);
             }
         }
 
-        inline fn getDstSlice(v: *Result.Value) ?[]Result.Value {
+        inline fn getDstSlice(v: *Value) ?[]Value {
             return switch (v.*) {
                 .Vector, .Matrix, .Array, .Structure => |s| s,
                 else => null,
             };
         }
 
-        inline fn writeF32(dst_f32_ptr: *f32, src_v: *const Result.Value) void {
+        inline fn writeF32(dst_f32_ptr: *f32, src_v: *const Value) void {
             switch (src_v.*) {
                 .Pointer => |src_ptr| switch (src_ptr.ptr) {
                     .f32_ptr => |src_f32_ptr| dst_f32_ptr.* = src_f32_ptr.*,
@@ -988,7 +989,7 @@ fn copyValue(dst: *Result.Value, src: *const Result.Value) void {
             }
         }
 
-        inline fn writeI32(dst_i32_ptr: *i32, src_v: *const Result.Value) void {
+        inline fn writeI32(dst_i32_ptr: *i32, src_v: *const Value) void {
             switch (src_v.*) {
                 .Pointer => |src_ptr| switch (src_ptr.ptr) {
                     .i32_ptr => |src_i32_ptr| dst_i32_ptr.* = src_i32_ptr.*,
@@ -1000,7 +1001,7 @@ fn copyValue(dst: *Result.Value, src: *const Result.Value) void {
             }
         }
 
-        inline fn writeU32(dst_u32_ptr: *u32, src_v: *const Result.Value) void {
+        inline fn writeU32(dst_u32_ptr: *u32, src_v: *const Value) void {
             switch (src_v.*) {
                 .Pointer => |src_ptr| switch (src_ptr.ptr) {
                     .u32_ptr => |src_u32_ptr| dst_u32_ptr.* = src_u32_ptr.*,
@@ -1050,7 +1051,7 @@ fn copyValue(dst: *Result.Value, src: *const Result.Value) void {
     }
 }
 
-pub fn getValuePrimitiveField(comptime T: ValueType, comptime BitCount: SpvWord, v: *Result.Value) RuntimeError!*getValuePrimitiveFieldType(T, BitCount) {
+pub fn getValuePrimitiveField(comptime T: ValueType, comptime BitCount: SpvWord, v: *Value) RuntimeError!*getValuePrimitiveFieldType(T, BitCount) {
     if (std.meta.activeTag(v.*) == .Pointer) {
         return switch (v.Pointer.ptr) {
             .common => |value| getValuePrimitiveField(T, BitCount, value),
@@ -1138,10 +1139,10 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                     const concrete_allocator = if (is_last) allocator else arena_allocator;
                                     const type_size = (try rt.results[arr.type_word].getVariant()).Type.getSize(rt.results);
 
-                                    value_ptr = concrete_allocator.create(Result.Value) catch return RuntimeError.OutOfMemory;
+                                    value_ptr = concrete_allocator.create(Value) catch return RuntimeError.OutOfMemory;
                                     errdefer concrete_allocator.destroy(value_ptr);
 
-                                    value_ptr.* = try Result.Value.init(concrete_allocator, rt.results, arr.type_word);
+                                    value_ptr.* = try Value.init(concrete_allocator, rt.results, arr.type_word);
                                     _ = try value_ptr.writeConst(arr.data[(type_size * i.value.uint32)..]);
 
                                     if (is_last)
@@ -1314,7 +1315,7 @@ fn opCompositeExtract(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Ru
                     switch (composite) {
                         .RuntimeArray => |arr| {
                             const type_size = (try rt.results[arr.type_word].getVariant()).Type.getSize(rt.results);
-                            composite = try Result.Value.init(arena_allocator, rt.results, arr.type_word);
+                            composite = try Value.init(arena_allocator, rt.results, arr.type_word);
                             _ = try composite.writeConst(arr.data[(type_size * member_id)..]);
                         },
                         .Vector4f32 => |v| break :blk .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = v[member_id] } } },
@@ -1368,6 +1369,38 @@ fn opConstantComposite(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) R
         for (values.*) |*element| {
             copyValue(element, try rt.mod.results[try rt.it.next()].getValue());
         }
+        return;
+    }
+
+    switch (target_value.*) {
+        .Vector4f32 => |*v| inline for (0..4) |i| {
+            v[i] = (try rt.mod.results[try rt.it.next()].getValue()).Float.value.float32;
+        },
+        .Vector3f32 => |*v| inline for (0..3) |i| {
+            v[i] = (try rt.mod.results[try rt.it.next()].getValue()).Float.value.float32;
+        },
+        .Vector2f32 => |*v| inline for (0..2) |i| {
+            v[i] = (try rt.mod.results[try rt.it.next()].getValue()).Float.value.float32;
+        },
+        .Vector4i32 => |*v| inline for (0..4) |i| {
+            v[i] = (try rt.mod.results[try rt.it.next()].getValue()).Int.value.sint32;
+        },
+        .Vector3i32 => |*v| inline for (0..3) |i| {
+            v[i] = (try rt.mod.results[try rt.it.next()].getValue()).Int.value.sint32;
+        },
+        .Vector2i32 => |*v| inline for (0..2) |i| {
+            v[i] = (try rt.mod.results[try rt.it.next()].getValue()).Int.value.sint32;
+        },
+        .Vector4u32 => |*v| inline for (0..4) |i| {
+            v[i] = (try rt.mod.results[try rt.it.next()].getValue()).Int.value.uint32;
+        },
+        .Vector3u32 => |*v| inline for (0..3) |i| {
+            v[i] = (try rt.mod.results[try rt.it.next()].getValue()).Int.value.uint32;
+        },
+        .Vector2u32 => |*v| inline for (0..2) |i| {
+            v[i] = (try rt.mod.results[try rt.it.next()].getValue()).Int.value.uint32;
+        },
+        else => return RuntimeError.InvalidSpirV,
     }
 }
 

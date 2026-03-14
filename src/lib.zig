@@ -42,6 +42,18 @@ pub const SpvByte = spv.SpvByte;
 pub const SpvWord = spv.SpvWord;
 pub const SpvBool = spv.SpvBool;
 
+pub const Vec4f32 = @Vector(4, f32);
+pub const Vec3f32 = @Vector(3, f32);
+pub const Vec2f32 = @Vector(2, f32);
+
+pub const Vec4i32 = @Vector(4, i32);
+pub const Vec3i32 = @Vector(3, i32);
+pub const Vec2i32 = @Vector(2, i32);
+
+pub const Vec4u32 = @Vector(4, u32);
+pub const Vec3u32 = @Vector(3, u32);
+pub const Vec2u32 = @Vector(2, u32);
+
 pub const GLSL_std_450 = @import("GLSL_std_450/opcodes.zig");
 
 /// Maximum number of input locations per module

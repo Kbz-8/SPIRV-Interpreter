@@ -8,6 +8,7 @@ const Module = @import("../Module.zig");
 const Runtime = @import("../Runtime.zig");
 const Result = @import("../Result.zig");
 const WordIterator = @import("../WordIterator.zig");
+const Value = @import("../Value.zig").Value;
 
 const RuntimeError = Runtime.RuntimeError;
 const ValueType = opc.ValueType;
@@ -123,7 +124,7 @@ fn MathEngine(comptime T: ValueType, comptime Op: MathOp) type {
                     };
                 }
 
-                fn applyScalar(bit_count: SpvWord, d: *Result.Value, s: *const Result.Value) RuntimeError!void {
+                fn applyScalar(bit_count: SpvWord, d: *Value, s: *const Value) RuntimeError!void {
                     switch (bit_count) {
                         inline 8, 16, 32, 64 => |bits| {
                             if (bits == 8 and T == .Float) return RuntimeError.InvalidSpirV;
@@ -177,7 +178,7 @@ fn MathEngine(comptime T: ValueType, comptime Op: MathOp) type {
                     };
                 }
 
-                fn applyScalar(bit_count: SpvWord, d: *Result.Value, l: *const Result.Value, r: *const Result.Value) RuntimeError!void {
+                fn applyScalar(bit_count: SpvWord, d: *Value, l: *const Value, r: *const Value) RuntimeError!void {
                     switch (bit_count) {
                         inline 8, 16, 32, 64 => |bits| {
                             if (bits == 8 and T == .Float) return RuntimeError.InvalidSpirV;

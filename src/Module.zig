@@ -13,9 +13,8 @@ const SpvBinding = spv.SpvBinding;
 
 const Result = @import("Result.zig");
 const Runtime = @import("Runtime.zig");
+const Value = @import("Value.zig").Value;
 const WordIterator = @import("WordIterator.zig");
-
-const Value = Result.Value;
 
 const Self = @This();
 
