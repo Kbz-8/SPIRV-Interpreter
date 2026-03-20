@@ -516,7 +516,10 @@ fn CondOperator(comptime T: ValueType, comptime Op: CondOp) type {
             }
             return switch (Op) {
                 .IsFinite => std.math.isFinite(a),
-                .IsInf => std.math.isInf(a),
+                .IsInf => blk: {
+                    std.debug.print("test {s} - {d} - {s}\n", .{ @typeName(TT), a, if (std.math.isInf(a)) "true" else "false" });
+                    break :blk std.math.isInf(a);
+                },
                 .IsNan => std.math.isNan(a),
                 .IsNormal => std.math.isNormal(a),
                 else => RuntimeError.InvalidSpirV,
@@ -1186,7 +1189,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
         .AccessChain = .{
             .target = var_type,
             .value = blk: {
-                var runtime_array_window: ?[]u8 = null;
+                var uniform_slice_window: ?[]u8 = null;
 
                 for (0..index_count) |index| {
                     const is_last = (index == index_count - 1);
@@ -1213,7 +1216,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                 .RuntimeArray => |*arr| {
                                     value_ptr = try arr.createValueFromIndex(if (is_last) allocator else arena_allocator, rt.results, i.value.uint32);
                                     if (is_last)
-                                        runtime_array_window = arr.data[(try arr.getOffsetOfIndex(i.value.uint32))..];
+                                        uniform_slice_window = arr.data[(try arr.getOffsetOfIndex(i.value.uint32))..];
                                 },
                                 .Vector4f32 => |*v| {
                                     if (i.value.uint32 > 4) return RuntimeError.OutOfBounds;
@@ -1260,7 +1263,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                 break :blk .{
                     .Pointer = .{
                         .ptr = .{ .common = value_ptr },
-                        .runtime_array_window = runtime_array_window,
+                        .uniform_slice_window = uniform_slice_window,
                     },
                 };
             },

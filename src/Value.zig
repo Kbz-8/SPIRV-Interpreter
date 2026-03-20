@@ -93,7 +93,7 @@ pub const Value = union(Type) {
             i32_ptr: *i32, //< For vector specializations
             u32_ptr: *u32,
         },
-        runtime_array_window: ?[]u8 = null,
+        uniform_slice_window: ?[]u8 = null,
     },
 
     pub inline fn getCompositeDataOrNull(self: *const Self) ?[]Self {
@@ -440,7 +440,7 @@ pub const Value = union(Type) {
     pub fn flushPtr(self: *Self, allocator: std.mem.Allocator) RuntimeError!void {
         switch (self.*) {
             .Pointer => |*p| {
-                if (p.runtime_array_window) |window| {
+                if (p.uniform_slice_window) |window| {
                     switch (p.ptr) {
                         .common => |ptr| {
                             _ = try ptr.read(window);
@@ -450,7 +450,7 @@ pub const Value = union(Type) {
                         else => {},
                     }
                 }
-                p.runtime_array_window = null;
+                p.uniform_slice_window = null;
             },
             else => {},
         }
