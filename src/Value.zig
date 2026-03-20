@@ -64,7 +64,22 @@ pub const Value = union(Type) {
     Array: []Self,
     RuntimeArray: struct {
         type_word: SpvWord,
+        stride: SpvWord,
         data: []u8,
+
+        pub inline fn createValueFromIndex(self: *const @This(), allocator: std.mem.Allocator, results: []Result, index: usize) RuntimeError!*Value {
+            const value = allocator.create(Value) catch return RuntimeError.OutOfMemory;
+            errdefer allocator.destroy(value);
+
+            value.* = try Value.init(allocator, results, self.type_word);
+            _ = try value.writeConst(self.data[(try self.getOffsetOfIndex(index))..]);
+
+            return value;
+        }
+
+        pub inline fn getOffsetOfIndex(self: *const @This(), index: usize) RuntimeError!usize {
+            return self.stride * index;
+        }
     },
     Structure: []Self,
     Function: noreturn,
@@ -94,6 +109,7 @@ pub const Value = union(Type) {
 
         return switch (resolved.variant.?) {
             .Type => |t| switch (t) {
+                .Void => .{ .Void = .{} },
                 .Bool => .{ .Bool = false },
                 .Int => |i| .{ .Int = .{
                     .bit_count = i.bit_length,
@@ -151,12 +167,16 @@ pub const Value = union(Type) {
                 .RuntimeArray => |a| .{
                     .RuntimeArray = .{
                         .type_word = a.components_type_word,
+                        .stride = a.stride,
                         .data = &.{},
                     },
                 },
-                else => unreachable,
+                .Image => RuntimeError.ToDo,
+                .Sampler => RuntimeError.ToDo,
+                .SampledImage => RuntimeError.ToDo,
+                else => RuntimeError.InvalidSpirV,
             },
-            else => unreachable,
+            else => RuntimeError.InvalidSpirV,
         };
     }
 

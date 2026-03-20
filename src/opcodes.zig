@@ -1206,21 +1206,14 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
 
                             switch (value_ptr.*) {
                                 .Vector, .Matrix, .Array, .Structure => |v| {
-                                    if (i.value.uint32 >= v.len) return RuntimeError.OutOfBounds;
+                                    if (i.value.uint32 >= v.len)
+                                        return RuntimeError.OutOfBounds;
                                     value_ptr = &v[i.value.uint32];
                                 },
                                 .RuntimeArray => |*arr| {
-                                    const concrete_allocator = if (is_last) allocator else arena_allocator;
-                                    const type_size = (try rt.results[arr.type_word].getVariant()).Type.getSize(rt.results);
-
-                                    value_ptr = concrete_allocator.create(Value) catch return RuntimeError.OutOfMemory;
-                                    errdefer concrete_allocator.destroy(value_ptr);
-
-                                    value_ptr.* = try Value.init(concrete_allocator, rt.results, arr.type_word);
-                                    _ = try value_ptr.writeConst(arr.data[(type_size * i.value.uint32)..]);
-
+                                    value_ptr = try arr.createValueFromIndex(if (is_last) allocator else arena_allocator, rt.results, i.value.uint32);
                                     if (is_last)
-                                        runtime_array_window = arr.data[(type_size * i.value.uint32)..];
+                                        runtime_array_window = arr.data[(try arr.getOffsetOfIndex(i.value.uint32))..];
                                 },
                                 .Vector4f32 => |*v| {
                                     if (i.value.uint32 > 4) return RuntimeError.OutOfBounds;
@@ -1320,13 +1313,12 @@ fn opCompositeConstruct(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime)
 
     switch (value.*) {
         .RuntimeArray => |arr| {
-            const type_size = (try rt.results[arr.type_word].getVariant()).Type.getSize(rt.results);
             var offset: usize = 0;
 
             for (0..index_count) |_| {
                 const elem_value = (try rt.results[try rt.it.next()].getVariant()).Constant.value;
-                std.mem.copyForwards(u8, arr.data[offset..(offset + type_size)], std.mem.asBytes(&elem_value));
-                offset += type_size;
+                std.mem.copyForwards(u8, arr.data[offset..(offset + arr.stride)], std.mem.asBytes(&elem_value));
+                offset += arr.stride;
             }
         },
         .Vector4f32 => |*vec| inline for (0..4) |i| {
@@ -1388,9 +1380,8 @@ fn opCompositeExtract(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Ru
                     }
                     switch (composite) {
                         .RuntimeArray => |arr| {
-                            const type_size = (try rt.results[arr.type_word].getVariant()).Type.getSize(rt.results);
                             composite = try Value.init(arena_allocator, rt.results, arr.type_word);
-                            _ = try composite.writeConst(arr.data[(type_size * member_id)..]);
+                            _ = try composite.writeConst(arr.data[(try arr.getOffsetOfIndex(member_id))..]);
                         },
                         .Vector4f32 => |v| break :blk .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = v[member_id] } } },
                         .Vector3f32 => |v| break :blk .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = v[member_id] } } },
@@ -2006,14 +1997,20 @@ fn opTypePointer(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!vo
 
 fn opTypeRuntimeArray(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     const id = try rt.it.next();
+    var target = &rt.mod.results[id];
     const components_type_word = try rt.it.next();
-    rt.mod.results[id].variant = .{
+    const components_type_data = &((try rt.mod.results[components_type_word].getVariant()).*).Type;
+    target.variant = .{
         .Type = .{
             .RuntimeArray = .{
                 .components_type_word = components_type_word,
-                .components_type = switch ((try rt.mod.results[components_type_word].getVariant()).*) {
-                    .Type => |t| @as(Result.Type, t),
-                    else => return RuntimeError.InvalidSpirV,
+                .components_type = @as(Result.Type, components_type_data.*),
+                .stride = blk: {
+                    for (target.decorations.items) |decoration| {
+                        if (decoration.rtype == .ArrayStride)
+                            break :blk decoration.literal_1;
+                    }
+                    break :blk @intCast(components_type_data.getSize(rt.mod.results));
                 },
             },
         },
@@ -2121,7 +2118,6 @@ fn opVariable(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) R
 
     const resolved_word = if (rt.mod.results[var_type].resolveTypeWordOrNull()) |word| word else var_type;
     const resolved = &rt.mod.results[resolved_word];
-    const member_count = resolved.getMemberCounts();
     target.variant = .{
         .Variable = .{
             .storage_class = storage_class,
@@ -2130,7 +2126,7 @@ fn opVariable(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) R
                 .Type => |t| @as(Result.Type, t),
                 else => return RuntimeError.InvalidSpirV,
             },
-            .value = try Result.initValue(allocator, member_count, rt.mod.results, resolved),
+            .value = try Value.init(allocator, rt.mod.results, resolved_word),
         },
     };
 
@@ -2171,10 +2167,9 @@ fn setupConstant(allocator: std.mem.Allocator, rt: *Runtime) RuntimeError!*Resul
     const target = &rt.mod.results[id];
 
     const resolved = rt.mod.results[res_type].resolveType(rt.mod.results);
-    const member_count = resolved.getMemberCounts();
     target.variant = .{
         .Constant = .{
-            .value = try Result.initValue(allocator, member_count, rt.mod.results, resolved),
+            .value = try Value.init(allocator, rt.mod.results, res_type),
             .type_word = res_type,
             .type = switch ((try resolved.getConstVariant()).*) {
                 .Type => |t| @as(Result.Type, t),

@@ -116,6 +116,7 @@ pub const TypeData = union(Type) {
     RuntimeArray: struct {
         components_type_word: SpvWord,
         components_type: Type,
+        stride: SpvWord,
     },
     Structure: struct {
         members_type_word: []const SpvWord,
@@ -142,7 +143,7 @@ pub const TypeData = union(Type) {
             .Vector => |v| results[v.components_type_word].variant.?.Type.getSize(results),
             .Array => |a| results[a.components_type_word].variant.?.Type.getSize(results),
             .Matrix => |m| results[m.column_type_word].variant.?.Type.getSize(results),
-            .RuntimeArray => |a| results[a.components_type_word].variant.?.Type.getSize(results),
+            .RuntimeArray => |a| a.stride,
             .Structure => |s| blk: {
                 var total: usize = 0;
                 for (s.members_type_word) |type_word| {
@@ -423,75 +424,6 @@ pub fn getMemberCounts(self: *const Self) usize {
         }
     }
     return 0;
-}
-
-pub fn initValue(allocator: std.mem.Allocator, member_count: usize, results: []const Self, resolved: *const Self) RuntimeError!Value {
-    return switch (resolved.variant.?) {
-        .Type => |t| switch (t) {
-            .Void => .{ .Void = .{} },
-            .Bool => .{ .Bool = false },
-            .Int => |i| .{ .Int = .{
-                .bit_count = i.bit_length,
-                .value = .{ .uint64 = 0 },
-            } },
-            .Float => |f| .{ .Float = .{
-                .bit_count = f.bit_length,
-                .value = .{ .float64 = 0 },
-            } },
-            .Vector => |v| blk: {
-                const value: Value = .{ .Vector = allocator.alloc(Value, member_count) catch return RuntimeError.OutOfMemory };
-                errdefer allocator.free(value.Vector);
-                for (value.Vector) |*val| {
-                    val.* = try Value.init(allocator, results, v.components_type_word);
-                }
-                break :blk value;
-            },
-            .Vector4f32 => .{ .Vector4f32 = Vec4f32{ 0.0, 0.0, 0.0, 0.0 } },
-            .Vector3f32 => .{ .Vector3f32 = Vec3f32{ 0.0, 0.0, 0.0 } },
-            .Vector2f32 => .{ .Vector2f32 = Vec2f32{ 0.0, 0.0 } },
-            .Vector4i32 => .{ .Vector4i32 = Vec4i32{ 0, 0, 0, 0 } },
-            .Vector3i32 => .{ .Vector3i32 = Vec3i32{ 0, 0, 0 } },
-            .Vector2i32 => .{ .Vector2i32 = Vec2i32{ 0, 0 } },
-            .Vector4u32 => .{ .Vector4u32 = Vec4u32{ 0, 0, 0, 0 } },
-            .Vector3u32 => .{ .Vector3u32 = Vec3u32{ 0, 0, 0 } },
-            .Vector2u32 => .{ .Vector2u32 = Vec2u32{ 0, 0 } },
-            .Matrix => |m| blk: {
-                const value: Value = .{ .Matrix = allocator.alloc(Value, member_count) catch return RuntimeError.OutOfMemory };
-                errdefer allocator.free(value.Matrix);
-                for (value.Matrix) |*v| {
-                    v.* = try Value.init(allocator, results, m.column_type_word);
-                }
-                break :blk value;
-            },
-            .Array => |a| blk: {
-                const value: Value = .{ .Array = allocator.alloc(Value, member_count) catch return RuntimeError.OutOfMemory };
-                errdefer allocator.free(value.Array);
-                for (value.Array) |*val| {
-                    val.* = try Value.init(allocator, results, a.components_type_word);
-                }
-                break :blk value;
-            },
-            .RuntimeArray => |a| .{
-                .RuntimeArray = .{
-                    .type_word = a.components_type_word,
-                    .data = &.{},
-                },
-            },
-            .Structure => |s| blk: {
-                const value: Value = .{ .Structure = allocator.alloc(Value, member_count) catch return RuntimeError.OutOfMemory };
-                errdefer allocator.free(value.Structure);
-                for (value.Structure, s.members_type_word) |*v, member_type_word| {
-                    v.* = try Value.init(allocator, results, member_type_word);
-                }
-                break :blk value;
-            },
-            .Image => RuntimeError.ToDo,
-            .Sampler => RuntimeError.ToDo,
-            .SampledImage => RuntimeError.ToDo,
-            else => RuntimeError.InvalidSpirV,
-        },
-        else => RuntimeError.InvalidSpirV,
-    };
 }
 
 pub fn flushPtr(self: *Self, allocator: std.mem.Allocator) RuntimeError!void {
