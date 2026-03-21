@@ -80,6 +80,7 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Exp2)]      = MathEngine(.Float, .Exp2).opSingleOperator;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.FAbs)]      = MathEngine(.Float, .FAbs).opSingleOperator;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.FMax)]      = MathEngine(.Float, .FMax).opDoubleOperators;
+    runtime_dispatcher[@intFromEnum(ext.GLSLOp.FSign)]     = MathEngine(.Float, .FSign).opSingleOperator;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Floor)]     = MathEngine(.Float, .Floor).opSingleOperator;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Length)]    = opLength;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Log)]       = MathEngine(.Float, .Log).opSingleOperator;
@@ -87,11 +88,20 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Normalize)] = opNormalize;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Round)]     = MathEngine(.Float, .Round).opSingleOperator;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.SAbs)]      = MathEngine(.SInt,  .SAbs).opSingleOperator;
+    runtime_dispatcher[@intFromEnum(ext.GLSLOp.SSign)]     = MathEngine(.SInt, .SSign).opSingleOperator;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Sin)]       = MathEngine(.Float, .Sin).opSingleOperator;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Sqrt)]      = MathEngine(.Float, .Sqrt).opSingleOperator;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Tan)]       = MathEngine(.Float, .Tan).opSingleOperator;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Trunc)]     = MathEngine(.Float, .Trunc).opSingleOperator;
     // zig fmt: on
+}
+
+fn isFloatOrF32Vector(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .float => true,
+        .vector => |vec| vec.child == f32,
+        else => false,
+    };
 }
 
 fn MathEngine(comptime T: ValueType, comptime Op: MathOp) type {
@@ -105,23 +115,31 @@ fn MathEngine(comptime T: ValueType, comptime Op: MathOp) type {
 
             const operator = struct {
                 fn operation(comptime TT: type, x: TT) RuntimeError!TT {
-                    return switch (Op) {
-                        .Ceil => @ceil(x),
-                        .Cos => @cos(x),
-                        .Exp => @exp(x),
-                        .Exp2 => @exp2(x),
-                        .FAbs => @abs(x),
-                        .Floor => @floor(x),
-                        .Log => @log(x),
-                        .Log2 => @log2(x),
-                        .Round => @round(x),
-                        .SAbs => if (comptime @typeInfo(TT) == .int) @intCast(@abs(x)) else return RuntimeError.InvalidSpirV,
-                        .Sin => @sin(x),
-                        .Sqrt => @sqrt(x),
-                        .Tan => @tan(x),
-                        .Trunc => @trunc(x),
-                        else => RuntimeError.InvalidSpirV,
-                    };
+                    if (comptime isFloatOrF32Vector(TT)) {
+                        return switch (Op) {
+                            .Ceil => @ceil(x),
+                            .Cos => @cos(x),
+                            .Exp => @exp(x),
+                            .Exp2 => @exp2(x),
+                            .FAbs => @abs(x),
+                            .FSign => std.math.sign(x),
+                            .Floor => @floor(x),
+                            .Log => @log(x),
+                            .Log2 => @log2(x),
+                            .Round => @round(x),
+                            .Sin => @sin(x),
+                            .Sqrt => @sqrt(x),
+                            .Tan => @tan(x),
+                            .Trunc => @trunc(x),
+                            else => return RuntimeError.InvalidSpirV,
+                        };
+                    } else {
+                        return switch (Op) {
+                            .SAbs => @intCast(@abs(x)),
+                            .SSign => std.math.sign(x),
+                            else => RuntimeError.InvalidSpirV,
+                        };
+                    }
                 }
 
                 fn applyScalar(bit_count: SpvWord, d: *Value, s: *const Value) RuntimeError!void {
@@ -150,13 +168,13 @@ fn MathEngine(comptime T: ValueType, comptime Op: MathOp) type {
                 .Vector3f32 => |*d| d.* = try operator.operation(@Vector(3, f32), src.Vector3f32),
                 .Vector2f32 => |*d| d.* = try operator.operation(@Vector(2, f32), src.Vector2f32),
 
-                //.Vector4i32 => |*d| d.* = try operator.operation(@Vector(4, i32), src.Vector4i32),
-                //.Vector3i32 => |*d| d.* = try operator.operation(@Vector(3, i32), src.Vector3i32),
-                //.Vector2i32 => |*d| d.* = try operator.operation(@Vector(2, i32), src.Vector2i32),
+                .Vector4i32 => |*d| d.* = try operator.operation(@Vector(4, i32), src.Vector4i32),
+                .Vector3i32 => |*d| d.* = try operator.operation(@Vector(3, i32), src.Vector3i32),
+                .Vector2i32 => |*d| d.* = try operator.operation(@Vector(2, i32), src.Vector2i32),
 
-                //.Vector4u32 => |*d| d.* = try operator.operation(@Vector(4, u32), src.Vector4u32),
-                //.Vector3u32 => |*d| d.* = try operator.operation(@Vector(3, u32), src.Vector3u32),
-                //.Vector2u32 => |*d| d.* = try operator.operation(@Vector(2, u32), src.Vector2u32),
+                .Vector4u32 => |*d| d.* = try operator.operation(@Vector(4, u32), src.Vector4u32),
+                .Vector3u32 => |*d| d.* = try operator.operation(@Vector(3, u32), src.Vector3u32),
+                .Vector2u32 => |*d| d.* = try operator.operation(@Vector(2, u32), src.Vector2u32),
 
                 else => return RuntimeError.InvalidSpirV,
             }

@@ -931,10 +931,6 @@ fn MathEngine(comptime T: ValueType, comptime Op: MathOp) type {
                         d[i] = try operation(ElemT, v[i]);
                     }
                 }
-
-                inline fn applySIMDVectorf32(comptime N: usize, d: *@Vector(N, f32), v: *const @Vector(N, f32)) RuntimeError!void {
-                    try applySIMDVector(f32, N, d, v);
-                }
             };
 
             switch (dst.*) {
@@ -1010,34 +1006,19 @@ fn autoSetupConstant(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) Run
     _ = try setupConstant(allocator, rt);
 }
 
-fn opBitcast(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+fn opBitcast(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     _ = rt.it.skip();
     const to_value = try rt.results[try rt.it.next()].getValue();
     const from_value = try rt.results[try rt.it.next()].getValue();
 
-    const caster = struct {
-        /// Asumes that values passed are primitives ints or floats
-        fn cast(to: *Value, from: *const Value) RuntimeError!void {
-            const from_bytes: u64 = switch (from.*) {
-                .Float => |f| @bitCast(f.value.float64),
-                .Int => |i| i.value.uint64,
-                else => return RuntimeError.InvalidSpirV,
-            };
+    var arena: std.heap.ArenaAllocator = .init(allocator);
+    defer arena.deinit();
+    const local_allocator = arena.allocator();
 
-            switch (to.*) {
-                .Float => |*f| f.value.float64 = @bitCast(from_bytes),
-                .Int => |*i| i.value.uint64 = from_bytes,
-                else => return RuntimeError.InvalidSpirV,
-            }
-        }
-    };
-
-    switch (to_value.*) {
-        .Int, .Float => try caster.cast(to_value, from_value),
-        .Vector => |vec| for (vec, from_value.Vector) |*t, *f| try caster.cast(t, f),
-        // TODO: vectors specializations
-        else => return RuntimeError.InvalidSpirV,
-    }
+    const size = try to_value.getPlainMemorySize();
+    const bytes = local_allocator.alloc(u8, size) catch return RuntimeError.OutOfMemory;
+    _ = try from_value.read(bytes);
+    _ = try to_value.write(bytes);
 }
 
 fn copyValue(dst: *Value, src: *const Value) void {

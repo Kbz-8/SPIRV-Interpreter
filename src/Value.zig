@@ -441,6 +441,26 @@ pub const Value = union(Type) {
         return 0;
     }
 
+    pub fn getPlainMemorySize(self: *const Self) RuntimeError!usize {
+        return switch (self.*) {
+            .Bool => 1,
+            .Int => |i| @divExact(i.bit_count, 8),
+            .Float => |f| @divExact(f.bit_count, 8),
+            .Vector4f32, .Vector4i32, .Vector4u32 => 4 * 4,
+            .Vector3f32, .Vector3i32, .Vector3u32 => 3 * 4,
+            .Vector2f32, .Vector2i32, .Vector2u32 => 2 * 4,
+            .Vector, .Matrix, .Array, .Structure => |values| blk: {
+                var size: usize = 0;
+                for (values) |v| {
+                    size += try v.getPlainMemorySize();
+                }
+                break :blk size;
+            },
+            .RuntimeArray => |arr| arr.getLen(),
+            else => return RuntimeError.InvalidValueType,
+        };
+    }
+
     pub fn flushPtr(self: *Self, allocator: std.mem.Allocator) RuntimeError!void {
         switch (self.*) {
             .Pointer => |*p| {
