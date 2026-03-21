@@ -72,13 +72,17 @@ pub const Value = union(Type) {
             errdefer allocator.destroy(value);
 
             value.* = try Value.init(allocator, results, self.type_word);
-            _ = try value.writeConst(self.data[(try self.getOffsetOfIndex(index))..]);
+            _ = try value.writeConst(self.data[self.getOffsetOfIndex(index)..]);
 
             return value;
         }
 
-        pub inline fn getOffsetOfIndex(self: *const @This(), index: usize) RuntimeError!usize {
+        pub inline fn getOffsetOfIndex(self: *const @This(), index: usize) usize {
             return self.stride * index;
+        }
+
+        pub inline fn getLen(self: *const @This()) usize {
+            return @divTrunc(self.data.len, self.stride);
         }
     },
     Structure: []Self,

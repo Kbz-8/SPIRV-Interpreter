@@ -4,6 +4,7 @@ const std = @import("std");
 const spv = @import("spv.zig");
 const op = @import("opcodes.zig");
 const lib = @import("lib.zig");
+const pretty = @import("pretty");
 
 const SpvVoid = spv.SpvVoid;
 const SpvByte = spv.SpvByte;
@@ -29,6 +30,7 @@ pub const RuntimeError = error{
     Unreachable,
     UnsupportedSpirV,
     UnsupportedExtension,
+    Unknown,
 };
 
 pub const Function = struct {
@@ -98,6 +100,18 @@ pub fn getResultByName(self: *const Self, name: []const u8) error{NotFound}!SpvW
         }
     }
     return error.NotFound;
+}
+
+pub fn dumpResultsTable(self: *Self, allocator: std.mem.Allocator, writer: *std.Io.Writer) RuntimeError!void {
+    const dump = pretty.dump(allocator, self.results, .{
+        .tab_size = 4,
+        .max_depth = 0,
+        .struct_max_len = 0,
+        .array_max_len = 0,
+    }) catch return RuntimeError.OutOfMemory;
+    defer allocator.free(dump);
+    writer.print("{s}", .{dump}) catch return RuntimeError.Unknown;
+    writer.flush() catch return RuntimeError.Unknown;
 }
 
 /// Calls an entry point, `entry_point_index` being the index of the entry point ordered by declaration in the bytecode

@@ -517,7 +517,7 @@ fn CondOperator(comptime T: ValueType, comptime Op: CondOp) type {
             return switch (Op) {
                 .IsFinite => std.math.isFinite(a),
                 .IsInf => blk: {
-                    std.debug.print("test {s} - {d} - {s}\n", .{ @typeName(TT), a, if (std.math.isInf(a)) "true" else "false" });
+                    //std.debug.print("test {s} - {d} - {s}\n", .{ @typeName(TT), a, if (std.math.isInf(a)) "true" else "false" });
                     break :blk std.math.isInf(a);
                 },
                 .IsNan => std.math.isNan(a),
@@ -800,7 +800,8 @@ fn MathEngine(comptime T: ValueType, comptime Op: MathOp) type {
         fn op(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
             const target_type = (try rt.results[try rt.it.next()].getVariant()).Type;
             const dst = try rt.results[try rt.it.next()].getValue();
-            const lhs = try rt.results[try rt.it.next()].getValue();
+            const lhs_id = try rt.it.next();
+            const lhs = try rt.results[lhs_id].getValue();
             const rhs = try rt.results[try rt.it.next()].getValue();
 
             const lane_bits = try Result.resolveLaneBitWidth(target_type, rt);
@@ -1089,6 +1090,42 @@ fn copyValue(dst: *Value, src: *const Value) void {
                 else => unreachable,
             }
         }
+
+        inline fn readF32(dst_v: *Value, src_f32_ptr: *const f32) void {
+            switch (dst_v.*) {
+                .Pointer => |dst_ptr| switch (dst_ptr.ptr) {
+                    .f32_ptr => |dst_f32_ptr| dst_f32_ptr.* = src_f32_ptr.*,
+                    .common => |dst_val_ptr| dst_val_ptr.Float.value.float32 = src_f32_ptr.*,
+                    else => unreachable,
+                },
+                .Float => |*f| f.value.float32 = src_f32_ptr.*,
+                else => unreachable,
+            }
+        }
+
+        inline fn readI32(dst_v: *Value, src_i32_ptr: *const i32) void {
+            switch (dst_v.*) {
+                .Pointer => |dst_ptr| switch (dst_ptr.ptr) {
+                    .i32_ptr => |dst_i32_ptr| dst_i32_ptr.* = src_i32_ptr.*,
+                    .common => |dst_val_ptr| dst_val_ptr.Int.value.sint32 = src_i32_ptr.*,
+                    else => unreachable,
+                },
+                .Int => |*i| i.value.sint32 = src_i32_ptr.*,
+                else => unreachable,
+            }
+        }
+
+        inline fn readU32(dst_v: *Value, src_u32_ptr: *const u32) void {
+            switch (dst_v.*) {
+                .Pointer => |dst_ptr| switch (dst_ptr.ptr) {
+                    .u32_ptr => |dst_u32_ptr| dst_u32_ptr.* = src_u32_ptr.*,
+                    .common => |dst_val_ptr| dst_val_ptr.Int.value.uint32 = src_u32_ptr.*,
+                    else => unreachable,
+                },
+                .Int => |*i| i.value.uint32 = src_u32_ptr.*,
+                else => unreachable,
+            }
+        }
     };
 
     if (std.meta.activeTag(dst.*) == .Pointer) {
@@ -1100,18 +1137,9 @@ fn copyValue(dst: *Value, src: *const Value) void {
                 },
                 else => copyValue(dst_val_ptr, src),
             },
-            .f32_ptr => |dst_f32_ptr| {
-                helpers.writeF32(dst_f32_ptr, src);
-                return;
-            },
-            .i32_ptr => |dst_i32_ptr| {
-                helpers.writeI32(dst_i32_ptr, src);
-                return;
-            },
-            .u32_ptr => |dst_u32_ptr| {
-                helpers.writeU32(dst_u32_ptr, src);
-                return;
-            },
+            .f32_ptr => |dst_f32_ptr| helpers.writeF32(dst_f32_ptr, src),
+            .i32_ptr => |dst_i32_ptr| helpers.writeI32(dst_i32_ptr, src),
+            .u32_ptr => |dst_u32_ptr| helpers.writeU32(dst_u32_ptr, src),
         }
     }
 
@@ -1122,7 +1150,9 @@ fn copyValue(dst: *Value, src: *const Value) void {
         },
         .Pointer => |ptr| switch (ptr.ptr) {
             .common => |src_val_ptr| copyValue(dst, src_val_ptr),
-            else => {},
+            .f32_ptr => |src_f32_ptr| helpers.readF32(dst, src_f32_ptr),
+            .i32_ptr => |src_i32_ptr| helpers.readI32(dst, src_i32_ptr),
+            .u32_ptr => |src_u32_ptr| helpers.readU32(dst, src_u32_ptr),
         },
         else => dst.* = src.*,
     }
@@ -1174,8 +1204,6 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
-    const arena_allocator = arena.allocator();
-
     const index_count = word_count - 3;
 
     if (rt.results[id].variant) |*variant| {
@@ -1191,9 +1219,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
             .value = blk: {
                 var uniform_slice_window: ?[]u8 = null;
 
-                for (0..index_count) |index| {
-                    const is_last = (index == index_count - 1);
-
+                for (0..index_count) |_| {
                     const member = &rt.results[try rt.it.next()];
                     const member_value = switch ((try member.getVariant()).*) {
                         .Constant => |c| &c.value,
@@ -1209,49 +1235,48 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
 
                             switch (value_ptr.*) {
                                 .Vector, .Matrix, .Array, .Structure => |v| {
-                                    if (i.value.uint32 >= v.len)
-                                        return RuntimeError.OutOfBounds;
+                                    if (i.value.uint32 >= v.len) return RuntimeError.OutOfBounds;
                                     value_ptr = &v[i.value.uint32];
                                 },
                                 .RuntimeArray => |*arr| {
-                                    value_ptr = try arr.createValueFromIndex(if (is_last) allocator else arena_allocator, rt.results, i.value.uint32);
-                                    if (is_last)
-                                        uniform_slice_window = arr.data[(try arr.getOffsetOfIndex(i.value.uint32))..];
+                                    if (i.value.uint32 >= arr.getLen()) return RuntimeError.OutOfBounds;
+                                    value_ptr = try arr.createValueFromIndex(allocator, rt.results, i.value.uint32);
+                                    uniform_slice_window = arr.data[arr.getOffsetOfIndex(i.value.uint32)..];
                                 },
                                 .Vector4f32 => |*v| {
-                                    if (i.value.uint32 > 4) return RuntimeError.OutOfBounds;
+                                    if (i.value.uint32 >= 4) return RuntimeError.OutOfBounds;
                                     break :blk .{ .Pointer = .{ .ptr = .{ .f32_ptr = &v[i.value.uint32] } } };
                                 },
                                 .Vector3f32 => |*v| {
-                                    if (i.value.uint32 > 3) return RuntimeError.OutOfBounds;
+                                    if (i.value.uint32 >= 3) return RuntimeError.OutOfBounds;
                                     break :blk .{ .Pointer = .{ .ptr = .{ .f32_ptr = &v[i.value.uint32] } } };
                                 },
                                 .Vector2f32 => |*v| {
-                                    if (i.value.uint32 > 2) return RuntimeError.OutOfBounds;
+                                    if (i.value.uint32 >= 2) return RuntimeError.OutOfBounds;
                                     break :blk .{ .Pointer = .{ .ptr = .{ .f32_ptr = &v[i.value.uint32] } } };
                                 },
                                 .Vector4i32 => |*v| {
-                                    if (i.value.uint32 > 4) return RuntimeError.OutOfBounds;
+                                    if (i.value.uint32 >= 4) return RuntimeError.OutOfBounds;
                                     break :blk .{ .Pointer = .{ .ptr = .{ .i32_ptr = &v[i.value.uint32] } } };
                                 },
                                 .Vector3i32 => |*v| {
-                                    if (i.value.uint32 > 3) return RuntimeError.OutOfBounds;
+                                    if (i.value.uint32 >= 3) return RuntimeError.OutOfBounds;
                                     break :blk .{ .Pointer = .{ .ptr = .{ .i32_ptr = &v[i.value.uint32] } } };
                                 },
                                 .Vector2i32 => |*v| {
-                                    if (i.value.uint32 > 2) return RuntimeError.OutOfBounds;
+                                    if (i.value.uint32 >= 2) return RuntimeError.OutOfBounds;
                                     break :blk .{ .Pointer = .{ .ptr = .{ .i32_ptr = &v[i.value.uint32] } } };
                                 },
                                 .Vector4u32 => |*v| {
-                                    if (i.value.uint32 > 4) return RuntimeError.OutOfBounds;
+                                    if (i.value.uint32 >= 4) return RuntimeError.OutOfBounds;
                                     break :blk .{ .Pointer = .{ .ptr = .{ .u32_ptr = &v[i.value.uint32] } } };
                                 },
                                 .Vector3u32 => |*v| {
-                                    if (i.value.uint32 > 3) return RuntimeError.OutOfBounds;
+                                    if (i.value.uint32 >= 3) return RuntimeError.OutOfBounds;
                                     break :blk .{ .Pointer = .{ .ptr = .{ .u32_ptr = &v[i.value.uint32] } } };
                                 },
                                 .Vector2u32 => |*v| {
-                                    if (i.value.uint32 > 2) return RuntimeError.OutOfBounds;
+                                    if (i.value.uint32 >= 2) return RuntimeError.OutOfBounds;
                                     break :blk .{ .Pointer = .{ .ptr = .{ .u32_ptr = &v[i.value.uint32] } } };
                                 },
                                 else => return RuntimeError.InvalidSpirV,
@@ -1384,7 +1409,7 @@ fn opCompositeExtract(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Ru
                     switch (composite) {
                         .RuntimeArray => |arr| {
                             composite = try Value.init(arena_allocator, rt.results, arr.type_word);
-                            _ = try composite.writeConst(arr.data[(try arr.getOffsetOfIndex(member_id))..]);
+                            _ = try composite.writeConst(arr.data[arr.getOffsetOfIndex(member_id)..]);
                         },
                         .Vector4f32 => |v| break :blk .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = v[member_id] } } },
                         .Vector3f32 => |v| break :blk .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = v[member_id] } } },
@@ -1695,21 +1720,6 @@ fn opLoad(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     _ = rt.it.skip();
     const id = try rt.it.next();
     const ptr_id = try rt.it.next();
-
-    //std.debug.print("\n{d} - {d}\n", .{ id, ptr_id });
-    //@import("pretty").print(std.heap.page_allocator, rt.results[id], .{
-    //    .tab_size = 4,
-    //    .max_depth = 0,
-    //    .struct_max_len = 0,
-    //    .array_max_len = 0,
-    //}) catch unreachable;
-
-    //@import("pretty").print(std.heap.page_allocator, rt.results[ptr_id], .{
-    //    .tab_size = 4,
-    //    .max_depth = 0,
-    //    .struct_max_len = 0,
-    //    .array_max_len = 0,
-    //}) catch unreachable;
     copyValue(try rt.results[id].getValue(), try rt.results[ptr_id].getValue());
 }
 
