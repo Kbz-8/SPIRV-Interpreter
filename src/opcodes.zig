@@ -320,12 +320,17 @@ fn BitOperator(comptime T: ValueType, comptime Op: BitOp) type {
         }
 
         inline fn bitExtract(comptime TT: type, v: TT, offset: TT, count: u64) TT {
-            return (v >> @intCast(offset)) & @as(TT, @intCast(bitMask(count)));
+            return (v >> @intCast(offset)) & @as(TT, @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(TT)), @truncate(bitMask(count)))));
         }
 
         inline fn operationUnary(comptime TT: type, op1: TT) RuntimeError!TT {
             return switch (Op) {
-                .BitCount => @as(TT, @intCast(@bitSizeOf(TT))), // keep return type TT
+                .BitCount => blk: {
+                    const bit_set: std.bit_set.IntegerBitSet(@bitSizeOf(TT)) = .{
+                        .mask = @bitCast(op1),
+                    };
+                    break :blk @as(TT, @intCast(bit_set.count()));
+                },
                 .BitReverse => @bitReverse(op1),
                 .Not => ~op1,
                 else => RuntimeError.InvalidSpirV,
@@ -340,12 +345,12 @@ fn BitOperator(comptime T: ValueType, comptime Op: BitOp) type {
                     break :blk bitInsert(TT, op1, op2, offset.Int.value.uint64, count.Int.value.uint64);
                 },
                 .BitFieldSExtract => blk: {
-                    if (T == .UInt) return RuntimeError.InvalidSpirV;
+                    if (T != .SInt) return RuntimeError.InvalidSpirV;
                     const count = try rt.results[try rt.it.next()].getValue();
                     break :blk bitExtract(TT, op1, op2, count.Int.value.uint64);
                 },
                 .BitFieldUExtract => blk: {
-                    if (T == .SInt) return RuntimeError.InvalidSpirV;
+                    if (T != .UInt) return RuntimeError.InvalidSpirV;
                     const count = try rt.results[try rt.it.next()].getValue();
                     break :blk bitExtract(TT, op1, op2, count.Int.value.uint64);
                 },
@@ -360,50 +365,123 @@ fn BitOperator(comptime T: ValueType, comptime Op: BitOp) type {
             };
         }
 
-        fn applyScalarBits(rt: *Runtime, bit_count: SpvWord, dst: *Value, op1_v: *const Value, op2_v: ?*const Value) RuntimeError!void {
-            switch (bit_count) {
-                inline 8, 16, 32, 64 => |bits| {
-                    const TT = getValuePrimitiveFieldType(T, bits);
-                    const a = (try getValuePrimitiveField(T, bits, @constCast(op1_v))).*;
+        inline fn readLane(comptime bits: u32, v: *const Value, lane_index: usize) RuntimeError!getValuePrimitiveFieldType(T, bits) {
+            const TT = getValuePrimitiveFieldType(T, bits);
 
-                    const out = if (comptime isUnaryOp()) blk: {
-                        break :blk try operationUnary(TT, a);
-                    } else blk: {
-                        const b_ptr = op2_v orelse return RuntimeError.InvalidSpirV;
-                        const b = (try getValuePrimitiveField(T, bits, @constCast(b_ptr))).*;
-                        break :blk try operationBinary(TT, rt, a, b);
-                    };
+            return switch (v.*) {
+                .Int => (try getValuePrimitiveField(T, bits, @constCast(v))).*,
 
-                    (try getValuePrimitiveField(T, bits, dst)).* = out;
+                .Vector => |lanes| (try getValuePrimitiveField(T, bits, &lanes[lane_index])).*,
+
+                .Vector4i32 => |vec| if (bits == 32) @as(TT, @bitCast(vec[lane_index])) else return RuntimeError.InvalidSpirV,
+                .Vector3i32 => |vec| if (bits == 32) @as(TT, @bitCast(vec[lane_index])) else return RuntimeError.InvalidSpirV,
+                .Vector2i32 => |vec| if (bits == 32) @as(TT, @bitCast(vec[lane_index])) else return RuntimeError.InvalidSpirV,
+
+                .Vector4u32 => |vec| if (bits == 32) @as(TT, @bitCast(vec[lane_index])) else return RuntimeError.InvalidSpirV,
+                .Vector3u32 => |vec| if (bits == 32) @as(TT, @bitCast(vec[lane_index])) else return RuntimeError.InvalidSpirV,
+                .Vector2u32 => |vec| if (bits == 32) @as(TT, @bitCast(vec[lane_index])) else return RuntimeError.InvalidSpirV,
+
+                else => RuntimeError.InvalidSpirV,
+            };
+        }
+
+        inline fn writeLane(comptime bits: u32, dst: *Value, lane_index: usize, value: getValuePrimitiveFieldType(T, bits)) RuntimeError!void {
+            switch (dst.*) {
+                .Int => (try getValuePrimitiveField(T, bits, dst)).* = value,
+
+                .Vector => |lanes| try setScalarLaneValue(T, bits, &lanes[lane_index], value),
+
+                .Vector2i32 => |*vec| vec[lane_index] = if (bits == 32) @bitCast(value) else return RuntimeError.InvalidSpirV,
+                .Vector3i32 => |*vec| vec[lane_index] = if (bits == 32) @bitCast(value) else return RuntimeError.InvalidSpirV,
+                .Vector4i32 => |*vec| vec[lane_index] = if (bits == 32) @bitCast(value) else return RuntimeError.InvalidSpirV,
+
+                .Vector2u32 => |*vec| vec[lane_index] = if (bits == 32) @bitCast(value) else return RuntimeError.InvalidSpirV,
+                .Vector3u32 => |*vec| vec[lane_index] = if (bits == 32) @bitCast(value) else return RuntimeError.InvalidSpirV,
+                .Vector4u32 => |*vec| vec[lane_index] = if (bits == 32) @bitCast(value) else return RuntimeError.InvalidSpirV,
+
+                else => return RuntimeError.InvalidSpirV,
+            }
+        }
+
+        fn setScalarLaneValue(comptime value_type: ValueType, comptime bits: u32, dst: *Value, v: getValuePrimitiveFieldType(value_type, bits)) RuntimeError!void {
+            switch (bits) {
+                inline 8, 16, 32, 64 => {
+                    dst.* = .{ .Int = .{
+                        .bit_count = bits,
+                        .value = switch (value_type) {
+                            .SInt => switch (bits) {
+                                8 => .{ .sint8 = v },
+                                16 => .{ .sint16 = v },
+                                32 => .{ .sint32 = v },
+                                64 => .{ .sint64 = v },
+                                else => unreachable,
+                            },
+                            .UInt => switch (bits) {
+                                8 => .{ .uint8 = v },
+                                16 => .{ .uint16 = v },
+                                32 => .{ .uint32 = v },
+                                64 => .{ .uint64 = v },
+                                else => unreachable,
+                            },
+                            else => return RuntimeError.InvalidSpirV,
+                        },
+                    } };
                 },
                 else => return RuntimeError.InvalidSpirV,
             }
         }
 
-        inline fn laneRhsPtr(op2_value: ?*Value, index: usize) ?*const Value {
-            if (comptime isUnaryOp()) return null;
-            const v = op2_value orelse return null;
-            return &v.Vector[index];
+        fn applyScalarBits(rt: *Runtime, bit_count: SpvWord, dst: *Value, op1_v: *const Value, op2_v: ?*const Value) RuntimeError!void {
+            switch (bit_count) {
+                inline 8, 16, 32, 64 => |bits| {
+                    const TT = getValuePrimitiveFieldType(T, bits);
+                    const a = try readLane(bits, op1_v, 0);
+
+                    const out: TT = if (comptime isUnaryOp())
+                        try operationUnary(TT, a)
+                    else blk: {
+                        const rhs = op2_v orelse return RuntimeError.InvalidSpirV;
+                        const b = try readLane(bits, rhs, 0);
+                        break :blk try operationBinary(TT, rt, a, b);
+                    };
+
+                    try writeLane(bits, dst, 0, out);
+                },
+                else => return RuntimeError.InvalidSpirV,
+            }
         }
 
-        inline fn applyFixedVectorBinary(
-            comptime ElemT: type,
-            comptime N: usize,
-            rt: *Runtime,
-            dst: *[N]ElemT,
-            op1: *[N]ElemT,
-            op2: *[N]ElemT,
-        ) RuntimeError!void {
-            inline for (0..N) |i| dst[i] = try operationBinary(ElemT, rt, op1[i], op2[i]);
-        }
+        fn applyVectorBits(rt: *Runtime, lane_bits: SpvWord, dst: *Value, op1_v: *const Value, op2_v: ?*const Value) RuntimeError!void {
+            const dst_len = try dst.getLaneCount();
+            const op1_len = try op1_v.getLaneCount();
+            if (op1_v.isVector() and dst_len != op1_len) return RuntimeError.InvalidSpirV;
 
-        inline fn applyFixedVectorUnary(
-            comptime ElemT: type,
-            comptime N: usize,
-            dst: *[N]ElemT,
-            op1: *[N]ElemT,
-        ) RuntimeError!void {
-            inline for (0..N) |i| dst[i] = try operationUnary(ElemT, op1[i]);
+            if (!comptime isUnaryOp()) {
+                const rhs = op2_v orelse return RuntimeError.InvalidSpirV;
+                const op2_len = try rhs.getLaneCount();
+                if (op2_v.?.isVector() and dst_len != op2_len) return RuntimeError.InvalidSpirV;
+            }
+
+            switch (lane_bits) {
+                inline 8, 16, 32, 64 => |bits| {
+                    const TT = getValuePrimitiveFieldType(T, bits);
+
+                    for (0..dst_len) |i| {
+                        const a = try readLane(bits, op1_v, if (op1_v.isVector()) i else 0);
+
+                        const out: TT = if (comptime isUnaryOp())
+                            try operationUnary(TT, a)
+                        else blk: {
+                            const rhs = op2_v orelse return RuntimeError.InvalidSpirV;
+                            const b = try readLane(bits, rhs, if (op2_v.?.isVector()) i else 0);
+                            break :blk try operationBinary(TT, rt, a, b);
+                        };
+
+                        try writeLane(bits, dst, i, out);
+                    }
+                },
+                else => return RuntimeError.InvalidSpirV,
+            }
         }
     };
 }
@@ -422,56 +500,16 @@ fn BitEngine(comptime T: ValueType, comptime Op: BitOp) type {
             const lane_bits = try Result.resolveLaneBitWidth(target_type, rt);
 
             switch (dst.*) {
-                .Int => try operator.applyScalarBits(rt, lane_bits, dst, op1, if (comptime operator.isUnaryOp()) null else op2_value),
+                .Int => try operator.applyScalarBits(rt, lane_bits, dst, op1, op2_value),
 
-                .Vector => |dst_vec| {
-                    const op1_vec = op1.Vector;
-                    if (dst_vec.len != op1_vec.len) return RuntimeError.InvalidSpirV;
-
-                    for (dst_vec, op1_vec, 0..) |*d_lane, a_lane, i| {
-                        var tmp_a = a_lane;
-                        const b_ptr = operator.laneRhsPtr(op2_value, i);
-                        try operator.applyScalarBits(rt, lane_bits, d_lane, &tmp_a, b_ptr);
-                    }
-                },
-
-                .Vector4i32 => |*d| {
-                    if (comptime operator.isUnaryOp())
-                        try operator.applyFixedVectorUnary(i32, 4, d, &op1.Vector4i32)
-                    else
-                        try operator.applyFixedVectorBinary(i32, 4, rt, d, &op1.Vector4i32, &op2_value.?.Vector4i32);
-                },
-                .Vector3i32 => |*d| {
-                    if (comptime operator.isUnaryOp())
-                        try operator.applyFixedVectorUnary(i32, 3, d, &op1.Vector3i32)
-                    else
-                        try operator.applyFixedVectorBinary(i32, 3, rt, d, &op1.Vector3i32, &op2_value.?.Vector3i32);
-                },
-                .Vector2i32 => |*d| {
-                    if (comptime operator.isUnaryOp())
-                        try operator.applyFixedVectorUnary(i32, 2, d, &op1.Vector2i32)
-                    else
-                        try operator.applyFixedVectorBinary(i32, 2, rt, d, &op1.Vector2i32, &op2_value.?.Vector2i32);
-                },
-
-                .Vector4u32 => |*d| {
-                    if (comptime operator.isUnaryOp())
-                        try operator.applyFixedVectorUnary(u32, 4, d, &op1.Vector4u32)
-                    else
-                        try operator.applyFixedVectorBinary(u32, 4, rt, d, &op1.Vector4u32, &op2_value.?.Vector4u32);
-                },
-                .Vector3u32 => |*d| {
-                    if (comptime operator.isUnaryOp())
-                        try operator.applyFixedVectorUnary(u32, 3, d, &op1.Vector3u32)
-                    else
-                        try operator.applyFixedVectorBinary(u32, 3, rt, d, &op1.Vector3u32, &op2_value.?.Vector3u32);
-                },
-                .Vector2u32 => |*d| {
-                    if (comptime operator.isUnaryOp())
-                        try operator.applyFixedVectorUnary(u32, 2, d, &op1.Vector2u32)
-                    else
-                        try operator.applyFixedVectorBinary(u32, 2, rt, d, &op1.Vector2u32, &op2_value.?.Vector2u32);
-                },
+                .Vector,
+                .Vector2i32,
+                .Vector3i32,
+                .Vector4i32,
+                .Vector2u32,
+                .Vector3u32,
+                .Vector4u32,
+                => try operator.applyVectorBits(rt, lane_bits, dst, op1, op2_value),
 
                 else => return RuntimeError.InvalidSpirV,
             }

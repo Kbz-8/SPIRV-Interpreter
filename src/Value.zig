@@ -461,6 +461,41 @@ pub const Value = union(Type) {
         };
     }
 
+    pub inline fn getLaneCount(self: *const Self) RuntimeError!usize {
+        return switch (self.*) {
+            .Vector => |lanes| lanes.len,
+            .Vector2i32, .Vector2u32, .Vector2f32 => 2,
+            .Vector3i32, .Vector3u32, .Vector3f32 => 3,
+            .Vector4i32, .Vector4u32, .Vector4f32 => 4,
+            .Int, .Float, .Bool => 1,
+            else => RuntimeError.InvalidSpirV,
+        };
+    }
+
+    pub inline fn isScalar(self: *const Self) bool {
+        return switch (self.*) {
+            .Bool, .Int, .Float => true,
+            else => false,
+        };
+    }
+
+    pub inline fn isVector(self: *const Self) bool {
+        return switch (self.*) {
+            .Vector,
+            .Vector2i32,
+            .Vector2u32,
+            .Vector2f32,
+            .Vector3i32,
+            .Vector3u32,
+            .Vector3f32,
+            .Vector4i32,
+            .Vector4u32,
+            .Vector4f32,
+            => true,
+            else => false,
+        };
+    }
+
     pub fn flushPtr(self: *Self, allocator: std.mem.Allocator) RuntimeError!void {
         switch (self.*) {
             .Pointer => |*p| {
