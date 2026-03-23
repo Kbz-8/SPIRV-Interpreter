@@ -303,6 +303,8 @@ fn BitOperator(comptime T: ValueType, comptime Op: BitOp) type {
             if (T == .Float) @compileError("Invalid value type");
         }
 
+        const max_operator_count: usize = 4;
+
         inline fn isUnaryOp() bool {
             return comptime switch (Op) {
                 .Not, .BitCount, .BitReverse => true,
@@ -310,17 +312,88 @@ fn BitOperator(comptime T: ValueType, comptime Op: BitOp) type {
             };
         }
 
-        inline fn bitMask(bits: u64) u64 {
-            return if (bits >= 32) ~@as(u64, 0) else (@as(u64, 0x1) << @intCast(bits)) - 1;
+        inline fn isBinaryOp() bool {
+            return !isUnaryOp() and !isTernaryOp() and !isQuaternaryOp(); // flemme d'ajouter les opérateurs à chaque fois
+        }
+
+        inline fn isTernaryOp() bool {
+            return comptime switch (Op) {
+                .BitFieldUExtract, .BitFieldSExtract => true,
+                else => false,
+            };
+        }
+
+        inline fn isQuaternaryOp() bool {
+            return comptime switch (Op) {
+                .BitFieldInsert => true,
+                else => false,
+            };
+        }
+
+        inline fn getOperatorsCount() usize {
+            return if (isUnaryOp())
+                1
+            else if (isBinaryOp())
+                2
+            else if (isTernaryOp())
+                3
+            else
+                4;
         }
 
         inline fn bitInsert(comptime TT: type, base: TT, insert: TT, offset: u64, count: u64) TT {
-            const mask: TT = @intCast(bitMask(count) << @intCast(offset));
-            return @as(TT, @intCast((base & ~mask) | ((insert << @intCast(offset)) & mask)));
+            const info = @typeInfo(TT);
+            if (info != .int) @compileError("must be an integer type");
+
+            const bits: u32 = info.int.bits;
+            const U = std.meta.Int(.unsigned, bits);
+
+            if (count == 0) return base;
+
+            const base_u: U = @bitCast(base);
+            const insert_u: U = @bitCast(insert);
+
+            const field_mask: U = if (count == bits)
+                ~@as(U, 0)
+            else
+                (@as(U, 1) << @intCast(count)) - 1;
+
+            const shift: std.math.Log2Int(U) = @truncate(offset);
+
+            const positioned_mask: U = @shlWithOverflow(field_mask, shift)[0];
+            const positioned_insert: U = @shlWithOverflow(insert_u & field_mask, shift)[0];
+
+            return @bitCast((base_u & ~positioned_mask) | positioned_insert);
         }
 
-        inline fn bitExtract(comptime TT: type, v: TT, offset: TT, count: u64) TT {
-            return (v >> @intCast(offset)) & @as(TT, @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(TT)), @truncate(bitMask(count)))));
+        inline fn bitExtract(comptime TT: type, comptime signed_result: bool, base: TT, offset: u64, count: u64) TT {
+            const info = @typeInfo(TT);
+            if (info != .int) @compileError("must be an integer type");
+
+            const bits: u32 = info.int.bits;
+
+            if (count == 0) return @as(TT, 0);
+
+            const U = std.meta.Int(.unsigned, bits);
+            const base_u: U = @bitCast(base);
+
+            const field: U = if (count == bits)
+                base_u
+            else
+                (base_u >> @intCast(offset)) &
+                    ((@as(U, 1) << @intCast(count)) - 1);
+
+            const result: U = if (!signed_result or count == bits) blk: {
+                break :blk field;
+            } else blk: {
+                const sign_bit: U = @as(U, 1) << @intCast(count - 1);
+                if ((field & sign_bit) != 0) {
+                    break :blk field | (~@as(U, 0) << @intCast(count));
+                }
+                break :blk field;
+            };
+
+            return @bitCast(result);
         }
 
         inline fn operationUnary(comptime TT: type, op1: TT) RuntimeError!TT {
@@ -337,30 +410,35 @@ fn BitOperator(comptime T: ValueType, comptime Op: BitOp) type {
             };
         }
 
-        inline fn operationBinary(comptime TT: type, rt: *Runtime, op1: TT, op2: TT) RuntimeError!TT {
+        inline fn operationBinary(comptime TT: type, op1: TT, op2: TT) RuntimeError!TT {
             return switch (Op) {
-                .BitFieldInsert => blk: {
-                    const offset = try rt.results[try rt.it.next()].getValue();
-                    const count = try rt.results[try rt.it.next()].getValue();
-                    break :blk bitInsert(TT, op1, op2, offset.Int.value.uint64, count.Int.value.uint64);
-                },
-                .BitFieldSExtract => blk: {
-                    if (T != .SInt) return RuntimeError.InvalidSpirV;
-                    const count = try rt.results[try rt.it.next()].getValue();
-                    break :blk bitExtract(TT, op1, op2, count.Int.value.uint64);
-                },
-                .BitFieldUExtract => blk: {
-                    if (T != .UInt) return RuntimeError.InvalidSpirV;
-                    const count = try rt.results[try rt.it.next()].getValue();
-                    break :blk bitExtract(TT, op1, op2, count.Int.value.uint64);
-                },
-
                 .BitwiseAnd => op1 & op2,
                 .BitwiseOr => op1 | op2,
                 .BitwiseXor => op1 ^ op2,
                 .ShiftLeft => op1 << @intCast(op2),
                 .ShiftRight, .ShiftRightArithmetic => op1 >> @intCast(op2),
 
+                else => RuntimeError.InvalidSpirV,
+            };
+        }
+
+        inline fn operationTernary(comptime TT: type, op1: TT, op2: TT, op3: *const Value) RuntimeError!TT {
+            return switch (Op) {
+                .BitFieldSExtract => blk: {
+                    if (T != .SInt) return RuntimeError.InvalidSpirV;
+                    break :blk bitExtract(TT, true, op1, @intCast(op2), op3.Int.value.uint64);
+                },
+                .BitFieldUExtract => blk: {
+                    if (T != .UInt) return RuntimeError.InvalidSpirV;
+                    break :blk bitExtract(TT, false, op1, @intCast(op2), op3.Int.value.uint64);
+                },
+                else => RuntimeError.InvalidSpirV,
+            };
+        }
+
+        inline fn operationQuaternary(comptime TT: type, op1: TT, op2: TT, op3: *const Value, op4: *const Value) RuntimeError!TT {
+            return switch (Op) {
+                .BitFieldInsert => bitInsert(TT, op1, op2, op3.Int.value.uint64, op4.Int.value.uint64),
                 else => RuntimeError.InvalidSpirV,
             };
         }
@@ -431,18 +509,21 @@ fn BitOperator(comptime T: ValueType, comptime Op: BitOp) type {
             }
         }
 
-        fn applyScalarBits(rt: *Runtime, bit_count: SpvWord, dst: *Value, op1_v: *const Value, op2_v: ?*const Value) RuntimeError!void {
+        fn applyScalarBits(bit_count: SpvWord, dst: *Value, ops: [max_operator_count]?*const Value) RuntimeError!void {
             switch (bit_count) {
                 inline 8, 16, 32, 64 => |bits| {
                     const TT = getValuePrimitiveFieldType(T, bits);
-                    const a = try readLane(bits, op1_v, 0);
 
-                    const out: TT = if (comptime isUnaryOp())
-                        try operationUnary(TT, a)
-                    else blk: {
-                        const rhs = op2_v orelse return RuntimeError.InvalidSpirV;
-                        const b = try readLane(bits, rhs, 0);
-                        break :blk try operationBinary(TT, rt, a, b);
+                    const out: TT = blk: {
+                        const a = try readLane(bits, ops[0].?, 0);
+
+                        if (comptime isUnaryOp()) break :blk try operationUnary(TT, a);
+
+                        const b = try readLane(bits, ops[1].?, 0);
+
+                        if (comptime isBinaryOp()) break :blk try operationBinary(TT, a, b);
+                        if (comptime isTernaryOp()) break :blk try operationTernary(TT, a, b, ops[2].?);
+                        if (comptime isQuaternaryOp()) break :blk try operationQuaternary(TT, a, b, ops[2].?, ops[3].?);
                     };
 
                     try writeLane(bits, dst, 0, out);
@@ -451,30 +532,24 @@ fn BitOperator(comptime T: ValueType, comptime Op: BitOp) type {
             }
         }
 
-        fn applyVectorBits(rt: *Runtime, lane_bits: SpvWord, dst: *Value, op1_v: *const Value, op2_v: ?*const Value) RuntimeError!void {
+        fn applyVectorBits(lane_bits: SpvWord, dst: *Value, ops: [max_operator_count]?*const Value) RuntimeError!void {
             const dst_len = try dst.getLaneCount();
-            const op1_len = try op1_v.getLaneCount();
-            if (op1_v.isVector() and dst_len != op1_len) return RuntimeError.InvalidSpirV;
-
-            if (!comptime isUnaryOp()) {
-                const rhs = op2_v orelse return RuntimeError.InvalidSpirV;
-                const op2_len = try rhs.getLaneCount();
-                if (op2_v.?.isVector() and dst_len != op2_len) return RuntimeError.InvalidSpirV;
-            }
 
             switch (lane_bits) {
                 inline 8, 16, 32, 64 => |bits| {
                     const TT = getValuePrimitiveFieldType(T, bits);
 
                     for (0..dst_len) |i| {
-                        const a = try readLane(bits, op1_v, if (op1_v.isVector()) i else 0);
+                        const out: TT = blk: {
+                            const a = try readLane(bits, ops[0].?, if (ops[0].?.isVector()) i else 0);
 
-                        const out: TT = if (comptime isUnaryOp())
-                            try operationUnary(TT, a)
-                        else blk: {
-                            const rhs = op2_v orelse return RuntimeError.InvalidSpirV;
-                            const b = try readLane(bits, rhs, if (op2_v.?.isVector()) i else 0);
-                            break :blk try operationBinary(TT, rt, a, b);
+                            if (comptime isUnaryOp()) break :blk try operationUnary(TT, a);
+
+                            const b = try readLane(bits, ops[1].?, if (ops[1].?.isVector()) i else 0);
+
+                            if (comptime isBinaryOp()) break :blk try operationBinary(TT, a, b);
+                            if (comptime isTernaryOp()) break :blk try operationTernary(TT, a, b, ops[2].?);
+                            if (comptime isQuaternaryOp()) break :blk try operationQuaternary(TT, a, b, ops[2].?, ops[3].?);
                         };
 
                         try writeLane(bits, dst, i, out);
@@ -489,18 +564,22 @@ fn BitOperator(comptime T: ValueType, comptime Op: BitOp) type {
 fn BitEngine(comptime T: ValueType, comptime Op: BitOp) type {
     return struct {
         fn op(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
-            const target_type = (try rt.results[try rt.it.next()].getVariant()).Type;
-            const dst = try rt.results[try rt.it.next()].getValue();
-            const op1 = try rt.results[try rt.it.next()].getValue();
-
             const operator = BitOperator(T, Op);
 
-            const op2_value: ?*Value = if (comptime operator.isUnaryOp()) null else try rt.results[try rt.it.next()].getValue();
+            const target_type = (try rt.results[try rt.it.next()].getVariant()).Type;
+            const dst = try rt.results[try rt.it.next()].getValue();
+
+            var ops = [_]?*Value{null} ** operator.max_operator_count;
+            ops[0] = try rt.results[try rt.it.next()].getValue();
+
+            if (comptime operator.getOperatorsCount() >= 2) ops[1] = try rt.results[try rt.it.next()].getValue();
+            if (comptime operator.getOperatorsCount() >= 3) ops[2] = try rt.results[try rt.it.next()].getValue();
+            if (comptime operator.getOperatorsCount() >= 4) ops[3] = try rt.results[try rt.it.next()].getValue();
 
             const lane_bits = try Result.resolveLaneBitWidth(target_type, rt);
 
             switch (dst.*) {
-                .Int => try operator.applyScalarBits(rt, lane_bits, dst, op1, op2_value),
+                .Int => try operator.applyScalarBits(lane_bits, dst, ops),
 
                 .Vector,
                 .Vector2i32,
@@ -509,7 +588,7 @@ fn BitEngine(comptime T: ValueType, comptime Op: BitOp) type {
                 .Vector2u32,
                 .Vector3u32,
                 .Vector4u32,
-                => try operator.applyVectorBits(rt, lane_bits, dst, op1, op2_value),
+                => try operator.applyVectorBits(lane_bits, dst, ops),
 
                 else => return RuntimeError.InvalidSpirV,
             }
@@ -1069,7 +1148,8 @@ fn copyValue(dst: *Value, src: *const Value) void {
 
         inline fn getDstSlice(v: *Value) ?[]Value {
             return switch (v.*) {
-                .Vector, .Matrix, .Array, .Structure => |s| s,
+                .Vector, .Matrix, .Array => |s| s,
+                .Structure => |s| s.values,
                 else => null,
             };
         }
@@ -1163,9 +1243,13 @@ fn copyValue(dst: *Value, src: *const Value) void {
     }
 
     switch (src.*) {
-        .Vector, .Matrix, .Array, .Structure => |src_slice| {
+        .Vector, .Matrix, .Array => |src_slice| {
             const dst_slice = helpers.getDstSlice(dst);
             helpers.copySlice(dst_slice.?, src_slice);
+        },
+        .Structure => |s| {
+            const dst_slice = helpers.getDstSlice(dst);
+            helpers.copySlice(dst_slice.?, s.values);
         },
         .Pointer => |ptr| switch (ptr.ptr) {
             .common => |src_val_ptr| copyValue(dst, src_val_ptr),
@@ -1236,9 +1320,11 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
         .AccessChain = .{
             .target = var_type,
             .value = blk: {
+                var is_owner_of_uniform_slice = false;
                 var uniform_slice_window: ?[]u8 = null;
 
-                for (0..index_count) |_| {
+                for (0..index_count) |index| {
+                    const is_last = (index == index_count - 1);
                     const member = &rt.results[try rt.it.next()];
                     const member_value = switch ((try member.getVariant()).*) {
                         .Constant => |c| &c.value,
@@ -1253,13 +1339,19 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                             }
 
                             switch (value_ptr.*) {
-                                .Vector, .Matrix, .Array, .Structure => |v| {
+                                .Vector, .Matrix, .Array => |v| {
                                     if (i.value.uint32 >= v.len) return RuntimeError.OutOfBounds;
                                     value_ptr = &v[i.value.uint32];
                                 },
+                                .Structure => |s| {
+                                    if (i.value.uint32 >= s.values.len) return RuntimeError.OutOfBounds;
+                                    value_ptr = &s.values[i.value.uint32];
+                                },
                                 .RuntimeArray => |*arr| {
                                     if (i.value.uint32 >= arr.getLen()) return RuntimeError.OutOfBounds;
-                                    value_ptr = try arr.createValueFromIndex(allocator, rt.results, i.value.uint32);
+                                    value_ptr = try arr.createValueFromIndex(if (is_last) allocator else arena.allocator(), rt.results, i.value.uint32);
+                                    if (is_last)
+                                        is_owner_of_uniform_slice = true;
                                     uniform_slice_window = arr.data[arr.getOffsetOfIndex(i.value.uint32)..];
                                 },
                                 .Vector4f32 => |*v| {
@@ -1307,6 +1399,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                 break :blk .{
                     .Pointer = .{
                         .ptr = .{ .common = value_ptr },
+                        .is_owner_of_uniform_slice = is_owner_of_uniform_slice,
                         .uniform_slice_window = uniform_slice_window,
                     },
                 };
@@ -1363,6 +1456,7 @@ fn opCompositeConstruct(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime)
             var offset: usize = 0;
 
             for (0..index_count) |_| {
+                // DOES NOT WORK : FIXME
                 const elem_value = (try rt.results[try rt.it.next()].getVariant()).Constant.value;
                 std.mem.copyForwards(u8, arr.data[offset..(offset + arr.stride)], std.mem.asBytes(&elem_value));
                 offset += arr.stride;
@@ -1753,6 +1847,7 @@ fn opMemberName(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime)
             .Type = .{
                 .Structure = .{
                     .members_type_word = undefined,
+                    .members_offsets = undefined,
                     .member_names = .empty,
                 },
             },
@@ -1800,8 +1895,6 @@ fn opReturnValue(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!vo
     if (rt.function_stack.getLastOrNull()) |function| {
         var ret_res = rt.results[try rt.it.next()];
         copyValue(try function.ret.getValue(), try ret_res.getValue());
-    } else {
-        return RuntimeError.InvalidSpirV; // No current function ???
     }
 
     _ = rt.function_stack.pop();
@@ -2060,12 +2153,15 @@ fn opTypeStruct(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime)
         }
         break :blk members_type_word;
     };
+    const members_offsets = allocator.alloc(?SpvWord, word_count - 1) catch return RuntimeError.OutOfMemory;
+    @memset(members_offsets, null);
 
     if (rt.mod.results[id].variant) |*variant| {
         switch (variant.*) {
             .Type => |*t| switch (t.*) {
                 .Structure => |*s| {
                     s.members_type_word = members_type_word;
+                    s.members_offsets = members_offsets;
                 },
                 else => unreachable,
             },
@@ -2076,6 +2172,7 @@ fn opTypeStruct(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime)
             .Type = .{
                 .Structure = .{
                     .members_type_word = members_type_word,
+                    .members_offsets = members_offsets,
                     .member_names = .empty,
                 },
             },

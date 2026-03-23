@@ -120,6 +120,7 @@ pub const TypeData = union(Type) {
     },
     Structure: struct {
         members_type_word: []const SpvWord,
+        members_offsets: []?SpvWord,
         member_names: std.ArrayList([]const u8),
     },
     Function: struct {
@@ -146,7 +147,13 @@ pub const TypeData = union(Type) {
             .RuntimeArray => |a| a.stride,
             .Structure => |s| blk: {
                 var total: usize = 0;
-                for (s.members_type_word) |type_word| {
+                for (s.members_type_word, 0..) |type_word, i| {
+                    if (i + 1 < s.members_offsets.len) {
+                        if (s.members_offsets[i + 1]) |offset| {
+                            total = offset;
+                            continue;
+                        }
+                    }
                     total += results[type_word].variant.?.Type.getSize(results);
                 }
                 break :blk total;
@@ -224,6 +231,7 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
                     for (data.member_names.items) |name| {
                         allocator.free(name);
                     }
+                    allocator.free(data.members_offsets);
                     data.member_names.deinit(allocator);
                 },
                 else => {},
@@ -301,6 +309,7 @@ pub fn dupe(self: *const Self, allocator: std.mem.Allocator) RuntimeError!Self {
                             .Type = .{
                                 .Structure = .{
                                     .members_type_word = allocator.dupe(SpvWord, s.members_type_word) catch return RuntimeError.OutOfMemory,
+                                    .members_offsets = allocator.dupe(?SpvWord, s.members_offsets) catch return RuntimeError.OutOfMemory,
                                     .member_names = blk2: {
                                         const member_names = s.member_names.clone(allocator) catch return RuntimeError.OutOfMemory;
                                         for (member_names.items, s.member_names.items) |*new_name, name| {

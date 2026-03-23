@@ -85,7 +85,10 @@ pub const Value = union(Type) {
             return @divTrunc(self.data.len, self.stride);
         }
     },
-    Structure: []Self,
+    Structure: struct {
+        offsets: []const ?SpvWord,
+        values: []Self,
+    },
     Function: noreturn,
     Image: struct {},
     Sampler: struct {},
@@ -97,12 +100,14 @@ pub const Value = union(Type) {
             i32_ptr: *i32, //< For vector specializations
             u32_ptr: *u32,
         },
+        is_owner_of_uniform_slice: bool = false,
         uniform_slice_window: ?[]u8 = null,
     },
 
     pub inline fn getCompositeDataOrNull(self: *const Self) ?[]Self {
         return switch (self.*) {
-            .Vector, .Matrix, .Array, .Structure => |v| v,
+            .Structure => |*s| s.values,
+            .Vector, .Matrix, .Array => |v| v,
             else => null,
         };
     }
@@ -160,11 +165,16 @@ pub const Value = union(Type) {
                     break :blk self;
                 },
                 .Structure => |s| blk: {
-                    var self: Self = .{ .Structure = allocator.alloc(Self, member_count) catch return RuntimeError.OutOfMemory };
+                    var self: Self = .{
+                        .Structure = .{
+                            .offsets = allocator.dupe(?SpvWord, s.members_offsets) catch return RuntimeError.OutOfMemory,
+                            .values = allocator.alloc(Self, member_count) catch return RuntimeError.OutOfMemory,
+                        },
+                    };
                     errdefer self.deinit(allocator);
 
-                    for (self.Structure, s.members_type_word) |*value, member_type_word| {
-                        value.* = try Self.init(allocator, results, member_type_word);
+                    for (self.Structure.values, s.members_type_word) |*value, type_word| {
+                        value.* = try Self.init(allocator, results, type_word);
                     }
                     break :blk self;
                 },
@@ -210,9 +220,13 @@ pub const Value = union(Type) {
             },
             .Structure => |s| .{
                 .Structure = blk: {
-                    const values = allocator.dupe(Self, s) catch return RuntimeError.OutOfMemory;
-                    for (values, s) |*new_value, value| new_value.* = try value.dupe(allocator);
-                    break :blk values;
+                    const offsets = allocator.dupe(?SpvWord, s.offsets) catch return RuntimeError.OutOfMemory;
+                    const values = allocator.dupe(Self, s.values) catch return RuntimeError.OutOfMemory;
+                    for (values, s.values) |*new_value, value| new_value.* = try value.dupe(allocator);
+                    break :blk .{
+                        .offsets = offsets,
+                        .values = values,
+                    };
                 },
             },
             else => self.*,
@@ -301,11 +315,24 @@ pub const Value = union(Type) {
             .Vector,
             .Matrix,
             .Array,
-            .Structure,
             => |values| {
                 var offset: usize = 0;
                 for (values) |v| {
                     offset += try v.read(output[offset..]);
+                }
+                return offset;
+            },
+            .Structure => |s| {
+                var offset: usize = 0;
+                for (s.values, 0..) |v, i| {
+                    const read_size = try v.read(output[offset..]);
+                    if (i + 1 < s.offsets.len) {
+                        if (s.offsets[i + 1]) |o| {
+                            offset = o;
+                            continue;
+                        }
+                    }
+                    offset += read_size;
                 }
                 return offset;
             },
@@ -427,11 +454,24 @@ pub const Value = union(Type) {
             .Vector,
             .Matrix,
             .Array,
-            .Structure,
             => |*values| {
                 var offset: usize = 0;
                 for (values.*) |*v| {
                     offset += try v.write(input[offset..]);
+                }
+                return offset;
+            },
+            .Structure => |s| {
+                var offset: usize = 0;
+                for (s.values, 0..) |*v, i| {
+                    const write_size = try v.write(input[offset..]);
+                    if (i + 1 < s.offsets.len) {
+                        if (s.offsets[i + 1]) |o| {
+                            offset = o;
+                            continue;
+                        }
+                    }
+                    offset += write_size;
                 }
                 return offset;
             },
@@ -449,9 +489,22 @@ pub const Value = union(Type) {
             .Vector4f32, .Vector4i32, .Vector4u32 => 4 * 4,
             .Vector3f32, .Vector3i32, .Vector3u32 => 3 * 4,
             .Vector2f32, .Vector2i32, .Vector2u32 => 2 * 4,
-            .Vector, .Matrix, .Array, .Structure => |values| blk: {
+            .Vector, .Matrix, .Array => |values| blk: {
                 var size: usize = 0;
                 for (values) |v| {
+                    size += try v.getPlainMemorySize();
+                }
+                break :blk size;
+            },
+            .Structure => |s| blk: {
+                var size: usize = 0;
+                for (s.values, 0..) |v, i| {
+                    if (i + 1 < s.offsets.len) {
+                        if (s.offsets[i + 1]) |o| {
+                            size = o;
+                            continue;
+                        }
+                    }
                     size += try v.getPlainMemorySize();
                 }
                 break :blk size;
@@ -504,12 +557,13 @@ pub const Value = union(Type) {
                         .common => |ptr| {
                             _ = try ptr.read(window);
                             ptr.deinit(allocator);
-                            allocator.destroy(ptr);
+                            if (p.is_owner_of_uniform_slice)
+                                allocator.destroy(ptr);
                         },
                         else => {},
                     }
+                    p.uniform_slice_window = null;
                 }
-                p.uniform_slice_window = null;
             },
             else => {},
         }
@@ -517,9 +571,14 @@ pub const Value = union(Type) {
 
     pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
         switch (self.*) {
-            .Vector, .Matrix, .Array, .Structure => |values| {
+            .Vector, .Matrix, .Array => |values| {
                 for (values) |*value| value.deinit(allocator);
                 allocator.free(values);
+            },
+            .Structure => |s| {
+                for (s.values) |*value| value.deinit(allocator);
+                allocator.free(s.values);
+                allocator.free(s.offsets);
             },
             else => {},
         }

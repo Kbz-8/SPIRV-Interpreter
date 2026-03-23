@@ -167,7 +167,7 @@ pub fn init(allocator: std.mem.Allocator, source: []const SpvWord, options: Modu
     _ = self.it.skip(); // Skip schema
 
     try self.pass(allocator); // Setup pass
-    try self.populateMaps();
+    try self.applyDecorations();
 
     if (std.process.hasEnvVarConstant("SPIRV_INTERPRETER_DEBUG_LOGS")) {
         var capability_set_names: std.ArrayList([]const u8) = .empty;
@@ -254,37 +254,49 @@ fn pass(self: *Self, allocator: std.mem.Allocator) ModuleError!void {
     self.needed_runtime_bytes += wrapped_allocator.total_bytes_allocated;
 }
 
-fn populateMaps(self: *Self) ModuleError!void {
+fn applyDecorations(self: *Self) ModuleError!void {
     for (self.results, 0..) |result, id| {
-        if (result.variant == null or std.meta.activeTag(result.variant.?) != .Variable)
+        if (result.variant == null)
             continue;
 
         var set: ?usize = null;
         var binding: ?usize = null;
 
         for (result.decorations.items) |decoration| {
-            switch (result.variant.?.Variable.storage_class) {
-                .Input => {
-                    switch (decoration.rtype) {
-                        .BuiltIn => self.builtins.put(
-                            std.enums.fromInt(spv.SpvBuiltIn, decoration.literal_1) orelse return ModuleError.InvalidSpirV,
-                            @intCast(id),
-                        ),
-                        .Location => self.input_locations[decoration.literal_1] = @intCast(id),
+            switch (result.variant.?) {
+                .Variable => |v| {
+                    switch (v.storage_class) {
+                        .Input => {
+                            switch (decoration.rtype) {
+                                .BuiltIn => self.builtins.put(
+                                    std.enums.fromInt(spv.SpvBuiltIn, decoration.literal_1) orelse return ModuleError.InvalidSpirV,
+                                    @intCast(id),
+                                ),
+                                .Location => self.input_locations[decoration.literal_1] = @intCast(id),
+                                else => {},
+                            }
+                        },
+                        .Output => {
+                            if (decoration.rtype == .Location)
+                                self.output_locations[decoration.literal_1] = @intCast(id);
+                        },
+                        .StorageBuffer, .Uniform, .UniformConstant => {
+                            switch (decoration.rtype) {
+                                .Binding => binding = decoration.literal_1,
+                                .DescriptorSet => set = decoration.literal_1,
+                                else => {},
+                            }
+                        },
                         else => {},
                     }
                 },
-                .Output => {
-                    if (decoration.rtype == .Location)
-                        self.output_locations[decoration.literal_1] = @intCast(id);
-                },
-                .StorageBuffer,
-                .Uniform,
-                .UniformConstant,
-                => {
-                    switch (decoration.rtype) {
-                        .Binding => binding = decoration.literal_1,
-                        .DescriptorSet => set = decoration.literal_1,
+                .Type => |t| {
+                    switch (t) {
+                        .Structure => |*s| {
+                            if (decoration.rtype == .Offset) {
+                                s.members_offsets[decoration.index] = decoration.literal_1;
+                            }
+                        },
                         else => {},
                     }
                 },
