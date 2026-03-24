@@ -220,11 +220,10 @@ pub const Value = union(Type) {
             },
             .Structure => |s| .{
                 .Structure = blk: {
-                    const offsets = allocator.dupe(?SpvWord, s.offsets) catch return RuntimeError.OutOfMemory;
                     const values = allocator.dupe(Self, s.values) catch return RuntimeError.OutOfMemory;
                     for (values, s.values) |*new_value, value| new_value.* = try value.dupe(allocator);
                     break :blk .{
-                        .offsets = offsets,
+                        .offsets = allocator.dupe(?SpvWord, s.offsets) catch return RuntimeError.OutOfMemory,
                         .values = values,
                     };
                 },

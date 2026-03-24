@@ -59,6 +59,7 @@ pub inline fn skipN(self: *Self, count: usize) bool {
 
 pub inline fn skipToEnd(self: *Self) void {
     self.index = self.buffer.len;
+    self.did_jump = true;
 }
 
 pub inline fn emitSourceLocation(self: *const Self) usize {

@@ -72,7 +72,7 @@ const ImageInfo = struct {
     access: spv.SpvAccessQualifier,
 };
 
-const Decoration = struct {
+pub const Decoration = struct {
     rtype: spv.SpvDecoration,
     literal_1: SpvWord,
     literal_2: ?SpvWord,
@@ -112,6 +112,7 @@ pub const TypeData = union(Type) {
         components_type_word: SpvWord,
         components_type: Type,
         member_count: SpvWord,
+        stride: SpvWord,
     },
     RuntimeArray: struct {
         components_type_word: SpvWord,
@@ -142,7 +143,7 @@ pub const TypeData = union(Type) {
             .Int => |i| @divExact(i.bit_length, 8),
             .Float => |f| @divExact(f.bit_length, 8),
             .Vector => |v| results[v.components_type_word].variant.?.Type.getSize(results),
-            .Array => |a| results[a.components_type_word].variant.?.Type.getSize(results),
+            .Array => |a| a.stride,
             .Matrix => |m| results[m.column_type_word].variant.?.Type.getSize(results),
             .RuntimeArray => |a| a.stride,
             .Structure => |s| blk: {

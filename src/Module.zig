@@ -37,44 +37,6 @@ pub const ModuleError = error{
     OutOfMemory,
 };
 
-const AllocatorWrapper = struct {
-    child_allocator: std.mem.Allocator,
-    total_bytes_allocated: usize = 0,
-
-    pub fn allocator(self: *AllocatorWrapper) std.mem.Allocator {
-        return .{
-            .ptr = self,
-            .vtable = &.{
-                .alloc = alloc,
-                .resize = resize,
-                .remap = remap,
-                .free = free,
-            },
-        };
-    }
-
-    fn alloc(ctx: *anyopaque, n: usize, alignment: std.mem.Alignment, ra: usize) ?[*]u8 {
-        const self: *AllocatorWrapper = @ptrCast(@alignCast(ctx));
-        self.total_bytes_allocated += alignment.toByteUnits() + n;
-        return self.child_allocator.rawAlloc(n, alignment, ra);
-    }
-
-    fn resize(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
-        const self: *AllocatorWrapper = @ptrCast(@alignCast(ctx));
-        return self.child_allocator.rawResize(buf, alignment, new_len, ret_addr);
-    }
-
-    fn remap(context: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, return_address: usize) ?[*]u8 {
-        const self: *AllocatorWrapper = @ptrCast(@alignCast(context));
-        return self.child_allocator.rawRemap(memory, alignment, new_len, return_address);
-    }
-
-    fn free(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
-        const self: *AllocatorWrapper = @ptrCast(@alignCast(ctx));
-        return self.child_allocator.rawFree(buf, alignment, ret_addr);
-    }
-};
-
 options: ModuleOptions,
 
 it: WordIterator,
@@ -114,8 +76,6 @@ bindings: [lib.SPIRV_MAX_SET][lib.SPIRV_MAX_SET_BINDINGS]SpvWord,
 builtins: std.EnumMap(spv.SpvBuiltIn, SpvWord),
 push_constants: []Value,
 
-needed_runtime_bytes: usize,
-
 pub fn init(allocator: std.mem.Allocator, source: []const SpvWord, options: ModuleOptions) ModuleError!Self {
     var self: Self = std.mem.zeroInit(Self, .{
         .options = options,
@@ -130,8 +90,6 @@ pub fn init(allocator: std.mem.Allocator, source: []const SpvWord, options: Modu
     errdefer allocator.free(self.code);
 
     op.initRuntimeDispatcher();
-
-    var wrapped_allocator: AllocatorWrapper = .{ .child_allocator = allocator };
 
     self.it = WordIterator.init(self.code);
 
@@ -152,7 +110,7 @@ pub fn init(allocator: std.mem.Allocator, source: []const SpvWord, options: Modu
     self.generator_version = @intCast(generator & 0x0000FFFF);
 
     self.bound = self.it.next() catch return ModuleError.InvalidSpirV;
-    self.results = wrapped_allocator.allocator().alloc(Result, self.bound) catch return ModuleError.OutOfMemory;
+    self.results = allocator.alloc(Result, self.bound) catch return ModuleError.OutOfMemory;
     errdefer allocator.free(self.results);
 
     for (self.results) |*result| {
@@ -208,8 +166,6 @@ pub fn init(allocator: std.mem.Allocator, source: []const SpvWord, options: Modu
         });
     }
 
-    self.needed_runtime_bytes += wrapped_allocator.total_bytes_allocated;
-
     //@import("pretty").print(allocator, self.results, .{
     //    .tab_size = 4,
     //    .max_depth = 0,
@@ -235,8 +191,6 @@ fn pass(self: *Self, allocator: std.mem.Allocator) ModuleError!void {
     var rt = Runtime.init(allocator, self) catch return ModuleError.OutOfMemory;
     defer rt.deinit(allocator);
 
-    var wrapped_allocator: AllocatorWrapper = .{ .child_allocator = allocator };
-
     while (rt.it.nextOrNull()) |opcode_data| {
         const word_count = ((opcode_data & (~spv.SpvOpCodeMask)) >> spv.SpvWordCountShift) - 1;
         const opcode = (opcode_data & spv.SpvOpCodeMask);
@@ -244,14 +198,12 @@ fn pass(self: *Self, allocator: std.mem.Allocator) ModuleError!void {
         var it_tmp = rt.it; // Save because operations may iter on this iterator
         if (std.enums.fromInt(spv.SpvOp, opcode)) |spv_op| {
             if (op.SetupDispatcher.get(spv_op)) |pfn| {
-                pfn(wrapped_allocator.allocator(), word_count, &rt) catch return ModuleError.InvalidSpirV;
+                pfn(allocator, word_count, &rt) catch return ModuleError.InvalidSpirV;
             }
         }
         _ = it_tmp.skipN(word_count);
         rt.it = it_tmp;
     }
-
-    self.needed_runtime_bytes += wrapped_allocator.total_bytes_allocated;
 }
 
 fn applyDecorations(self: *Self) ModuleError!void {
