@@ -172,9 +172,9 @@ pub fn writeDescriptorSet(self: *const Self, input: []u8, set: SpvWord, binding:
         const value = &self.results[self.mod.bindings[set][binding]].variant.?.Variable.value;
         switch (value.*) {
             .Array => |arr| {
-                if (descriptor_index >= arr.len)
+                if (descriptor_index >= arr.values.len)
                     return RuntimeError.NotFound;
-                _ = try arr[descriptor_index].write(input);
+                _ = try arr.values[descriptor_index].write(input);
             },
             else => {
                 if (descriptor_index != 0)

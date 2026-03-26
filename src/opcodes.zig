@@ -1160,7 +1160,8 @@ fn copyValue(dst: *Value, src: *const Value) void {
 
         inline fn getDstSlice(v: *Value) ?[]Value {
             return switch (v.*) {
-                .Vector, .Matrix, .Array => |s| s,
+                .Vector, .Matrix => |s| s,
+                .Array => |a| a.values,
                 .Structure => |s| s.values,
                 else => null,
             };
@@ -1255,9 +1256,13 @@ fn copyValue(dst: *Value, src: *const Value) void {
     }
 
     switch (src.*) {
-        .Vector, .Matrix, .Array => |src_slice| {
+        .Vector, .Matrix => |src_slice| {
             const dst_slice = helpers.getDstSlice(dst);
             helpers.copySlice(dst_slice.?, src_slice);
+        },
+        .Array => |a| {
+            const dst_slice = helpers.getDstSlice(dst);
+            helpers.copySlice(dst_slice.?, a.values);
         },
         .Structure => |s| {
             const dst_slice = helpers.getDstSlice(dst);
@@ -1351,9 +1356,13 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                             }
 
                             switch (value_ptr.*) {
-                                .Vector, .Matrix, .Array => |v| {
+                                .Vector, .Matrix => |v| {
                                     if (i.value.uint32 >= v.len) return RuntimeError.OutOfBounds;
                                     value_ptr = &v[i.value.uint32];
+                                },
+                                .Array => |a| {
+                                    if (i.value.uint32 >= a.values.len) return RuntimeError.OutOfBounds;
+                                    value_ptr = &a.values[i.value.uint32];
                                 },
                                 .Structure => |s| {
                                     if (i.value.uint32 >= s.values.len) return RuntimeError.OutOfBounds;
