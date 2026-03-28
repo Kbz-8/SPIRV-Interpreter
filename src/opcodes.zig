@@ -1150,11 +1150,11 @@ fn opBitcast(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeErro
     _ = try to_value.write(bytes);
 }
 
-fn copyValue(dst: *Value, src: *const Value) void {
+fn copyValue(dst: *Value, src: *const Value) RuntimeError!void {
     const helpers = struct {
-        inline fn copySlice(dst_slice: []Value, src_slice: []const Value) void {
+        inline fn copySlice(dst_slice: []Value, src_slice: []const Value) RuntimeError!void {
             for (0..@min(dst_slice.len, src_slice.len)) |i| {
-                copyValue(&dst_slice[i], &src_slice[i]);
+                try copyValue(&dst_slice[i], &src_slice[i]);
             }
         }
 
@@ -1167,75 +1167,75 @@ fn copyValue(dst: *Value, src: *const Value) void {
             };
         }
 
-        inline fn writeF32(dst_f32_ptr: *f32, src_v: *const Value) void {
+        inline fn writeF32(dst_f32_ptr: *f32, src_v: *const Value) RuntimeError!void {
             switch (src_v.*) {
                 .Pointer => |src_ptr| switch (src_ptr.ptr) {
                     .f32_ptr => |src_f32_ptr| dst_f32_ptr.* = src_f32_ptr.*,
                     .common => |src_val_ptr| dst_f32_ptr.* = src_val_ptr.Float.value.float32,
-                    else => unreachable,
+                    else => return RuntimeError.InvalidSpirV,
                 },
                 .Float => |f| dst_f32_ptr.* = f.value.float32,
-                else => unreachable,
+                else => return RuntimeError.InvalidSpirV,
             }
         }
 
-        inline fn writeI32(dst_i32_ptr: *i32, src_v: *const Value) void {
+        inline fn writeI32(dst_i32_ptr: *i32, src_v: *const Value) RuntimeError!void {
             switch (src_v.*) {
                 .Pointer => |src_ptr| switch (src_ptr.ptr) {
                     .i32_ptr => |src_i32_ptr| dst_i32_ptr.* = src_i32_ptr.*,
                     .common => |src_val_ptr| dst_i32_ptr.* = src_val_ptr.Int.value.sint32,
-                    else => unreachable,
+                    else => return RuntimeError.InvalidSpirV,
                 },
                 .Int => |i| dst_i32_ptr.* = i.value.sint32,
-                else => unreachable,
+                else => return RuntimeError.InvalidSpirV,
             }
         }
 
-        inline fn writeU32(dst_u32_ptr: *u32, src_v: *const Value) void {
+        inline fn writeU32(dst_u32_ptr: *u32, src_v: *const Value) RuntimeError!void {
             switch (src_v.*) {
                 .Pointer => |src_ptr| switch (src_ptr.ptr) {
                     .u32_ptr => |src_u32_ptr| dst_u32_ptr.* = src_u32_ptr.*,
                     .common => |src_val_ptr| dst_u32_ptr.* = src_val_ptr.Int.value.uint32,
-                    else => unreachable,
+                    else => return RuntimeError.InvalidSpirV,
                 },
                 .Int => |i| dst_u32_ptr.* = i.value.uint32,
-                else => unreachable,
+                else => return RuntimeError.InvalidSpirV,
             }
         }
 
-        inline fn readF32(dst_v: *Value, src_f32_ptr: *const f32) void {
+        inline fn readF32(dst_v: *Value, src_f32_ptr: *const f32) RuntimeError!void {
             switch (dst_v.*) {
                 .Pointer => |dst_ptr| switch (dst_ptr.ptr) {
                     .f32_ptr => |dst_f32_ptr| dst_f32_ptr.* = src_f32_ptr.*,
                     .common => |dst_val_ptr| dst_val_ptr.Float.value.float32 = src_f32_ptr.*,
-                    else => unreachable,
+                    else => return RuntimeError.InvalidSpirV,
                 },
                 .Float => |*f| f.value.float32 = src_f32_ptr.*,
-                else => unreachable,
+                else => return RuntimeError.InvalidSpirV,
             }
         }
 
-        inline fn readI32(dst_v: *Value, src_i32_ptr: *const i32) void {
+        inline fn readI32(dst_v: *Value, src_i32_ptr: *const i32) RuntimeError!void {
             switch (dst_v.*) {
                 .Pointer => |dst_ptr| switch (dst_ptr.ptr) {
                     .i32_ptr => |dst_i32_ptr| dst_i32_ptr.* = src_i32_ptr.*,
                     .common => |dst_val_ptr| dst_val_ptr.Int.value.sint32 = src_i32_ptr.*,
-                    else => unreachable,
+                    else => return RuntimeError.InvalidSpirV,
                 },
                 .Int => |*i| i.value.sint32 = src_i32_ptr.*,
-                else => unreachable,
+                else => return RuntimeError.InvalidSpirV,
             }
         }
 
-        inline fn readU32(dst_v: *Value, src_u32_ptr: *const u32) void {
+        inline fn readU32(dst_v: *Value, src_u32_ptr: *const u32) RuntimeError!void {
             switch (dst_v.*) {
                 .Pointer => |dst_ptr| switch (dst_ptr.ptr) {
                     .u32_ptr => |dst_u32_ptr| dst_u32_ptr.* = src_u32_ptr.*,
                     .common => |dst_val_ptr| dst_val_ptr.Int.value.uint32 = src_u32_ptr.*,
-                    else => unreachable,
+                    else => return RuntimeError.InvalidSpirV,
                 },
                 .Int => |*i| i.value.uint32 = src_u32_ptr.*,
-                else => unreachable,
+                else => return RuntimeError.InvalidSpirV,
             }
         }
     };
@@ -1244,35 +1244,46 @@ fn copyValue(dst: *Value, src: *const Value) void {
         switch (dst.Pointer.ptr) {
             .common => |dst_val_ptr| return switch (src.*) {
                 .Pointer => |src_ptr| switch (src_ptr.ptr) {
-                    .common => |src_val_ptr| copyValue(dst_val_ptr, src_val_ptr),
+                    .common => |src_val_ptr| try copyValue(dst_val_ptr, src_val_ptr),
                     else => dst_val_ptr.* = src.*,
                 },
-                else => copyValue(dst_val_ptr, src),
+                else => try copyValue(dst_val_ptr, src),
             },
-            .f32_ptr => |dst_f32_ptr| helpers.writeF32(dst_f32_ptr, src),
-            .i32_ptr => |dst_i32_ptr| helpers.writeI32(dst_i32_ptr, src),
-            .u32_ptr => |dst_u32_ptr| helpers.writeU32(dst_u32_ptr, src),
+            .f32_ptr => |dst_f32_ptr| try helpers.writeF32(dst_f32_ptr, src),
+            .i32_ptr => |dst_i32_ptr| try helpers.writeI32(dst_i32_ptr, src),
+            .u32_ptr => |dst_u32_ptr| try helpers.writeU32(dst_u32_ptr, src),
         }
     }
 
     switch (src.*) {
         .Vector, .Matrix => |src_slice| {
             const dst_slice = helpers.getDstSlice(dst);
-            helpers.copySlice(dst_slice.?, src_slice);
+            try helpers.copySlice(dst_slice.?, src_slice);
         },
         .Array => |a| {
             const dst_slice = helpers.getDstSlice(dst);
-            helpers.copySlice(dst_slice.?, a.values);
+            try helpers.copySlice(dst_slice.?, a.values);
         },
         .Structure => |s| {
             const dst_slice = helpers.getDstSlice(dst);
-            helpers.copySlice(dst_slice.?, s.values);
+            try helpers.copySlice(dst_slice.?, s.values);
         },
         .Pointer => |ptr| switch (ptr.ptr) {
-            .common => |src_val_ptr| copyValue(dst, src_val_ptr),
-            .f32_ptr => |src_f32_ptr| helpers.readF32(dst, src_f32_ptr),
-            .i32_ptr => |src_i32_ptr| helpers.readI32(dst, src_i32_ptr),
-            .u32_ptr => |src_u32_ptr| helpers.readU32(dst, src_u32_ptr),
+            .common => |src_val_ptr| try copyValue(dst, src_val_ptr),
+            .f32_ptr => |src_f32_ptr| try helpers.readF32(dst, src_f32_ptr),
+            .i32_ptr => |src_i32_ptr| try helpers.readI32(dst, src_i32_ptr),
+            .u32_ptr => |src_u32_ptr| try helpers.readU32(dst, src_u32_ptr),
+        },
+        .RuntimeArray => |src_arr| switch (dst.*) {
+            .RuntimeArray => |dst_arr| @memcpy(dst_arr.data, src_arr.data),
+            .Pointer => |dst_ptr| switch (dst_ptr.ptr) {
+                .common => |dst_ptr_ptr| switch (dst_ptr_ptr.*) {
+                    .RuntimeArray => |dst_arr| @memcpy(dst_arr.data, src_arr.data),
+                    else => return RuntimeError.InvalidSpirV,
+                },
+                else => return RuntimeError.InvalidSpirV,
+            },
+            else => return RuntimeError.InvalidSpirV,
         },
         else => dst.* = src.*,
     }
@@ -1541,10 +1552,7 @@ fn opCompositeExtract(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Ru
                         continue;
                     }
                     switch (composite) {
-                        .RuntimeArray => |arr| {
-                            composite = try Value.init(arena_allocator, rt.results, arr.type_word);
-                            _ = try composite.writeConst(arr.data[arr.getOffsetOfIndex(member_id)..]);
-                        },
+                        .RuntimeArray => |arr| composite = try arr.createLocalValueFromIndex(arena_allocator, rt.results, member_id),
                         .Vector4f32 => |v| break :blk .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = v[member_id] } } },
                         .Vector3f32 => |v| break :blk .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = v[member_id] } } },
                         .Vector2f32 => |v| break :blk .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = v[member_id] } } },
@@ -1571,7 +1579,7 @@ fn opCompositeInsert(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Run
 
     const target = try rt.results[id].getValue();
 
-    copyValue(target, composite);
+    try copyValue(target, composite);
 
     const index_count = word_count - 4;
 
@@ -1587,7 +1595,7 @@ fn opCompositeInsert(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Run
             indices: []const SpvWord,
         ) RuntimeError!void {
             if (indices.len == 0) {
-                copyValue(current, object_value);
+                try copyValue(current, object_value);
                 return;
             }
 
@@ -1614,8 +1622,7 @@ fn opCompositeInsert(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Run
                         return;
                     }
 
-                    var elem_value = try Value.init(alloc, results, arr.type_word);
-                    _ = try elem_value.writeConst(arr.data[elem_offset..]);
+                    var elem_value = try arr.createLocalValueFromIndex(alloc, results, elem_offset);
                     try insertAt(alloc, results, &elem_value, object_value, indices[1..]);
                     _ = try elem_value.read(arr.data[elem_offset..]);
                 },
@@ -1700,7 +1707,7 @@ fn opConstantComposite(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) R
     const target_value = try target.getValue();
     if (target_value.getCompositeDataOrNull()) |*values| {
         for (values.*) |*element| {
-            copyValue(element, try rt.mod.results[try rt.it.next()].getValue());
+            try copyValue(element, try rt.mod.results[try rt.it.next()].getValue());
         }
         return;
     }
@@ -1740,7 +1747,7 @@ fn opConstantComposite(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) R
 fn opCopyMemory(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     const target = try rt.it.next();
     const source = try rt.it.next();
-    copyValue(try rt.results[target].getValue(), try rt.results[source].getValue());
+    try copyValue(try rt.results[target].getValue(), try rt.results[source].getValue());
 }
 
 fn opDecorate(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
@@ -2000,7 +2007,7 @@ fn opLoad(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     _ = rt.it.skip();
     const id = try rt.it.next();
     const ptr_id = try rt.it.next();
-    copyValue(try rt.results[id].getValue(), try rt.results[ptr_id].getValue());
+    try copyValue(try rt.results[id].getValue(), try rt.results[ptr_id].getValue());
 }
 
 fn opMemberName(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
@@ -2061,7 +2068,7 @@ fn opReturn(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
 fn opReturnValue(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     if (rt.function_stack.getLastOrNull()) |function| {
         var ret_res = rt.results[try rt.it.next()];
-        copyValue(try function.ret.getValue(), try ret_res.getValue());
+        try copyValue(try function.ret.getValue(), try ret_res.getValue());
     } else {
         return RuntimeError.InvalidSpirV; // No current function ???
     }
@@ -2095,13 +2102,13 @@ fn opSelect(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
             obj1_val.getCompositeDataOrNull().?,
             obj2_val.getCompositeDataOrNull().?,
         ) |*t, c, o1, o2| {
-            copyValue(t, if (c.Bool) &o1 else &o2);
+            try copyValue(t, if (c.Bool) &o1 else &o2);
         }
         return;
     }
 
     switch (target_val.*) {
-        .Bool, .Int, .Float => copyValue(target_val, if (cond_val.Bool) obj1_val else obj2_val),
+        .Bool, .Int, .Float => try copyValue(target_val, if (cond_val.Bool) obj1_val else obj2_val),
 
         .Vector4f32 => |*v| {
             const cond_vec = @Vector(4, bool){
@@ -2188,7 +2195,7 @@ fn opSourceExtension(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Run
 fn opStore(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     const ptr_id = try rt.it.next();
     const val_id = try rt.it.next();
-    copyValue(try rt.results[ptr_id].getValue(), try rt.results[val_id].getValue());
+    try copyValue(try rt.results[ptr_id].getValue(), try rt.results[val_id].getValue());
 }
 
 fn opTypeArray(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
@@ -2425,15 +2432,25 @@ fn opVariable(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) R
 
     const resolved_word = if (rt.mod.results[var_type].resolveTypeWordOrNull()) |word| word else var_type;
     const resolved = &rt.mod.results[resolved_word];
+
+    const resolved_type = switch ((try resolved.getConstVariant()).*) {
+        .Type => |t| @as(Result.Type, t),
+        else => return RuntimeError.InvalidSpirV,
+    };
+
+    const externally_visible_data_storages = [_]spv.SpvStorageClass{
+        .Uniform,
+        .StorageBuffer,
+    };
+
+    const is_externally_visible = std.mem.containsAtLeastScalar(spv.SpvStorageClass, &externally_visible_data_storages, 1, storage_class);
+
     target.variant = .{
         .Variable = .{
             .storage_class = storage_class,
             .type_word = resolved_word,
-            .type = switch ((try resolved.getConstVariant()).*) {
-                .Type => |t| @as(Result.Type, t),
-                else => return RuntimeError.InvalidSpirV,
-            },
-            .value = try Value.init(allocator, rt.mod.results, resolved_word),
+            .type = resolved_type,
+            .value = try Value.init(allocator, rt.mod.results, resolved_word, is_externally_visible),
         },
     };
 
@@ -2476,7 +2493,7 @@ fn setupConstant(allocator: std.mem.Allocator, rt: *Runtime) RuntimeError!*Resul
     const resolved = rt.mod.results[res_type].resolveType(rt.mod.results);
     target.variant = .{
         .Constant = .{
-            .value = try Value.init(allocator, rt.mod.results, res_type),
+            .value = try Value.init(allocator, rt.mod.results, res_type, false),
             .type_word = res_type,
             .type = switch ((try resolved.getConstVariant()).*) {
                 .Type => |t| @as(Result.Type, t),

@@ -70,13 +70,19 @@ pub const Value = union(Type) {
         stride: SpvWord,
         data: []u8,
 
-        pub inline fn createValueFromIndex(self: *const @This(), allocator: std.mem.Allocator, results: []Result, index: usize) RuntimeError!*Value {
+        pub inline fn createValueFromIndex(self: *const @This(), allocator: std.mem.Allocator, results: []const Result, index: usize) RuntimeError!*Value {
             const value = allocator.create(Value) catch return RuntimeError.OutOfMemory;
             errdefer allocator.destroy(value);
 
-            value.* = try Value.init(allocator, results, self.type_word);
+            value.* = try Value.init(allocator, results, self.type_word, false);
             _ = try value.writeConst(self.data[self.getOffsetOfIndex(index)..]);
 
+            return value;
+        }
+
+        pub inline fn createLocalValueFromIndex(self: *const @This(), allocator: std.mem.Allocator, results: []const Result, index: usize) RuntimeError!Value {
+            var value = try Value.init(allocator, results, self.type_word, false);
+            _ = try value.writeConst(self.data[self.getOffsetOfIndex(index)..]);
             return value;
         }
 
@@ -116,7 +122,7 @@ pub const Value = union(Type) {
         };
     }
 
-    pub fn init(allocator: std.mem.Allocator, results: []const Result, target_type: SpvWord) RuntimeError!Self {
+    pub fn init(allocator: std.mem.Allocator, results: []const Result, target_type: SpvWord, is_externally_visible: bool) RuntimeError!Self {
         const resolved = results[target_type].resolveType(results);
         const member_count = resolved.getMemberCounts();
 
@@ -137,7 +143,7 @@ pub const Value = union(Type) {
                     errdefer self.deinit(allocator);
 
                     for (self.Vector) |*value| {
-                        value.* = try Self.init(allocator, results, v.components_type_word);
+                        value.* = try Self.init(allocator, results, v.components_type_word, is_externally_visible);
                     }
                     break :blk self;
                 },
@@ -155,11 +161,22 @@ pub const Value = union(Type) {
                     errdefer self.deinit(allocator);
 
                     for (self.Matrix) |*value| {
-                        value.* = try Self.init(allocator, results, m.column_type_word);
+                        value.* = try Self.init(allocator, results, m.column_type_word, is_externally_visible);
                     }
                     break :blk self;
                 },
                 .Array => |a| blk: {
+                    // If an array is in externally visible storage we treat it as a runtime array
+                    if (is_externally_visible) {
+                        break :blk .{
+                            .RuntimeArray = .{
+                                .type_word = a.components_type_word,
+                                .stride = a.stride,
+                                .data = &.{},
+                            },
+                        };
+                    }
+
                     var self: Self = .{
                         .Array = .{
                             .stride = a.stride,
@@ -169,7 +186,7 @@ pub const Value = union(Type) {
                     errdefer self.deinit(allocator);
 
                     for (self.Array.values) |*value| {
-                        value.* = try Self.init(allocator, results, a.components_type_word);
+                        value.* = try Self.init(allocator, results, a.components_type_word, is_externally_visible);
                     }
                     break :blk self;
                 },
@@ -183,7 +200,7 @@ pub const Value = union(Type) {
                     errdefer self.deinit(allocator);
 
                     for (self.Structure.values, s.members_type_word) |*value, type_word| {
-                        value.* = try Self.init(allocator, results, type_word);
+                        value.* = try Self.init(allocator, results, type_word, is_externally_visible);
                     }
                     break :blk self;
                 },
