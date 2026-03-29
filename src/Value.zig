@@ -24,6 +24,13 @@ const Vec2u32 = lib.Vec2u32;
 
 const Type = Result.Type;
 
+pub const PrimitiveType = enum {
+    Bool,
+    Float,
+    SInt,
+    UInt,
+};
+
 pub const Value = union(Type) {
     const Self = @This();
 
@@ -625,5 +632,106 @@ pub const Value = union(Type) {
             },
             else => {},
         }
+    }
+
+    pub inline fn readLane(comptime T: PrimitiveType, comptime bits: u32, v: *const Value, lane_index: usize) RuntimeError!getPrimitiveFieldType(T, bits) {
+        const TT = getPrimitiveFieldType(T, bits);
+
+        return switch (v.*) {
+            .Int => (try getPrimitiveField(T, bits, @constCast(v))).*,
+
+            .Vector => |lanes| (try getPrimitiveField(T, bits, &lanes[lane_index])).*,
+
+            .Vector4i32 => |vec| if (bits == 32) @as(TT, @bitCast(vec[lane_index])) else return RuntimeError.InvalidSpirV,
+            .Vector3i32 => |vec| if (bits == 32) @as(TT, @bitCast(vec[lane_index])) else return RuntimeError.InvalidSpirV,
+            .Vector2i32 => |vec| if (bits == 32) @as(TT, @bitCast(vec[lane_index])) else return RuntimeError.InvalidSpirV,
+
+            .Vector4u32 => |vec| if (bits == 32) @as(TT, @bitCast(vec[lane_index])) else return RuntimeError.InvalidSpirV,
+            .Vector3u32 => |vec| if (bits == 32) @as(TT, @bitCast(vec[lane_index])) else return RuntimeError.InvalidSpirV,
+            .Vector2u32 => |vec| if (bits == 32) @as(TT, @bitCast(vec[lane_index])) else return RuntimeError.InvalidSpirV,
+
+            else => RuntimeError.InvalidSpirV,
+        };
+    }
+
+    pub inline fn writeLane(comptime T: PrimitiveType, comptime bits: u32, dst: *Value, lane_index: usize, value: getPrimitiveFieldType(T, bits)) RuntimeError!void {
+        switch (dst.*) {
+            .Int => (try getPrimitiveField(T, bits, dst)).* = value,
+
+            .Vector => |lanes| try setScalarLaneValue(T, bits, &lanes[lane_index], value),
+
+            .Vector2i32 => |*vec| vec[lane_index] = if (bits == 32) @bitCast(value) else return RuntimeError.InvalidSpirV,
+            .Vector3i32 => |*vec| vec[lane_index] = if (bits == 32) @bitCast(value) else return RuntimeError.InvalidSpirV,
+            .Vector4i32 => |*vec| vec[lane_index] = if (bits == 32) @bitCast(value) else return RuntimeError.InvalidSpirV,
+
+            .Vector2u32 => |*vec| vec[lane_index] = if (bits == 32) @bitCast(value) else return RuntimeError.InvalidSpirV,
+            .Vector3u32 => |*vec| vec[lane_index] = if (bits == 32) @bitCast(value) else return RuntimeError.InvalidSpirV,
+            .Vector4u32 => |*vec| vec[lane_index] = if (bits == 32) @bitCast(value) else return RuntimeError.InvalidSpirV,
+
+            else => return RuntimeError.InvalidSpirV,
+        }
+    }
+
+    fn setScalarLaneValue(comptime value_type: PrimitiveType, comptime bits: u32, dst: *Value, v: getPrimitiveFieldType(value_type, bits)) RuntimeError!void {
+        switch (bits) {
+            inline 8, 16, 32, 64 => {
+                dst.* = .{ .Int = .{
+                    .bit_count = bits,
+                    .value = switch (value_type) {
+                        .SInt => switch (bits) {
+                            8 => .{ .sint8 = v },
+                            16 => .{ .sint16 = v },
+                            32 => .{ .sint32 = v },
+                            64 => .{ .sint64 = v },
+                            else => unreachable,
+                        },
+                        .UInt => switch (bits) {
+                            8 => .{ .uint8 = v },
+                            16 => .{ .uint16 = v },
+                            32 => .{ .uint32 = v },
+                            64 => .{ .uint64 = v },
+                            else => unreachable,
+                        },
+                        else => return RuntimeError.InvalidSpirV,
+                    },
+                } };
+            },
+            else => return RuntimeError.InvalidSpirV,
+        }
+    }
+
+    pub fn getPrimitiveField(comptime T: PrimitiveType, comptime BitCount: SpvWord, v: *Value) RuntimeError!*getPrimitiveFieldType(T, BitCount) {
+        if (std.meta.activeTag(v.*) == .Pointer) {
+            return switch (v.Pointer.ptr) {
+                .common => |value| getPrimitiveField(T, BitCount, value),
+                .f32_ptr => |ptr| @ptrCast(@alignCast(ptr)),
+                .u32_ptr => |ptr| @ptrCast(@alignCast(ptr)),
+                .i32_ptr => |ptr| @ptrCast(@alignCast(ptr)),
+            };
+        }
+        return switch (T) {
+            .Bool => &v.Bool,
+            .Float => switch (BitCount) {
+                inline 16, 32, 64 => |i| &@field(v.Float.value, std.fmt.comptimePrint("float{}", .{i})),
+                else => return RuntimeError.InvalidSpirV,
+            },
+            .SInt => switch (BitCount) {
+                inline 8, 16, 32, 64 => |i| &@field(v.Int.value, std.fmt.comptimePrint("sint{}", .{i})),
+                else => return RuntimeError.InvalidSpirV,
+            },
+            .UInt => switch (BitCount) {
+                inline 8, 16, 32, 64 => |i| &@field(v.Int.value, std.fmt.comptimePrint("uint{}", .{i})),
+                else => return RuntimeError.InvalidSpirV,
+            },
+        };
+    }
+
+    pub fn getPrimitiveFieldType(comptime T: PrimitiveType, comptime BitCount: SpvWord) type {
+        return switch (T) {
+            .Bool => bool,
+            .Float => std.meta.Float(BitCount),
+            .SInt => std.meta.Int(.signed, BitCount),
+            .UInt => std.meta.Int(.unsigned, BitCount),
+        };
     }
 };

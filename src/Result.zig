@@ -383,6 +383,17 @@ pub fn resolveLaneBitWidth(target_type: TypeData, rt: *const Runtime) RuntimeErr
     };
 }
 
+pub fn resolveLaneCount(target_type: TypeData) RuntimeError!SpvWord {
+    return switch (target_type) {
+        .Bool, .Float, .Int => 1,
+        .Vector => |v| v.member_count,
+        .Vector4f32, .Vector4i32, .Vector4u32 => 4,
+        .Vector3f32, .Vector3i32, .Vector3u32 => 3,
+        .Vector2f32, .Vector2i32, .Vector2u32 => 2,
+        else => return RuntimeError.InvalidSpirV,
+    };
+}
+
 pub fn resolveSign(target_type: TypeData, rt: *const Runtime) RuntimeError!enum { signed, unsigned } {
     return sw: switch (target_type) {
         .Int => |i| if (i.is_signed) .signed else .unsigned,
