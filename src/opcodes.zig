@@ -187,8 +187,6 @@ pub const SetupDispatcher = block: {
         .Variable = opVariable,
         .VectorTimesMatrix = autoSetupConstant,
         .VectorTimesScalar = autoSetupConstant,
-        .SpecConstant = opConstant,
-        .SpecConstantOp = opSpecConstantOp,
         .SpecConstantTrue = opSpecConstantTrue,
         .SpecConstantFalse = opSpecConstantFalse,
         .SpecConstantComposite = opConstantComposite,
@@ -287,6 +285,8 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.UMod)]                   = MathEngine(.UInt, .Mod).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorTimesMatrix)]      = MathEngine(.Float, .VectorTimesMatrix).op; // TODO
     runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorTimesScalar)]      = MathEngine(.Float, .VectorTimesScalar).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.SpecConstant)]           = opSpecConstant;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.SpecConstantOp)]         = opSpecConstantOp;
     // zig fmt: on
 
     // Extensions init
@@ -574,10 +574,7 @@ fn CondOperator(comptime T: PrimitiveType, comptime Op: CondOp) type {
             }
             return switch (Op) {
                 .IsFinite => std.math.isFinite(a),
-                .IsInf => blk: {
-                    //std.debug.print("test {s} - {d} - {s}\n", .{ @typeName(TT), a, if (std.math.isInf(a)) "true" else "false" });
-                    break :blk std.math.isInf(a);
-                },
+                .IsInf => std.math.isInf(a),
                 .IsNan => std.math.isNan(a),
                 .IsNormal => std.math.isNormal(a),
                 else => RuntimeError.InvalidSpirV,
@@ -1641,6 +1638,25 @@ fn opConstantComposite(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) R
             v[i] = (try rt.results[try rt.it.next()].getValue()).Int.value.uint32;
         },
         else => return RuntimeError.InvalidSpirV,
+    }
+}
+
+fn opSpecConstant(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
+    const location = rt.it.emitSourceLocation();
+    _ = rt.it.skip();
+    const result_id = try rt.it.next();
+    _ = rt.it.goToSourceLocation(location);
+
+    try opConstant(allocator, word_count, rt);
+
+    const result = &rt.results[result_id];
+
+    for (result.decorations.items) |decoration| {
+        if (decoration.rtype == .SpecId) {
+            if (rt.specialization_constants.get(decoration.literal_1)) |data| {
+                _ = try (try result.getValue()).writeConst(data);
+            }
+        }
     }
 }
 

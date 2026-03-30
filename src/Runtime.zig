@@ -33,6 +33,12 @@ pub const RuntimeError = error{
     Unknown,
 };
 
+pub const SpecializationEntry = struct {
+    id: SpvWord,
+    offset: usize,
+    size: usize,
+};
+
 pub const Function = struct {
     source_location: usize,
     result: *Result,
@@ -49,6 +55,8 @@ current_parameter_index: SpvWord,
 current_function: ?*Result,
 function_stack: std.ArrayList(Function),
 
+specialization_constants: std.AutoHashMapUnmanaged(u32, []const u8),
+
 pub fn init(allocator: std.mem.Allocator, module: *Module) RuntimeError!Self {
     return .{
         .mod = module,
@@ -63,6 +71,7 @@ pub fn init(allocator: std.mem.Allocator, module: *Module) RuntimeError!Self {
         .current_parameter_index = 0,
         .current_function = null,
         .function_stack = .empty,
+        .specialization_constants = .empty,
     };
 }
 
@@ -72,6 +81,16 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
     }
     allocator.free(self.results);
     self.function_stack.deinit(allocator);
+    var it = self.specialization_constants.iterator();
+    while (it.next()) |entry| {
+        allocator.free(entry.value_ptr.*);
+    }
+    self.specialization_constants.deinit(allocator);
+}
+
+pub fn addSpecializationInfo(self: *Self, allocator: std.mem.Allocator, entry: SpecializationEntry, data: []const u8) RuntimeError!void {
+    const slice = allocator.dupe(u8, data[entry.offset .. entry.offset + entry.size]) catch return RuntimeError.OutOfMemory;
+    self.specialization_constants.put(allocator, entry.id, slice) catch return RuntimeError.OutOfMemory;
 }
 
 pub fn getEntryPointByName(self: *const Self, name: []const u8) error{NotFound}!SpvWord {
@@ -81,6 +100,7 @@ pub fn getEntryPointByName(self: *const Self, name: []const u8) error{NotFound}!
             for (0..@min(name.len, entry_point.name.len)) |j| {
                 if (name[j] != entry_point.name[j]) break :blk false;
             }
+            if (entry_point.name.len != name.len and entry_point.name[name.len] != 0) break :blk false;
             break :blk true;
         }) return @intCast(i);
     }
@@ -121,6 +141,12 @@ pub fn callEntryPoint(self: *Self, allocator: std.mem.Allocator, entry_point_ind
     if (entry_point_index > self.mod.entry_points.items.len)
         return RuntimeError.InvalidEntryPoint;
 
+    // Spec constants pass
+    try self.pass(allocator, .initMany(&.{
+        .SpecConstant,
+        .SpecConstantOp,
+    }));
+
     {
         const entry_point_desc = &self.mod.entry_points.items[entry_point_index];
         const entry_point_result = &self.mod.results[entry_point_desc.id];
@@ -142,10 +168,27 @@ pub fn callEntryPoint(self: *Self, allocator: std.mem.Allocator, entry_point_ind
         }
     }
 
+    // Execution pass
+    try self.pass(allocator, .initFull());
+
+    //@import("pretty").print(allocator, self.results, .{
+    //    .tab_size = 4,
+    //    .max_depth = 0,
+    //    .struct_max_len = 0,
+    //    .array_max_len = 0,
+    //}) catch return RuntimeError.OutOfMemory;
+}
+
+fn pass(self: *Self, allocator: std.mem.Allocator, op_set: std.EnumSet(spv.SpvOp)) RuntimeError!void {
     self.it.did_jump = false; // To reset function jump
     while (self.it.nextOrNull()) |opcode_data| {
         const word_count = ((opcode_data & (~spv.SpvOpCodeMask)) >> spv.SpvWordCountShift) - 1;
         const opcode = (opcode_data & spv.SpvOpCodeMask);
+
+        if (!op_set.contains(@enumFromInt(opcode))) {
+            _ = self.it.skipN(word_count);
+            continue;
+        }
 
         var it_tmp = self.it; // Save because operations may iter on this iterator
         if (op.runtime_dispatcher[opcode]) |pfn| {
@@ -158,13 +201,6 @@ pub fn callEntryPoint(self: *Self, allocator: std.mem.Allocator, entry_point_ind
             self.it.did_jump = false;
         }
     }
-
-    //@import("pretty").print(allocator, self.results, .{
-    //    .tab_size = 4,
-    //    .max_depth = 0,
-    //    .struct_max_len = 0,
-    //    .array_max_len = 0,
-    //}) catch return RuntimeError.OutOfMemory;
 }
 
 pub fn writeDescriptorSet(self: *const Self, input: []u8, set: SpvWord, binding: SpvWord, descriptor_index: SpvWord) RuntimeError!void {
