@@ -38,6 +38,7 @@ pub const Value = union(Type) {
     Bool: bool,
     Int: struct {
         bit_count: usize,
+        is_signed: bool,
         value: extern union {
             sint8: i8,
             sint16: i16,
@@ -139,6 +140,7 @@ pub const Value = union(Type) {
                 .Bool => .{ .Bool = false },
                 .Int => |i| .{ .Int = .{
                     .bit_count = i.bit_length,
+                    .is_signed = i.is_signed,
                     .value = .{ .uint64 = 0 },
                 } },
                 .Float => |f| .{ .Float = .{
@@ -677,6 +679,7 @@ pub const Value = union(Type) {
             inline 8, 16, 32, 64 => {
                 dst.* = .{ .Int = .{
                     .bit_count = bits,
+                    .is_signed = if (value_type == .SInt) true else false,
                     .value = switch (value_type) {
                         .SInt => switch (bits) {
                             8 => .{ .sint8 = v },
@@ -732,6 +735,51 @@ pub const Value = union(Type) {
             .Float => std.meta.Float(BitCount),
             .SInt => std.meta.Int(.signed, BitCount),
             .UInt => std.meta.Int(.unsigned, BitCount),
+        };
+    }
+
+    pub fn resolveLaneBitWidth(self: *const Self) RuntimeError!SpvWord {
+        return switch (self.*) {
+            .Bool => 8,
+            .Float => |f| f.bit_length,
+            .Int => |i| i.bit_length,
+            .Vector => |v| v[0].resolveLaneBitWidth(),
+            .Vector4f32,
+            .Vector3f32,
+            .Vector2f32,
+            .Vector4i32,
+            .Vector3i32,
+            .Vector2i32,
+            .Vector4u32,
+            .Vector3u32,
+            .Vector2u32,
+            => return 32,
+            else => return RuntimeError.InvalidSpirV,
+        };
+    }
+
+    pub fn resolveLaneCount(self: *const Self) RuntimeError!SpvWord {
+        return switch (self.*) {
+            .Bool, .Float, .Int => 1,
+            .Vector => |v| @intCast(v.len),
+            .Vector4f32, .Vector4i32, .Vector4u32 => 4,
+            .Vector3f32, .Vector3i32, .Vector3u32 => 3,
+            .Vector2f32, .Vector2i32, .Vector2u32 => 2,
+            else => return RuntimeError.InvalidSpirV,
+        };
+    }
+
+    pub fn resolveSign(self: *const Self) RuntimeError!enum { signed, unsigned } {
+        return switch (self.*) {
+            .Int => |i| if (i.is_signed) .signed else .unsigned,
+            .Vector => |v| v[0].resolveSign(),
+            .Vector4i32 => .signed,
+            .Vector3i32 => .signed,
+            .Vector2i32 => .signed,
+            .Vector4u32 => .unsigned,
+            .Vector3u32 => .unsigned,
+            .Vector2u32 => .unsigned,
+            else => .unsigned,
         };
     }
 };

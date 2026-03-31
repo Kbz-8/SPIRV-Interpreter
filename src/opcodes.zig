@@ -113,6 +113,7 @@ pub const SetupDispatcher = block: {
         .FOrdLessThan = autoSetupConstant,
         .FOrdLessThanEqual = autoSetupConstant,
         .FOrdNotEqual = autoSetupConstant,
+        .FRem = autoSetupConstant,
         .FSub = autoSetupConstant,
         .FUnordEqual = autoSetupConstant,
         .FUnordGreaterThan = autoSetupConstant,
@@ -159,6 +160,7 @@ pub const SetupDispatcher = block: {
         .SLessThanEqual = autoSetupConstant,
         .SMod = autoSetupConstant,
         .SNegate = autoSetupConstant,
+        .SRem = autoSetupConstant,
         .SatConvertSToU = autoSetupConstant,
         .SatConvertUToS = autoSetupConstant,
         .Select = autoSetupConstant,
@@ -184,12 +186,15 @@ pub const SetupDispatcher = block: {
         .ULessThan = autoSetupConstant,
         .ULessThanEqual = autoSetupConstant,
         .UMod = autoSetupConstant,
+        .Undef = autoSetupConstant,
         .Variable = opVariable,
+        .VectorShuffle = autoSetupConstant,
         .VectorTimesMatrix = autoSetupConstant,
         .VectorTimesScalar = autoSetupConstant,
-        .SpecConstantTrue = opSpecConstantTrue,
-        .SpecConstantFalse = opSpecConstantFalse,
-        .SpecConstantComposite = opConstantComposite,
+        .IAddCarry = autoSetupConstant,
+        .ISubBorrow = autoSetupConstant,
+        .UMulExtended = autoSetupConstant,
+        .SMulExtended = autoSetupConstant,
     });
 };
 
@@ -232,6 +237,7 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.FOrdLessThan)]           = CondEngine(.Float, .Less).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.FOrdLessThanEqual)]      = CondEngine(.Float, .LessEqual).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.FOrdNotEqual)]           = CondEngine(.Float, .NotEqual).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.FRem)]                   = MathEngine(.Float, .Rem).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.FSub)]                   = MathEngine(.Float, .Sub).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.FUnordEqual)]            = CondEngine(.Float, .Equal).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.FUnordGreaterThan)]      = CondEngine(.Float, .Greater).op;
@@ -271,10 +277,16 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.SLessThanEqual)]         = CondEngine(.SInt, .LessEqual).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.SMod)]                   = MathEngine(.SInt, .Mod).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.SNegate)]                = MathEngine(.SInt, .Negate).opSingle;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.SRem)]                   = MathEngine(.SInt, .Rem).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Select)]                 = opSelect;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ShiftLeftLogical)]       = BitEngine(.UInt, .ShiftLeft).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ShiftRightArithmetic)]   = BitEngine(.SInt, .ShiftRightArithmetic).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ShiftRightLogical)]      = BitEngine(.UInt, .ShiftRight).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.SpecConstant)]           = opSpecConstant;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.SpecConstantComposite)]  = opConstantComposite;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.SpecConstantFalse)]      = opSpecConstantFalse;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.SpecConstantOp)]         = opSpecConstantOp;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.SpecConstantTrue)]       = opSpecConstantTrue;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Store)]                  = opStore;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.UConvert)]               = ConversionEngine(.UInt, .UInt).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.UDiv)]                   = MathEngine(.UInt, .Div).op;
@@ -283,10 +295,10 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ULessThan)]              = CondEngine(.UInt, .Less).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ULessThanEqual)]         = CondEngine(.UInt, .LessEqual).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.UMod)]                   = MathEngine(.UInt, .Mod).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorShuffle)]          = opVectorShuffle;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorTimesMatrix)]      = MathEngine(.Float, .VectorTimesMatrix).op; // TODO
     runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorTimesScalar)]      = MathEngine(.Float, .VectorTimesScalar).op;
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.SpecConstant)]           = opSpecConstant;
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.SpecConstantOp)]         = opSpecConstantOp;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.SMulExtended)]           = opSMulExtended;
     // zig fmt: on
 
     // Extensions init
@@ -1453,12 +1465,12 @@ fn opCompositeExtract(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Ru
                         .Vector4f32 => |v| break :blk .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = v[member_id] } } },
                         .Vector3f32 => |v| break :blk .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = v[member_id] } } },
                         .Vector2f32 => |v| break :blk .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = v[member_id] } } },
-                        .Vector4i32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .value = .{ .sint32 = v[member_id] } } },
-                        .Vector3i32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .value = .{ .sint32 = v[member_id] } } },
-                        .Vector2i32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .value = .{ .sint32 = v[member_id] } } },
-                        .Vector4u32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .value = .{ .uint32 = v[member_id] } } },
-                        .Vector3u32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .value = .{ .uint32 = v[member_id] } } },
-                        .Vector2u32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .value = .{ .uint32 = v[member_id] } } },
+                        .Vector4i32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .is_signed = true, .value = .{ .sint32 = v[member_id] } } },
+                        .Vector3i32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .is_signed = true, .value = .{ .sint32 = v[member_id] } } },
+                        .Vector2i32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .is_signed = true, .value = .{ .sint32 = v[member_id] } } },
+                        .Vector4u32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .is_signed = false, .value = .{ .uint32 = v[member_id] } } },
+                        .Vector3u32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .is_signed = false, .value = .{ .uint32 = v[member_id] } } },
+                        .Vector2u32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .is_signed = false, .value = .{ .uint32 = v[member_id] } } },
                         else => return RuntimeError.InvalidValueType,
                     }
                 }
@@ -1641,6 +1653,58 @@ fn opConstantComposite(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) R
     }
 }
 
+fn opSMulExtended(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const result_type_id = try rt.it.next();
+    const id = try rt.it.next();
+    const lhs = try rt.results[try rt.it.next()].getValue();
+    const rhs = try rt.results[try rt.it.next()].getValue();
+    const dst = try rt.results[id].getValue();
+
+    const result_members = switch (dst.*) {
+        .Structure => |s| s.values,
+        else => return RuntimeError.InvalidSpirV,
+    };
+    if (result_members.len != 2) return RuntimeError.InvalidSpirV;
+
+    const lsb_dst = &result_members[0];
+    const msb_dst = &result_members[1];
+
+    const result_type = (try rt.results[result_type_id].getVariant()).Type;
+    const member_types = switch (result_type) {
+        .Structure => |s| s.members_type_word,
+        else => return RuntimeError.InvalidSpirV,
+    };
+    if (member_types.len != 2) return RuntimeError.InvalidSpirV;
+
+    const value_type = (try rt.results[member_types[0]].getVariant()).Type;
+    const lane_count = try Result.resolveLaneCount(value_type);
+    const lane_bits = try Result.resolveLaneBitWidth(value_type, rt);
+
+    switch (lane_bits) {
+        inline 8, 16, 32, 64 => |bits| {
+            //const SIntT = Value.getPrimitiveFieldType(.SInt, bits);
+            const UIntT = Value.getPrimitiveFieldType(.UInt, bits);
+            const WideSIntT = std.meta.Int(.signed, bits * 2);
+            const WideUIntT = std.meta.Int(.unsigned, bits * 2);
+
+            for (0..lane_count) |lane_index| {
+                const l = try Value.readLane(.SInt, bits, lhs, lane_index);
+                const r = try Value.readLane(.SInt, bits, rhs, lane_index);
+
+                const product: WideSIntT = @as(WideSIntT, l) * @as(WideSIntT, r);
+                const product_bits: WideUIntT = @bitCast(product);
+
+                const lsb_bits: UIntT = @truncate(product_bits);
+                const msb_bits: UIntT = @truncate(product_bits >> bits);
+
+                try Value.writeLane(.SInt, bits, lsb_dst, lane_index, @bitCast(lsb_bits));
+                try Value.writeLane(.SInt, bits, msb_dst, lane_index, @bitCast(msb_bits));
+            }
+        },
+        else => return RuntimeError.InvalidSpirV,
+    }
+}
+
 fn opSpecConstant(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
     const location = rt.it.emitSourceLocation();
     _ = rt.it.skip();
@@ -1666,6 +1730,14 @@ fn opSpecConstantTrue(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) Ru
         .Bool => |*b| b.* = true,
         else => return RuntimeError.InvalidSpirV,
     }
+
+    for (target.decorations.items) |decoration| {
+        if (decoration.rtype == .SpecId) {
+            if (rt.specialization_constants.get(decoration.literal_1)) |data| {
+                _ = try (try target.getValue()).writeConst(data);
+            }
+        }
+    }
 }
 
 fn opSpecConstantFalse(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
@@ -1673,6 +1745,14 @@ fn opSpecConstantFalse(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) R
     switch (target.variant.?.Constant.value) {
         .Bool => |*b| b.* = false,
         else => return RuntimeError.InvalidSpirV,
+    }
+
+    for (target.decorations.items) |decoration| {
+        if (decoration.rtype == .SpecId) {
+            if (rt.specialization_constants.get(decoration.literal_1)) |data| {
+                _ = try (try target.getValue()).writeConst(data);
+            }
+        }
     }
 }
 
@@ -1689,7 +1769,7 @@ fn opSpecConstantOp(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runt
     rt.it.forceSkipIndex(2);
 
     const pfn = runtime_dispatcher[@intFromEnum(inner_op)] orelse return RuntimeError.UnsupportedSpirV;
-    try pfn(allocator, word_count, rt);
+    try pfn(allocator, word_count - 1, rt);
 }
 
 fn opCopyMemory(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
@@ -2159,7 +2239,16 @@ fn opTypeArray(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void
                     .Type => |t| @as(Result.Type, t),
                     else => return RuntimeError.InvalidSpirV,
                 },
-                .member_count = try rt.it.next(),
+                .member_count = switch ((try rt.results[try rt.it.next()].getValue()).*) {
+                    .Int => |i| if (!i.is_signed) @intCast(i.value.uint64) else switch (i.bit_count) {
+                        8 => @intCast(i.value.sint8),
+                        16 => @intCast(i.value.sint8),
+                        32 => @intCast(i.value.sint8),
+                        64 => @intCast(i.value.sint8),
+                        else => return RuntimeError.InvalidSpirV,
+                    },
+                    else => return RuntimeError.InvalidSpirV,
+                },
                 .stride = blk: {
                     for (target.decorations.items) |decoration| {
                         if (decoration.rtype == .ArrayStride)
@@ -2405,6 +2494,248 @@ fn opVariable(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) R
     };
 
     _ = initializer;
+}
+
+fn opVectorShuffle(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    _ = allocator;
+    _ = try rt.it.next();
+
+    const result_id = try rt.it.next();
+    const vector_1_id = try rt.it.next();
+    const vector_2_id = try rt.it.next();
+
+    const dst = try rt.results[result_id].getValue();
+    const vector_1 = try rt.results[vector_1_id].getValue();
+    const vector_2 = try rt.results[vector_2_id].getValue();
+
+    const Impl = struct {
+        fn readLane(src: *const Value, lane_index: usize) RuntimeError!Value {
+            return switch (src.*) {
+                .Vector => |lanes| {
+                    if (lane_index >= lanes.len) return RuntimeError.InvalidSpirV;
+                    return lanes[lane_index];
+                },
+
+                .Vector2f32 => |lanes| {
+                    if (lane_index >= 2) return RuntimeError.InvalidSpirV;
+                    return .{
+                        .Float = .{
+                            .bit_count = 32,
+                            .value = .{ .float32 = lanes[lane_index] },
+                        },
+                    };
+                },
+                .Vector3f32 => |lanes| {
+                    if (lane_index >= 3) return RuntimeError.InvalidSpirV;
+                    return .{
+                        .Float = .{
+                            .bit_count = 32,
+                            .value = .{ .float32 = lanes[lane_index] },
+                        },
+                    };
+                },
+                .Vector4f32 => |lanes| {
+                    if (lane_index >= 4) return RuntimeError.InvalidSpirV;
+                    return .{
+                        .Float = .{
+                            .bit_count = 32,
+                            .value = .{ .float32 = lanes[lane_index] },
+                        },
+                    };
+                },
+
+                .Vector2i32 => |lanes| {
+                    if (lane_index >= 2) return RuntimeError.InvalidSpirV;
+                    return .{
+                        .Int = .{
+                            .bit_count = 32,
+                            .is_signed = true,
+                            .value = .{ .sint32 = lanes[lane_index] },
+                        },
+                    };
+                },
+                .Vector3i32 => |lanes| {
+                    if (lane_index >= 3) return RuntimeError.InvalidSpirV;
+                    return .{
+                        .Int = .{
+                            .bit_count = 32,
+                            .is_signed = true,
+                            .value = .{ .sint32 = lanes[lane_index] },
+                        },
+                    };
+                },
+                .Vector4i32 => |lanes| {
+                    if (lane_index >= 4) return RuntimeError.InvalidSpirV;
+                    return .{
+                        .Int = .{
+                            .bit_count = 32,
+                            .is_signed = true,
+                            .value = .{ .sint32 = lanes[lane_index] },
+                        },
+                    };
+                },
+
+                .Vector2u32 => |lanes| {
+                    if (lane_index >= 2) return RuntimeError.InvalidSpirV;
+                    return .{
+                        .Int = .{
+                            .bit_count = 32,
+                            .is_signed = false,
+                            .value = .{ .uint32 = lanes[lane_index] },
+                        },
+                    };
+                },
+                .Vector3u32 => |lanes| {
+                    if (lane_index >= 3) return RuntimeError.InvalidSpirV;
+                    return .{
+                        .Int = .{
+                            .bit_count = 32,
+                            .is_signed = false,
+                            .value = .{ .uint32 = lanes[lane_index] },
+                        },
+                    };
+                },
+                .Vector4u32 => |lanes| {
+                    if (lane_index >= 4) return RuntimeError.InvalidSpirV;
+                    return .{
+                        .Int = .{
+                            .bit_count = 32,
+                            .is_signed = false,
+                            .value = .{ .uint32 = lanes[lane_index] },
+                        },
+                    };
+                },
+
+                else => return RuntimeError.InvalidSpirV,
+            };
+        }
+
+        fn writeLane(dst_value: *Value, lane_index: usize, lane_value: Value) RuntimeError!void {
+            switch (dst_value.*) {
+                .Vector => |lanes| {
+                    if (lane_index >= lanes.len) return RuntimeError.InvalidSpirV;
+                    lanes[lane_index] = lane_value;
+                },
+
+                .Vector2f32 => |*lanes| {
+                    if (lane_index >= 2) return RuntimeError.InvalidSpirV;
+                    switch (lane_value) {
+                        .Float => |f| {
+                            if (f.bit_count != 32) return RuntimeError.InvalidSpirV;
+                            lanes[lane_index] = f.value.float32;
+                        },
+                        else => return RuntimeError.InvalidSpirV,
+                    }
+                },
+                .Vector3f32 => |*lanes| {
+                    if (lane_index >= 3) return RuntimeError.InvalidSpirV;
+                    switch (lane_value) {
+                        .Float => |f| {
+                            if (f.bit_count != 32) return RuntimeError.InvalidSpirV;
+                            lanes[lane_index] = f.value.float32;
+                        },
+                        else => return RuntimeError.InvalidSpirV,
+                    }
+                },
+                .Vector4f32 => |*lanes| {
+                    if (lane_index >= 4) return RuntimeError.InvalidSpirV;
+                    switch (lane_value) {
+                        .Float => |f| {
+                            if (f.bit_count != 32) return RuntimeError.InvalidSpirV;
+                            lanes[lane_index] = f.value.float32;
+                        },
+                        else => return RuntimeError.InvalidSpirV,
+                    }
+                },
+
+                .Vector2i32 => |*lanes| {
+                    if (lane_index >= 2) return RuntimeError.InvalidSpirV;
+                    switch (lane_value) {
+                        .Int => |i| {
+                            if (i.bit_count != 32) return RuntimeError.InvalidSpirV;
+                            lanes[lane_index] = i.value.sint32;
+                        },
+                        else => return RuntimeError.InvalidSpirV,
+                    }
+                },
+                .Vector3i32 => |*lanes| {
+                    if (lane_index >= 3) return RuntimeError.InvalidSpirV;
+                    switch (lane_value) {
+                        .Int => |i| {
+                            if (i.bit_count != 32) return RuntimeError.InvalidSpirV;
+                            lanes[lane_index] = i.value.sint32;
+                        },
+                        else => return RuntimeError.InvalidSpirV,
+                    }
+                },
+                .Vector4i32 => |*lanes| {
+                    if (lane_index >= 4) return RuntimeError.InvalidSpirV;
+                    switch (lane_value) {
+                        .Int => |i| {
+                            if (i.bit_count != 32) return RuntimeError.InvalidSpirV;
+                            lanes[lane_index] = i.value.sint32;
+                        },
+                        else => return RuntimeError.InvalidSpirV,
+                    }
+                },
+
+                .Vector2u32 => |*lanes| {
+                    if (lane_index >= 2) return RuntimeError.InvalidSpirV;
+                    switch (lane_value) {
+                        .Int => |i| {
+                            if (i.bit_count != 32) return RuntimeError.InvalidSpirV;
+                            lanes[lane_index] = i.value.uint32;
+                        },
+                        else => return RuntimeError.InvalidSpirV,
+                    }
+                },
+                .Vector3u32 => |*lanes| {
+                    if (lane_index >= 3) return RuntimeError.InvalidSpirV;
+                    switch (lane_value) {
+                        .Int => |i| {
+                            if (i.bit_count != 32) return RuntimeError.InvalidSpirV;
+                            lanes[lane_index] = i.value.uint32;
+                        },
+                        else => return RuntimeError.InvalidSpirV,
+                    }
+                },
+                .Vector4u32 => |*lanes| {
+                    if (lane_index >= 4) return RuntimeError.InvalidSpirV;
+                    switch (lane_value) {
+                        .Int => |i| {
+                            if (i.bit_count != 32) return RuntimeError.InvalidSpirV;
+                            lanes[lane_index] = i.value.uint32;
+                        },
+                        else => return RuntimeError.InvalidSpirV,
+                    }
+                },
+
+                else => return RuntimeError.InvalidSpirV,
+            }
+        }
+    };
+
+    const dst_lane_count = try dst.resolveLaneCount();
+    const vector_1_lane_count = try vector_1.resolveLaneCount();
+    const vector_2_lane_count = try vector_2.resolveLaneCount();
+
+    for (0..dst_lane_count) |lane_index| {
+        const selector = try rt.it.next();
+
+        if (selector == std.math.maxInt(u32)) {
+            continue;
+        }
+
+        const lane_value = if (selector < vector_1_lane_count)
+            try Impl.readLane(vector_1, selector)
+        else blk: {
+            const rhs_index = selector - vector_1_lane_count;
+            if (rhs_index >= vector_2_lane_count) return RuntimeError.InvalidSpirV;
+            break :blk try Impl.readLane(vector_2, rhs_index);
+        };
+
+        try Impl.writeLane(dst, lane_index, lane_value);
+    }
 }
 
 fn readString(allocator: std.mem.Allocator, it: *WordIterator) RuntimeError![]const u8 {

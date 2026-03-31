@@ -98,9 +98,11 @@ pub fn getEntryPointByName(self: *const Self, name: []const u8) error{NotFound}!
         if (blk: {
             // Not using std.mem.eql as entry point names may have longer size than their content
             for (0..@min(name.len, entry_point.name.len)) |j| {
-                if (name[j] != entry_point.name[j]) break :blk false;
+                if (name[j] != entry_point.name[j])
+                    break :blk false;
             }
-            if (entry_point.name.len != name.len and entry_point.name[name.len] != 0) break :blk false;
+            if (entry_point.name.len != name.len and entry_point.name[name.len] != 0)
+                break :blk false;
             break :blk true;
         }) return @intCast(i);
     }
@@ -143,6 +145,9 @@ pub fn callEntryPoint(self: *Self, allocator: std.mem.Allocator, entry_point_ind
 
     // Spec constants pass
     try self.pass(allocator, .initMany(&.{
+        .SpecConstantTrue,
+        .SpecConstantFalse,
+        .SpecConstantComposite,
         .SpecConstant,
         .SpecConstantOp,
     }));
@@ -169,25 +174,21 @@ pub fn callEntryPoint(self: *Self, allocator: std.mem.Allocator, entry_point_ind
     }
 
     // Execution pass
-    try self.pass(allocator, .initFull());
-
-    //@import("pretty").print(allocator, self.results, .{
-    //    .tab_size = 4,
-    //    .max_depth = 0,
-    //    .struct_max_len = 0,
-    //    .array_max_len = 0,
-    //}) catch return RuntimeError.OutOfMemory;
+    try self.pass(allocator, null);
 }
 
-fn pass(self: *Self, allocator: std.mem.Allocator, op_set: std.EnumSet(spv.SpvOp)) RuntimeError!void {
+fn pass(self: *Self, allocator: std.mem.Allocator, op_set: ?std.EnumSet(spv.SpvOp)) RuntimeError!void {
     self.it.did_jump = false; // To reset function jump
     while (self.it.nextOrNull()) |opcode_data| {
         const word_count = ((opcode_data & (~spv.SpvOpCodeMask)) >> spv.SpvWordCountShift) - 1;
         const opcode = (opcode_data & spv.SpvOpCodeMask);
 
-        if (!op_set.contains(@enumFromInt(opcode))) {
-            _ = self.it.skipN(word_count);
-            continue;
+        if (op_set) |set| {
+            @branchHint(.unlikely);
+            if (!set.contains(@enumFromInt(opcode))) {
+                _ = self.it.skipN(word_count);
+                continue;
+            }
         }
 
         var it_tmp = self.it; // Save because operations may iter on this iterator
