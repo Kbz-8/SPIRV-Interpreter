@@ -74,6 +74,20 @@ pub const OpCodeExtFunc = *const fn (std.mem.Allocator, SpvWord, SpvWord, SpvWor
 pub const SetupDispatcher = block: {
     @setEvalBranchQuota(65535);
     break :block std.EnumMap(spv.SpvOp, OpCodeFunc).init(.{
+        .AtomicAnd = autoSetupConstant,
+        .AtomicCompareExchange = autoSetupConstant,
+        .AtomicExchange = autoSetupConstant,
+        .AtomicIAdd = autoSetupConstant,
+        .AtomicIDecrement = autoSetupConstant,
+        .AtomicIIncrement = autoSetupConstant,
+        .AtomicISub = autoSetupConstant,
+        .AtomicLoad = autoSetupConstant,
+        .AtomicOr = autoSetupConstant,
+        .AtomicSMax = autoSetupConstant,
+        .AtomicSMin = autoSetupConstant,
+        .AtomicUMax = autoSetupConstant,
+        .AtomicUMin = autoSetupConstant,
+        .AtomicXor = autoSetupConstant,
         .BitCount = autoSetupConstant,
         .BitFieldInsert = autoSetupConstant,
         .BitFieldSExtract = autoSetupConstant,
@@ -128,10 +142,12 @@ pub const SetupDispatcher = block: {
         .GroupDecorate = opGroupDecorate,
         .GroupMemberDecorate = opGroupMemberDecorate,
         .IAdd = autoSetupConstant,
+        .IAddCarry = autoSetupConstant,
         .IEqual = autoSetupConstant,
         .IMul = autoSetupConstant,
         .INotEqual = autoSetupConstant,
         .ISub = autoSetupConstant,
+        .ISubBorrow = autoSetupConstant,
         .IsFinite = autoSetupConstant,
         .IsInf = autoSetupConstant,
         .IsNan = autoSetupConstant,
@@ -151,6 +167,7 @@ pub const SetupDispatcher = block: {
         .MemoryModel = opMemoryModel,
         .Name = opName,
         .Not = autoSetupConstant,
+        .Phi = autoSetupConstant,
         .QuantizeToF16 = autoSetupConstant,
         .SConvert = autoSetupConstant,
         .SDiv = autoSetupConstant,
@@ -159,6 +176,7 @@ pub const SetupDispatcher = block: {
         .SLessThan = autoSetupConstant,
         .SLessThanEqual = autoSetupConstant,
         .SMod = autoSetupConstant,
+        .SMulExtended = autoSetupConstant,
         .SNegate = autoSetupConstant,
         .SRem = autoSetupConstant,
         .SatConvertSToU = autoSetupConstant,
@@ -186,15 +204,12 @@ pub const SetupDispatcher = block: {
         .ULessThan = autoSetupConstant,
         .ULessThanEqual = autoSetupConstant,
         .UMod = autoSetupConstant,
+        .UMulExtended = autoSetupConstant,
         .Undef = autoSetupConstant,
         .Variable = opVariable,
         .VectorShuffle = autoSetupConstant,
         .VectorTimesMatrix = autoSetupConstant,
         .VectorTimesScalar = autoSetupConstant,
-        .IAddCarry = autoSetupConstant,
-        .ISubBorrow = autoSetupConstant,
-        .UMulExtended = autoSetupConstant,
-        .SMulExtended = autoSetupConstant,
     });
 };
 
@@ -204,6 +219,10 @@ pub var runtime_dispatcher = [_]?OpCodeFunc{null} ** spv.SpvOpMaxValue;
 pub fn initRuntimeDispatcher() void {
     // zig fmt: off
     runtime_dispatcher[@intFromEnum(spv.SpvOp.AccessChain)]            = opAccessChain;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.AtomicLoad)]             = opLoad;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.AtomicStore)]            = opAtomicStore;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.AtomicIAdd)]             = MathEngine(.SInt, .Add, true).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.AtomicISub)]             = MathEngine(.SInt, .Sub, true).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.BitCount)]               = BitEngine(.UInt, .BitCount).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.BitFieldInsert)]         = BitEngine(.UInt, .BitFieldInsert).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.BitFieldSExtract)]       = BitEngine(.SInt, .BitFieldSExtract).op;
@@ -225,20 +244,20 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.CopyMemory)]             = opCopyMemory;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Dot)]                    = opDot;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ExtInst)]                = opExtInst;
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.FAdd)]                   = MathEngine(.Float, .Add).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.FAdd)]                   = MathEngine(.Float, .Add, false).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.FConvert)]               = ConversionEngine(.Float, .Float).op;
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.FDiv)]                   = MathEngine(.Float, .Div).op;
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.FMod)]                   = MathEngine(.Float, .Mod).op;
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.FMul)]                   = MathEngine(.Float, .Mul).op;
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.FNegate)]                = MathEngine(.Float, .Negate).opSingle;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.FDiv)]                   = MathEngine(.Float, .Div, false).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.FMod)]                   = MathEngine(.Float, .Mod, false).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.FMul)]                   = MathEngine(.Float, .Mul, false).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.FNegate)]                = MathEngine(.Float, .Negate, false).opSingle;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.FOrdEqual)]              = CondEngine(.Float, .Equal).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.FOrdGreaterThan)]        = CondEngine(.Float, .Greater).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.FOrdGreaterThanEqual)]   = CondEngine(.Float, .GreaterEqual).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.FOrdLessThan)]           = CondEngine(.Float, .Less).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.FOrdLessThanEqual)]      = CondEngine(.Float, .LessEqual).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.FOrdNotEqual)]           = CondEngine(.Float, .NotEqual).op;
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.FRem)]                   = MathEngine(.Float, .Rem).op;
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.FSub)]                   = MathEngine(.Float, .Sub).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.FRem)]                   = MathEngine(.Float, .Rem, false).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.FSub)]                   = MathEngine(.Float, .Sub, false).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.FUnordEqual)]            = CondEngine(.Float, .Equal).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.FUnordGreaterThan)]      = CondEngine(.Float, .Greater).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.FUnordGreaterThanEqual)] = CondEngine(.Float, .GreaterEqual).op;
@@ -246,11 +265,11 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.FUnordLessThanEqual)]    = CondEngine(.Float, .LessEqual).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.FUnordNotEqual)]         = CondEngine(.Float, .NotEqual).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.FunctionCall)]           = opFunctionCall;
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.IAdd)]                   = MathEngine(.SInt, .Add).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.IAdd)]                   = MathEngine(.SInt, .Add, false).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.IEqual)]                 = CondEngine(.SInt, .Equal).op;
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.IMul)]                   = MathEngine(.SInt, .Mul).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.IMul)]                   = MathEngine(.SInt, .Mul, false).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.INotEqual)]              = CondEngine(.SInt, .NotEqual).op;
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.ISub)]                   = MathEngine(.SInt, .Sub).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ISub)]                   = MathEngine(.SInt, .Sub, false).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.InBoundsAccessChain)]    = opAccessChain;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.IsFinite)]               = CondEngine(.Float, .IsNan).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.IsInf)]                  = CondEngine(.Float, .IsInf).op;
@@ -263,21 +282,21 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.LogicalNot)]             = CondEngine(.Bool, .LogicalNot).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.LogicalNotEqual)]        = CondEngine(.Bool, .LogicalNotEqual).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.LogicalOr)]              = CondEngine(.Bool, .LogicalOr).op;
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.MatrixTimesMatrix)]      = MathEngine(.Float, .MatrixTimesMatrix).op; // TODO
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.MatrixTimesScalar)]      = MathEngine(.Float, .MatrixTimesScalar).op; // TODO
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.MatrixTimesVector)]      = MathEngine(.Float, .MatrixTimesVector).op; // TODO
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.MatrixTimesMatrix)]      = MathEngine(.Float, .MatrixTimesMatrix, false).op; // TODO
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.MatrixTimesScalar)]      = MathEngine(.Float, .MatrixTimesScalar, false).op; // TODO
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.MatrixTimesVector)]      = MathEngine(.Float, .MatrixTimesVector, false).op; // TODO
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Not)]                    = BitEngine(.UInt, .Not).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Return)]                 = opReturn;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ReturnValue)]            = opReturnValue;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.SConvert)]               = ConversionEngine(.SInt, .SInt).op;
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.SDiv)]                   = MathEngine(.SInt, .Div).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.SDiv)]                   = MathEngine(.SInt, .Div, false).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.SGreaterThan)]           = CondEngine(.SInt, .Greater).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.SGreaterThanEqual)]      = CondEngine(.SInt, .GreaterEqual).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.SLessThan)]              = CondEngine(.SInt, .Less).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.SLessThanEqual)]         = CondEngine(.SInt, .LessEqual).op;
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.SMod)]                   = MathEngine(.SInt, .Mod).op;
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.SNegate)]                = MathEngine(.SInt, .Negate).opSingle;
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.SRem)]                   = MathEngine(.SInt, .Rem).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.SMod)]                   = MathEngine(.SInt, .Mod, false).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.SNegate)]                = MathEngine(.SInt, .Negate, false).opSingle;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.SRem)]                   = MathEngine(.SInt, .Rem, false).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Select)]                 = opSelect;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ShiftLeftLogical)]       = BitEngine(.UInt, .ShiftLeft).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ShiftRightArithmetic)]   = BitEngine(.SInt, .ShiftRightArithmetic).op;
@@ -289,15 +308,15 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.SpecConstantTrue)]       = opSpecConstantTrue;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Store)]                  = opStore;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.UConvert)]               = ConversionEngine(.UInt, .UInt).op;
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.UDiv)]                   = MathEngine(.UInt, .Div).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.UDiv)]                   = MathEngine(.UInt, .Div, false).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.UGreaterThan)]           = CondEngine(.UInt, .Greater).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.UGreaterThanEqual)]      = CondEngine(.UInt, .GreaterEqual).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ULessThan)]              = CondEngine(.UInt, .Less).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ULessThanEqual)]         = CondEngine(.UInt, .LessEqual).op;
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.UMod)]                   = MathEngine(.UInt, .Mod).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.UMod)]                   = MathEngine(.UInt, .Mod, false).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorShuffle)]          = opVectorShuffle;
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorTimesMatrix)]      = MathEngine(.Float, .VectorTimesMatrix).op; // TODO
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorTimesScalar)]      = MathEngine(.Float, .VectorTimesScalar).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorTimesMatrix)]      = MathEngine(.Float, .VectorTimesMatrix, false).op; // TODO
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorTimesScalar)]      = MathEngine(.Float, .VectorTimesScalar, false).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.SMulExtended)]           = opSMulExtended;
     // zig fmt: on
 
@@ -862,13 +881,18 @@ fn ConversionEngine(comptime from_kind: PrimitiveType, comptime to_kind: Primiti
     };
 }
 
-fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp) type {
+fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic: bool) type {
     return struct {
         fn op(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
             const target_type = (try rt.results[try rt.it.next()].getVariant()).Type;
             const dst = try rt.results[try rt.it.next()].getValue();
-            const lhs_id = try rt.it.next();
-            const lhs = try rt.results[lhs_id].getValue();
+            const lhs = try rt.results[try rt.it.next()].getValue();
+
+            if (comptime IsAtomic) {
+                _ = rt.it.skip(); // scope
+                _ = rt.it.skip(); // semantic
+            }
+
             const rhs = try rt.results[try rt.it.next()].getValue();
 
             const lane_bits = try Result.resolveLaneBitWidth(target_type, rt);
@@ -961,6 +985,10 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp) type {
                 .Vector2u32 => |*d| try operator.applySIMDVector(u32, 2, d, &lhs.Vector2u32, &rhs.Vector2u32),
 
                 else => return RuntimeError.InvalidSpirV,
+            }
+
+            if (comptime IsAtomic) {
+                try copyValue(lhs, dst);
             }
         }
 
@@ -1077,21 +1105,6 @@ fn cloneDecorationTo(allocator: std.mem.Allocator, rt: *Runtime, target: SpvWord
 
 fn autoSetupConstant(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     _ = try setupConstant(allocator, rt);
-}
-
-fn opBitcast(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
-    _ = rt.it.skip();
-    const to_value = try rt.results[try rt.it.next()].getValue();
-    const from_value = try rt.results[try rt.it.next()].getValue();
-
-    var arena: std.heap.ArenaAllocator = .init(allocator);
-    defer arena.deinit();
-    const local_allocator = arena.allocator();
-
-    const size = try to_value.getPlainMemorySize();
-    const bytes = local_allocator.alloc(u8, size) catch return RuntimeError.OutOfMemory;
-    _ = try from_value.read(bytes);
-    _ = try to_value.write(bytes);
 }
 
 fn copyValue(dst: *Value, src: *const Value) RuntimeError!void {
@@ -1347,6 +1360,29 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
             },
         },
     };
+}
+
+fn opAtomicStore(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const ptr_id = try rt.it.next();
+    _ = rt.it.skip(); // scope
+    _ = rt.it.skip(); // semantic
+    const val_id = try rt.it.next();
+    try copyValue(try rt.results[ptr_id].getValue(), try rt.results[val_id].getValue());
+}
+
+fn opBitcast(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    _ = rt.it.skip();
+    const to_value = try rt.results[try rt.it.next()].getValue();
+    const from_value = try rt.results[try rt.it.next()].getValue();
+
+    var arena: std.heap.ArenaAllocator = .init(allocator);
+    defer arena.deinit();
+    const local_allocator = arena.allocator();
+
+    const size = try to_value.getPlainMemorySize();
+    const bytes = local_allocator.alloc(u8, size) catch return RuntimeError.OutOfMemory;
+    _ = try from_value.read(bytes);
+    _ = try to_value.write(bytes);
 }
 
 fn opBranch(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
