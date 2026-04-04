@@ -55,6 +55,9 @@ current_parameter_index: SpvWord,
 current_function: ?*Result,
 function_stack: std.ArrayList(Function),
 
+current_label: ?SpvWord,
+previous_label: ?SpvWord,
+
 specialization_constants: std.AutoHashMapUnmanaged(u32, []const u8),
 
 pub fn init(allocator: std.mem.Allocator, module: *Module) RuntimeError!Self {
@@ -71,6 +74,8 @@ pub fn init(allocator: std.mem.Allocator, module: *Module) RuntimeError!Self {
         .current_parameter_index = 0,
         .current_function = null,
         .function_stack = .empty,
+        .current_label = null,
+        .previous_label = null,
         .specialization_constants = .empty,
     };
 }
@@ -257,4 +262,6 @@ pub fn flushDescriptorSets(self: *const Self, allocator: std.mem.Allocator) Runt
 fn reset(self: *Self) void {
     self.function_stack.clearRetainingCapacity();
     self.current_function = null;
+    self.current_label = null;
+    self.previous_label = null;
 }
