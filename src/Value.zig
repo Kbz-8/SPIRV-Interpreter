@@ -148,8 +148,8 @@ pub const Value = union(Type) {
                     .value = .{ .float64 = 0 },
                 } },
                 .Vector => |v| blk: {
-                    var self: Self = .{ .Vector = allocator.alloc(Self, member_count) catch return RuntimeError.OutOfMemory };
-                    errdefer self.deinit(allocator);
+                    const self: Self = .{ .Vector = allocator.alloc(Self, member_count) catch return RuntimeError.OutOfMemory };
+                    errdefer allocator.free(self.Vector);
 
                     for (self.Vector) |*value| {
                         value.* = try Self.init(allocator, results, v.components_type_word, is_externally_visible);
@@ -166,8 +166,8 @@ pub const Value = union(Type) {
                 .Vector3u32 => .{ .Vector3u32 = Vec3u32{ 0, 0, 0 } },
                 .Vector2u32 => .{ .Vector2u32 = Vec2u32{ 0, 0 } },
                 .Matrix => |m| blk: {
-                    var self: Self = .{ .Matrix = allocator.alloc(Self, member_count) catch return RuntimeError.OutOfMemory };
-                    errdefer self.deinit(allocator);
+                    const self: Self = .{ .Matrix = allocator.alloc(Self, member_count) catch return RuntimeError.OutOfMemory };
+                    errdefer allocator.free(self.Matrix);
 
                     for (self.Matrix) |*value| {
                         value.* = try Self.init(allocator, results, m.column_type_word, is_externally_visible);
@@ -186,13 +186,13 @@ pub const Value = union(Type) {
                         };
                     }
 
-                    var self: Self = .{
+                    const self: Self = .{
                         .Array = .{
                             .stride = a.stride,
                             .values = allocator.alloc(Self, member_count) catch return RuntimeError.OutOfMemory,
                         },
                     };
-                    errdefer self.deinit(allocator);
+                    errdefer allocator.free(self.Array.values);
 
                     for (self.Array.values) |*value| {
                         value.* = try Self.init(allocator, results, a.components_type_word, is_externally_visible);
@@ -200,13 +200,13 @@ pub const Value = union(Type) {
                     break :blk self;
                 },
                 .Structure => |s| blk: {
-                    var self: Self = .{
+                    const self: Self = .{
                         .Structure = .{
                             .offsets = allocator.dupe(?SpvWord, s.members_offsets) catch return RuntimeError.OutOfMemory,
                             .values = allocator.alloc(Self, member_count) catch return RuntimeError.OutOfMemory,
                         },
                     };
-                    errdefer self.deinit(allocator);
+                    errdefer allocator.free(self.Structure.values);
 
                     for (self.Structure.values, s.members_type_word) |*value, type_word| {
                         value.* = try Self.init(allocator, results, type_word, is_externally_visible);
@@ -235,6 +235,7 @@ pub const Value = union(Type) {
             .Vector => |v| .{
                 .Vector = blk: {
                     const values = allocator.dupe(Self, v) catch return RuntimeError.OutOfMemory;
+                    errdefer allocator.free(values);
                     for (values, v) |*new_value, value| new_value.* = try value.dupe(allocator);
                     break :blk values;
                 },
@@ -242,13 +243,15 @@ pub const Value = union(Type) {
             .Matrix => |m| .{
                 .Matrix = blk: {
                     const values = allocator.dupe(Self, m) catch return RuntimeError.OutOfMemory;
+                    errdefer allocator.free(values);
                     for (values, m) |*new_value, value| new_value.* = try value.dupe(allocator);
                     break :blk values;
                 },
             },
-            .Array => |a| .{
+            .Array => |*a| .{
                 .Array = blk: {
                     const values = allocator.dupe(Self, a.values) catch return RuntimeError.OutOfMemory;
+                    errdefer allocator.free(values);
                     for (values, a.values) |*new_value, value| new_value.* = try value.dupe(allocator);
                     break :blk .{
                         .stride = a.stride,
@@ -256,9 +259,10 @@ pub const Value = union(Type) {
                     };
                 },
             },
-            .Structure => |s| .{
+            .Structure => |*s| .{
                 .Structure = blk: {
                     const values = allocator.dupe(Self, s.values) catch return RuntimeError.OutOfMemory;
+                    errdefer allocator.free(values);
                     for (values, s.values) |*new_value, value| new_value.* = try value.dupe(allocator);
                     break :blk .{
                         .offsets = allocator.dupe(?SpvWord, s.offsets) catch return RuntimeError.OutOfMemory,
@@ -619,15 +623,15 @@ pub const Value = union(Type) {
 
     pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
         switch (self.*) {
-            .Vector, .Matrix => |values| {
-                for (values) |*value| value.deinit(allocator);
-                allocator.free(values);
+            .Vector, .Matrix => |*values| {
+                for (values.*) |*value| value.deinit(allocator);
+                allocator.free(values.*);
             },
-            .Array => |arr| {
+            .Array => |*arr| {
                 for (arr.values) |*value| value.deinit(allocator);
                 allocator.free(arr.values);
             },
-            .Structure => |s| {
+            .Structure => |*s| {
                 for (s.values) |*value| value.deinit(allocator);
                 allocator.free(s.values);
                 allocator.free(s.offsets);

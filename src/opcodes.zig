@@ -883,14 +883,20 @@ fn ConversionEngine(comptime from_kind: PrimitiveType, comptime to_kind: Primiti
 
 fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic: bool) type {
     return struct {
-        fn op(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+        fn op(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
             const target_type = (try rt.results[try rt.it.next()].getVariant()).Type;
             const dst = try rt.results[try rt.it.next()].getValue();
             const lhs = try rt.results[try rt.it.next()].getValue();
 
+            var arena = std.heap.ArenaAllocator.init(allocator);
+            defer arena.deinit();
+
+            var lhs_save: ?Value = null;
+
             if (comptime IsAtomic) {
                 _ = rt.it.skip(); // scope
                 _ = rt.it.skip(); // semantic
+                lhs_save = try lhs.dupe(arena.allocator());
             }
 
             const rhs = try rt.results[try rt.it.next()].getValue();
@@ -989,6 +995,8 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
 
             if (comptime IsAtomic) {
                 try copyValue(lhs, dst);
+                try copyValue(dst, &lhs_save.?);
+                try lhs.flushPtr(allocator);
             }
         }
 
