@@ -144,6 +144,7 @@ pub const SetupDispatcher = block: {
         .IAdd = autoSetupConstant,
         .IAddCarry = autoSetupConstant,
         .IEqual = autoSetupConstant,
+        .ImageRead = autoSetupConstant,
         .IMul = autoSetupConstant,
         .INotEqual = autoSetupConstant,
         .ISub = autoSetupConstant,
@@ -190,6 +191,7 @@ pub const SetupDispatcher = block: {
         .TypeBool = opTypeBool,
         .TypeFloat = opTypeFloat,
         .TypeFunction = opTypeFunction,
+        .TypeImage = opTypeImage,
         .TypeInt = opTypeInt,
         .TypeMatrix = opTypeMatrix,
         .TypePointer = opTypePointer,
@@ -2369,6 +2371,26 @@ fn opTypeFunction(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtim
             },
         },
     };
+}
+
+fn opTypeImage(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
+    const id = try rt.it.next();
+    rt.results[id].variant = .{
+        .Type = .{
+            .Image = .{
+                .dim = try rt.it.nextAs(spv.SpvDim),
+                .depth = @truncate(try rt.it.next()),
+                .arrayed = @truncate(try rt.it.next()),
+                .ms = @truncate(try rt.it.next()),
+                .sampled = @truncate(try rt.it.next()),
+                .format = try rt.it.nextAs(spv.SpvImageFormat),
+                .access = null,
+            },
+        },
+    };
+    if (word_count > 8) {
+        rt.results[id].variant.?.Type.Image.access = try rt.it.nextAs(spv.SpvAccessQualifier);
+    }
 }
 
 fn opTypeInt(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {

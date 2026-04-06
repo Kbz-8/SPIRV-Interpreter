@@ -129,7 +129,15 @@ pub const TypeData = union(Type) {
         return_type: SpvWord,
         params: []const SpvWord,
     },
-    Image: struct {},
+    Image: struct {
+        dim: spv.SpvDim,
+        depth: SpvByte,
+        arrayed: SpvByte,
+        ms: SpvByte,
+        sampled: SpvByte,
+        format: spv.SpvImageFormat,
+        access: ?spv.SpvAccessQualifier,
+    },
     Sampler: struct {},
     SampledImage: struct {},
     Pointer: struct {
