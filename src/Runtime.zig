@@ -11,6 +11,7 @@ const SpvByte = spv.SpvByte;
 const SpvWord = spv.SpvWord;
 const SpvBool = spv.SpvBool;
 
+const Image = @import("Image.zig");
 const Module = @import("Module.zig");
 const Result = @import("Result.zig");
 const WordIterator = @import("WordIterator.zig");

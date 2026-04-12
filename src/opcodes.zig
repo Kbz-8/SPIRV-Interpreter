@@ -2375,6 +2375,7 @@ fn opTypeFunction(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtim
 
 fn opTypeImage(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
     const id = try rt.it.next();
+    _ = rt.it.skip(); // TODO: sampled type management
     rt.results[id].variant = .{
         .Type = .{
             .Image = .{

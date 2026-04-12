@@ -107,7 +107,20 @@ pub const Value = union(Type) {
         values: []Self,
     },
     Function: noreturn,
-    Image: struct {},
+    Image: struct {
+        type_word: SpvWord,
+        data: []u8,
+
+        pub inline fn getInfos(self: *const @This(), results: []const Result) RuntimeError!@FieldType(Result.TypeData, "Image") {
+            return switch (try results[self.type_word].getConstVariant()) {
+                .Type => |t| switch (t) {
+                    .Image => |i| i,
+                    else => RuntimeError.InvalidSpirV,
+                },
+                else => RuntimeError.InvalidSpirV,
+            };
+        }
+    },
     Sampler: struct {},
     SampledImage: struct {},
     Pointer: struct {
@@ -131,10 +144,10 @@ pub const Value = union(Type) {
     }
 
     pub fn init(allocator: std.mem.Allocator, results: []const Result, target_type: SpvWord, is_externally_visible: bool) RuntimeError!Self {
-        const resolved = results[target_type].resolveType(results);
-        const member_count = resolved.getMemberCounts();
+        const resolved = results[target_type].resolveTypeWordOrNull() orelse target_type;
+        const member_count = results[resolved].getMemberCounts();
 
-        return switch (resolved.variant.?) {
+        return switch (results[resolved].variant.?) {
             .Type => |t| switch (t) {
                 .Void => .{ .Void = .{} },
                 .Bool => .{ .Bool = false },
@@ -220,7 +233,12 @@ pub const Value = union(Type) {
                         .data = &.{},
                     },
                 },
-                .Image => RuntimeError.ToDo,
+                .Image => .{
+                    .Image = .{
+                        .type_word = resolved,
+                        .data = &.{},
+                    },
+                },
                 .Sampler => RuntimeError.ToDo,
                 .SampledImage => RuntimeError.ToDo,
                 else => RuntimeError.InvalidSpirV,
@@ -527,6 +545,7 @@ pub const Value = union(Type) {
                 return offset;
             },
             .RuntimeArray => |*arr| arr.data = input[0..],
+            .Image => |*img| img.data = input[0..],
             else => return RuntimeError.InvalidValueType,
         }
         return 0;
