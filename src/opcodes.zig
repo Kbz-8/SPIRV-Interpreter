@@ -646,8 +646,8 @@ fn CondOperator(comptime T: PrimitiveType, comptime Op: CondOp) type {
             comptime ElemT: type,
             comptime N: usize,
             dst: []Value,
-            op1: *[N]ElemT,
-            op2: *[N]ElemT,
+            op1: *@Vector(N, ElemT),
+            op2: *@Vector(N, ElemT),
         ) RuntimeError!void {
             inline for (0..N) |i| dst[i].Bool = try operationBinary(ElemT, op1[i], op2[i]);
         }
@@ -656,7 +656,7 @@ fn CondOperator(comptime T: PrimitiveType, comptime Op: CondOp) type {
             comptime ElemT: type,
             comptime N: usize,
             dst: []Value,
-            op1: *[N]ElemT,
+            op1: *@Vector(N, ElemT),
         ) RuntimeError!void {
             inline for (0..N) |i| dst[i].Bool = try operationUnary(ElemT, op1[i]);
         }
@@ -796,11 +796,11 @@ fn ConversionEngine(comptime from_kind: PrimitiveType, comptime to_kind: Primiti
                     }
                 }
 
-                fn castSIMDVector(comptime ToT: type, comptime N: usize, dst_arr: *[N]ToT, src_arr: *const [N]ToT) void {
+                fn castSIMDVector(comptime ToT: type, comptime N: usize, dst_arr: *@Vector(N, ToT), src_arr: *const @Vector(N, ToT)) void {
                     inline for (0..N) |i| dst_arr[i] = std.math.lossyCast(ToT, src_arr[i]);
                 }
 
-                fn castSIMDVectorFromOther(comptime ToT: type, comptime FromT: type, comptime N: usize, dst_arr: *[N]ToT, src_arr: *const [N]FromT) void {
+                fn castSIMDVectorFromOther(comptime ToT: type, comptime FromT: type, comptime N: usize, dst_arr: *@Vector(N, ToT), src_arr: *const @Vector(N, FromT)) void {
                     inline for (0..N) |i| dst_arr[i] = std.math.lossyCast(ToT, src_arr[i]);
                 }
             };
@@ -1320,41 +1320,41 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                         is_owner_of_uniform_slice = true;
                                     uniform_slice_window = arr.data[arr.getOffsetOfIndex(i.value.uint32)..];
                                 },
-                                .Vector4f32 => |*v| {
-                                    if (i.value.uint32 >= 4) return RuntimeError.OutOfBounds;
-                                    break :blk .{ .Pointer = .{ .ptr = .{ .f32_ptr = &v[i.value.uint32] } } };
+                                .Vector4f32 => |*v| switch (i.value.uint32) {
+                                    inline 0...3 => |idx| break :blk .{ .Pointer = .{ .ptr = .{ .f32_ptr = &v[idx] } } },
+                                    else => return RuntimeError.InvalidSpirV,
                                 },
-                                .Vector3f32 => |*v| {
-                                    if (i.value.uint32 >= 3) return RuntimeError.OutOfBounds;
-                                    break :blk .{ .Pointer = .{ .ptr = .{ .f32_ptr = &v[i.value.uint32] } } };
+                                .Vector3f32 => |*v| switch (i.value.uint32) {
+                                    inline 0...2 => |idx| break :blk .{ .Pointer = .{ .ptr = .{ .f32_ptr = &v[idx] } } },
+                                    else => return RuntimeError.InvalidSpirV,
                                 },
-                                .Vector2f32 => |*v| {
-                                    if (i.value.uint32 >= 2) return RuntimeError.OutOfBounds;
-                                    break :blk .{ .Pointer = .{ .ptr = .{ .f32_ptr = &v[i.value.uint32] } } };
+                                .Vector2f32 => |*v| switch (i.value.uint32) {
+                                    inline 0...1 => |idx| break :blk .{ .Pointer = .{ .ptr = .{ .f32_ptr = &v[idx] } } },
+                                    else => return RuntimeError.InvalidSpirV,
                                 },
-                                .Vector4i32 => |*v| {
-                                    if (i.value.uint32 >= 4) return RuntimeError.OutOfBounds;
-                                    break :blk .{ .Pointer = .{ .ptr = .{ .i32_ptr = &v[i.value.uint32] } } };
+                                .Vector4i32 => |*v| switch (i.value.uint32) {
+                                    inline 0...3 => |idx| break :blk .{ .Pointer = .{ .ptr = .{ .i32_ptr = &v[idx] } } },
+                                    else => return RuntimeError.InvalidSpirV,
                                 },
-                                .Vector3i32 => |*v| {
-                                    if (i.value.uint32 >= 3) return RuntimeError.OutOfBounds;
-                                    break :blk .{ .Pointer = .{ .ptr = .{ .i32_ptr = &v[i.value.uint32] } } };
+                                .Vector3i32 => |*v| switch (i.value.uint32) {
+                                    inline 0...2 => |idx| break :blk .{ .Pointer = .{ .ptr = .{ .i32_ptr = &v[idx] } } },
+                                    else => return RuntimeError.InvalidSpirV,
                                 },
-                                .Vector2i32 => |*v| {
-                                    if (i.value.uint32 >= 2) return RuntimeError.OutOfBounds;
-                                    break :blk .{ .Pointer = .{ .ptr = .{ .i32_ptr = &v[i.value.uint32] } } };
+                                .Vector2i32 => |*v| switch (i.value.uint32) {
+                                    inline 0...1 => |idx| break :blk .{ .Pointer = .{ .ptr = .{ .i32_ptr = &v[idx] } } },
+                                    else => return RuntimeError.InvalidSpirV,
                                 },
-                                .Vector4u32 => |*v| {
-                                    if (i.value.uint32 >= 4) return RuntimeError.OutOfBounds;
-                                    break :blk .{ .Pointer = .{ .ptr = .{ .u32_ptr = &v[i.value.uint32] } } };
+                                .Vector4u32 => |*v| switch (i.value.uint32) {
+                                    inline 0...3 => |idx| break :blk .{ .Pointer = .{ .ptr = .{ .u32_ptr = &v[idx] } } },
+                                    else => return RuntimeError.InvalidSpirV,
                                 },
-                                .Vector3u32 => |*v| {
-                                    if (i.value.uint32 >= 3) return RuntimeError.OutOfBounds;
-                                    break :blk .{ .Pointer = .{ .ptr = .{ .u32_ptr = &v[i.value.uint32] } } };
+                                .Vector3u32 => |*v| switch (i.value.uint32) {
+                                    inline 0...2 => |idx| break :blk .{ .Pointer = .{ .ptr = .{ .u32_ptr = &v[idx] } } },
+                                    else => return RuntimeError.InvalidSpirV,
                                 },
-                                .Vector2u32 => |*v| {
-                                    if (i.value.uint32 >= 2) return RuntimeError.OutOfBounds;
-                                    break :blk .{ .Pointer = .{ .ptr = .{ .u32_ptr = &v[i.value.uint32] } } };
+                                .Vector2u32 => |*v| switch (i.value.uint32) {
+                                    inline 0...1 => |idx| break :blk .{ .Pointer = .{ .ptr = .{ .u32_ptr = &v[idx] } } },
+                                    else => return RuntimeError.InvalidSpirV,
                                 },
                                 else => return RuntimeError.InvalidSpirV,
                             }
@@ -1512,15 +1512,42 @@ fn opCompositeExtract(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Ru
                     }
                     switch (composite) {
                         .RuntimeArray => |arr| composite = try arr.createLocalValueFromIndex(arena_allocator, rt.results, member_id),
-                        .Vector4f32 => |v| break :blk .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = v[member_id] } } },
-                        .Vector3f32 => |v| break :blk .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = v[member_id] } } },
-                        .Vector2f32 => |v| break :blk .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = v[member_id] } } },
-                        .Vector4i32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .is_signed = true, .value = .{ .sint32 = v[member_id] } } },
-                        .Vector3i32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .is_signed = true, .value = .{ .sint32 = v[member_id] } } },
-                        .Vector2i32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .is_signed = true, .value = .{ .sint32 = v[member_id] } } },
-                        .Vector4u32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .is_signed = false, .value = .{ .uint32 = v[member_id] } } },
-                        .Vector3u32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .is_signed = false, .value = .{ .uint32 = v[member_id] } } },
-                        .Vector2u32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .is_signed = false, .value = .{ .uint32 = v[member_id] } } },
+                        .Vector4f32 => |v| break :blk .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = switch (member_id) {
+                            inline 0...3 => |idx| v[idx],
+                            else => return RuntimeError.OutOfBounds,
+                        } } } },
+                        .Vector3f32 => |v| break :blk .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = switch (member_id) {
+                            inline 0...2 => |idx| v[idx],
+                            else => return RuntimeError.OutOfBounds,
+                        } } } },
+                        .Vector2f32 => |v| break :blk .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = switch (member_id) {
+                            inline 0...1 => |idx| v[idx],
+                            else => return RuntimeError.OutOfBounds,
+                        } } } },
+                        .Vector4i32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .is_signed = true, .value = .{ .sint32 = switch (member_id) {
+                            inline 0...3 => |idx| v[idx],
+                            else => return RuntimeError.OutOfBounds,
+                        } } } },
+                        .Vector3i32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .is_signed = true, .value = .{ .sint32 = switch (member_id) {
+                            inline 0...2 => |idx| v[idx],
+                            else => return RuntimeError.OutOfBounds,
+                        } } } },
+                        .Vector2i32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .is_signed = true, .value = .{ .sint32 = switch (member_id) {
+                            inline 0...1 => |idx| v[idx],
+                            else => return RuntimeError.OutOfBounds,
+                        } } } },
+                        .Vector4u32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .is_signed = false, .value = .{ .uint32 = switch (member_id) {
+                            inline 0...3 => |idx| v[idx],
+                            else => return RuntimeError.OutOfBounds,
+                        } } } },
+                        .Vector3u32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .is_signed = false, .value = .{ .uint32 = switch (member_id) {
+                            inline 0...2 => |idx| v[idx],
+                            else => return RuntimeError.OutOfBounds,
+                        } } } },
+                        .Vector2u32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .is_signed = false, .value = .{ .uint32 = switch (member_id) {
+                            inline 0...1 => |idx| v[idx],
+                            else => return RuntimeError.OutOfBounds,
+                        } } } },
                         else => return RuntimeError.InvalidValueType,
                     }
                 }
@@ -1586,43 +1613,43 @@ fn opCompositeInsert(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Run
                     _ = try elem_value.read(arr.data[elem_offset..]);
                 },
 
-                .Vector4f32 => |*v| {
-                    if (index >= 4 or indices.len != 1) return RuntimeError.InvalidSpirV;
-                    v[index] = (try Value.getPrimitiveField(.Float, 32, @constCast(object_value))).*;
+                .Vector4f32 => |*v| switch (index) {
+                    inline 0...3 => |i| v[i] = (try Value.getPrimitiveField(.Float, 32, @constCast(object_value))).*,
+                    else => return RuntimeError.InvalidSpirV,
                 },
-                .Vector3f32 => |*v| {
-                    if (index >= 3 or indices.len != 1) return RuntimeError.InvalidSpirV;
-                    v[index] = (try Value.getPrimitiveField(.Float, 32, @constCast(object_value))).*;
+                .Vector3f32 => |*v| switch (index) {
+                    inline 0...2 => |i| v[i] = (try Value.getPrimitiveField(.Float, 32, @constCast(object_value))).*,
+                    else => return RuntimeError.InvalidSpirV,
                 },
-                .Vector2f32 => |*v| {
-                    if (index >= 2 or indices.len != 1) return RuntimeError.InvalidSpirV;
-                    v[index] = (try Value.getPrimitiveField(.Float, 32, @constCast(object_value))).*;
-                },
-
-                .Vector4i32 => |*v| {
-                    if (index >= 4 or indices.len != 1) return RuntimeError.InvalidSpirV;
-                    v[index] = (try Value.getPrimitiveField(.SInt, 32, @constCast(object_value))).*;
-                },
-                .Vector3i32 => |*v| {
-                    if (index >= 3 or indices.len != 1) return RuntimeError.InvalidSpirV;
-                    v[index] = (try Value.getPrimitiveField(.SInt, 32, @constCast(object_value))).*;
-                },
-                .Vector2i32 => |*v| {
-                    if (index >= 2 or indices.len != 1) return RuntimeError.InvalidSpirV;
-                    v[index] = (try Value.getPrimitiveField(.SInt, 32, @constCast(object_value))).*;
+                .Vector2f32 => |*v| switch (index) {
+                    inline 0...1 => |i| v[i] = (try Value.getPrimitiveField(.Float, 32, @constCast(object_value))).*,
+                    else => return RuntimeError.InvalidSpirV,
                 },
 
-                .Vector4u32 => |*v| {
-                    if (index >= 4 or indices.len != 1) return RuntimeError.InvalidSpirV;
-                    v[index] = (try Value.getPrimitiveField(.UInt, 32, @constCast(object_value))).*;
+                .Vector4i32 => |*v| switch (index) {
+                    inline 0...3 => |i| v[i] = (try Value.getPrimitiveField(.SInt, 32, @constCast(object_value))).*,
+                    else => return RuntimeError.InvalidSpirV,
                 },
-                .Vector3u32 => |*v| {
-                    if (index >= 3 or indices.len != 1) return RuntimeError.InvalidSpirV;
-                    v[index] = (try Value.getPrimitiveField(.UInt, 32, @constCast(object_value))).*;
+                .Vector3i32 => |*v| switch (index) {
+                    inline 0...2 => |i| v[i] = (try Value.getPrimitiveField(.SInt, 32, @constCast(object_value))).*,
+                    else => return RuntimeError.InvalidSpirV,
                 },
-                .Vector2u32 => |*v| {
-                    if (index >= 2 or indices.len != 1) return RuntimeError.InvalidSpirV;
-                    v[index] = (try Value.getPrimitiveField(.UInt, 32, @constCast(object_value))).*;
+                .Vector2i32 => |*v| switch (index) {
+                    inline 0...1 => |i| v[i] = (try Value.getPrimitiveField(.SInt, 32, @constCast(object_value))).*,
+                    else => return RuntimeError.InvalidSpirV,
+                },
+
+                .Vector4u32 => |*v| switch (index) {
+                    inline 0...3 => |i| v[i] = (try Value.getPrimitiveField(.UInt, 32, @constCast(object_value))).*,
+                    else => return RuntimeError.InvalidSpirV,
+                },
+                .Vector3u32 => |*v| switch (index) {
+                    inline 0...2 => |i| v[i] = (try Value.getPrimitiveField(.UInt, 32, @constCast(object_value))).*,
+                    else => return RuntimeError.InvalidSpirV,
+                },
+                .Vector2u32 => |*v| switch (index) {
+                    inline 0...1 => |i| v[i] = (try Value.getPrimitiveField(.UInt, 32, @constCast(object_value))).*,
+                    else => return RuntimeError.InvalidSpirV,
                 },
 
                 else => return RuntimeError.InvalidValueType,
@@ -2609,95 +2636,77 @@ fn opVectorShuffle(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) Runti
                     return lanes[lane_index];
                 },
 
-                .Vector2f32 => |lanes| {
-                    if (lane_index >= 2) return RuntimeError.InvalidSpirV;
-                    return .{
-                        .Float = .{
-                            .bit_count = 32,
-                            .value = .{ .float32 = lanes[lane_index] },
-                        },
-                    };
-                },
-                .Vector3f32 => |lanes| {
-                    if (lane_index >= 3) return RuntimeError.InvalidSpirV;
-                    return .{
-                        .Float = .{
-                            .bit_count = 32,
-                            .value = .{ .float32 = lanes[lane_index] },
-                        },
-                    };
-                },
-                .Vector4f32 => |lanes| {
-                    if (lane_index >= 4) return RuntimeError.InvalidSpirV;
-                    return .{
-                        .Float = .{
-                            .bit_count = 32,
-                            .value = .{ .float32 = lanes[lane_index] },
-                        },
-                    };
-                },
+                .Vector2f32 => |lanes| return .{ .Float = .{
+                    .bit_count = 32,
+                    .value = .{ .float32 = switch (lane_index) {
+                        inline 0...1 => |idx| lanes[idx],
+                        else => return RuntimeError.OutOfBounds,
+                    } },
+                } },
+                .Vector3f32 => |lanes| return .{ .Float = .{
+                    .bit_count = 32,
+                    .value = .{ .float32 = switch (lane_index) {
+                        inline 0...2 => |idx| lanes[idx],
+                        else => return RuntimeError.OutOfBounds,
+                    } },
+                } },
+                .Vector4f32 => |lanes| return .{ .Float = .{
+                    .bit_count = 32,
+                    .value = .{ .float32 = switch (lane_index) {
+                        inline 0...3 => |idx| lanes[idx],
+                        else => return RuntimeError.OutOfBounds,
+                    } },
+                } },
 
-                .Vector2i32 => |lanes| {
-                    if (lane_index >= 2) return RuntimeError.InvalidSpirV;
-                    return .{
-                        .Int = .{
-                            .bit_count = 32,
-                            .is_signed = true,
-                            .value = .{ .sint32 = lanes[lane_index] },
-                        },
-                    };
-                },
-                .Vector3i32 => |lanes| {
-                    if (lane_index >= 3) return RuntimeError.InvalidSpirV;
-                    return .{
-                        .Int = .{
-                            .bit_count = 32,
-                            .is_signed = true,
-                            .value = .{ .sint32 = lanes[lane_index] },
-                        },
-                    };
-                },
-                .Vector4i32 => |lanes| {
-                    if (lane_index >= 4) return RuntimeError.InvalidSpirV;
-                    return .{
-                        .Int = .{
-                            .bit_count = 32,
-                            .is_signed = true,
-                            .value = .{ .sint32 = lanes[lane_index] },
-                        },
-                    };
-                },
+                .Vector2i32 => |lanes| return .{ .Int = .{
+                    .bit_count = 32,
+                    .is_signed = true,
+                    .value = .{ .sint32 = switch (lane_index) {
+                        inline 0...1 => |idx| lanes[idx],
+                        else => return RuntimeError.OutOfBounds,
+                    } },
+                } },
+                .Vector3i32 => |lanes| return .{ .Int = .{
+                    .bit_count = 32,
+                    .is_signed = true,
+                    .value = .{ .sint32 = switch (lane_index) {
+                        inline 0...2 => |idx| lanes[idx],
+                        else => return RuntimeError.OutOfBounds,
+                    } },
+                } },
+                .Vector4i32 => |lanes| return .{ .Int = .{
+                    .bit_count = 32,
+                    .is_signed = true,
+                    .value = .{ .sint32 = switch (lane_index) {
+                        inline 0...3 => |idx| lanes[idx],
+                        else => return RuntimeError.OutOfBounds,
+                    } },
+                } },
 
-                .Vector2u32 => |lanes| {
-                    if (lane_index >= 2) return RuntimeError.InvalidSpirV;
-                    return .{
-                        .Int = .{
-                            .bit_count = 32,
-                            .is_signed = false,
-                            .value = .{ .uint32 = lanes[lane_index] },
-                        },
-                    };
-                },
-                .Vector3u32 => |lanes| {
-                    if (lane_index >= 3) return RuntimeError.InvalidSpirV;
-                    return .{
-                        .Int = .{
-                            .bit_count = 32,
-                            .is_signed = false,
-                            .value = .{ .uint32 = lanes[lane_index] },
-                        },
-                    };
-                },
-                .Vector4u32 => |lanes| {
-                    if (lane_index >= 4) return RuntimeError.InvalidSpirV;
-                    return .{
-                        .Int = .{
-                            .bit_count = 32,
-                            .is_signed = false,
-                            .value = .{ .uint32 = lanes[lane_index] },
-                        },
-                    };
-                },
+                .Vector2u32 => |lanes| return .{ .Int = .{
+                    .bit_count = 32,
+                    .is_signed = false,
+                    .value = .{ .uint32 = switch (lane_index) {
+                        inline 0...1 => |idx| lanes[idx],
+                        else => return RuntimeError.OutOfBounds,
+                    } },
+                } },
+                .Vector3u32 => |lanes| return .{ .Int = .{
+                    .bit_count = 32,
+                    .is_signed = false,
+                    .value = .{ .uint32 = switch (lane_index) {
+                        inline 0...2 => |idx| lanes[idx],
+                        else => return RuntimeError.OutOfBounds,
+                    } },
+                } },
+                .Vector4u32 => |lanes| return .{ .Int = .{
+                    .bit_count = 32,
+                    .is_signed = false,
+                    .value = .{ .uint32 = switch (lane_index) {
+                        inline 0...3 => |idx| lanes[idx],
+                        else => return RuntimeError.OutOfBounds,
+                    } },
+                } },
 
                 else => return RuntimeError.InvalidSpirV,
             };
@@ -2710,97 +2719,97 @@ fn opVectorShuffle(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) Runti
                     lanes[lane_index] = lane_value;
                 },
 
-                .Vector2f32 => |*lanes| {
-                    if (lane_index >= 2) return RuntimeError.InvalidSpirV;
-                    switch (lane_value) {
-                        .Float => |f| {
-                            if (f.bit_count != 32) return RuntimeError.InvalidSpirV;
-                            lanes[lane_index] = f.value.float32;
-                        },
-                        else => return RuntimeError.InvalidSpirV,
-                    }
+                .Vector2f32 => |*lanes| switch (lane_value) {
+                    .Float => |f| {
+                        if (f.bit_count != 32) return RuntimeError.InvalidSpirV;
+                        switch (lane_index) {
+                            inline 0...1 => |i| lanes[i] = f.value.float32,
+                            else => return RuntimeError.InvalidSpirV,
+                        }
+                    },
+                    else => return RuntimeError.InvalidSpirV,
                 },
-                .Vector3f32 => |*lanes| {
-                    if (lane_index >= 3) return RuntimeError.InvalidSpirV;
-                    switch (lane_value) {
-                        .Float => |f| {
-                            if (f.bit_count != 32) return RuntimeError.InvalidSpirV;
-                            lanes[lane_index] = f.value.float32;
-                        },
-                        else => return RuntimeError.InvalidSpirV,
-                    }
+                .Vector3f32 => |*lanes| switch (lane_value) {
+                    .Float => |f| {
+                        if (f.bit_count != 32) return RuntimeError.InvalidSpirV;
+                        switch (lane_index) {
+                            inline 0...2 => |i| lanes[i] = f.value.float32,
+                            else => return RuntimeError.InvalidSpirV,
+                        }
+                    },
+                    else => return RuntimeError.InvalidSpirV,
                 },
-                .Vector4f32 => |*lanes| {
-                    if (lane_index >= 4) return RuntimeError.InvalidSpirV;
-                    switch (lane_value) {
-                        .Float => |f| {
-                            if (f.bit_count != 32) return RuntimeError.InvalidSpirV;
-                            lanes[lane_index] = f.value.float32;
-                        },
-                        else => return RuntimeError.InvalidSpirV,
-                    }
-                },
-
-                .Vector2i32 => |*lanes| {
-                    if (lane_index >= 2) return RuntimeError.InvalidSpirV;
-                    switch (lane_value) {
-                        .Int => |i| {
-                            if (i.bit_count != 32) return RuntimeError.InvalidSpirV;
-                            lanes[lane_index] = i.value.sint32;
-                        },
-                        else => return RuntimeError.InvalidSpirV,
-                    }
-                },
-                .Vector3i32 => |*lanes| {
-                    if (lane_index >= 3) return RuntimeError.InvalidSpirV;
-                    switch (lane_value) {
-                        .Int => |i| {
-                            if (i.bit_count != 32) return RuntimeError.InvalidSpirV;
-                            lanes[lane_index] = i.value.sint32;
-                        },
-                        else => return RuntimeError.InvalidSpirV,
-                    }
-                },
-                .Vector4i32 => |*lanes| {
-                    if (lane_index >= 4) return RuntimeError.InvalidSpirV;
-                    switch (lane_value) {
-                        .Int => |i| {
-                            if (i.bit_count != 32) return RuntimeError.InvalidSpirV;
-                            lanes[lane_index] = i.value.sint32;
-                        },
-                        else => return RuntimeError.InvalidSpirV,
-                    }
+                .Vector4f32 => |*lanes| switch (lane_value) {
+                    .Float => |f| {
+                        if (f.bit_count != 32) return RuntimeError.InvalidSpirV;
+                        switch (lane_index) {
+                            inline 0...3 => |i| lanes[i] = f.value.float32,
+                            else => return RuntimeError.InvalidSpirV,
+                        }
+                    },
+                    else => return RuntimeError.InvalidSpirV,
                 },
 
-                .Vector2u32 => |*lanes| {
-                    if (lane_index >= 2) return RuntimeError.InvalidSpirV;
-                    switch (lane_value) {
-                        .Int => |i| {
-                            if (i.bit_count != 32) return RuntimeError.InvalidSpirV;
-                            lanes[lane_index] = i.value.uint32;
-                        },
-                        else => return RuntimeError.InvalidSpirV,
-                    }
+                .Vector2i32 => |*lanes| switch (lane_value) {
+                    .Int => |i| {
+                        if (i.bit_count != 32) return RuntimeError.InvalidSpirV;
+                        switch (lane_index) {
+                            inline 0...1 => |idx| lanes[idx] = i.value.sint32,
+                            else => return RuntimeError.InvalidSpirV,
+                        }
+                    },
+                    else => return RuntimeError.InvalidSpirV,
                 },
-                .Vector3u32 => |*lanes| {
-                    if (lane_index >= 3) return RuntimeError.InvalidSpirV;
-                    switch (lane_value) {
-                        .Int => |i| {
-                            if (i.bit_count != 32) return RuntimeError.InvalidSpirV;
-                            lanes[lane_index] = i.value.uint32;
-                        },
-                        else => return RuntimeError.InvalidSpirV,
-                    }
+                .Vector3i32 => |*lanes| switch (lane_value) {
+                    .Int => |i| {
+                        if (i.bit_count != 32) return RuntimeError.InvalidSpirV;
+                        switch (lane_index) {
+                            inline 0...2 => |idx| lanes[idx] = i.value.sint32,
+                            else => return RuntimeError.InvalidSpirV,
+                        }
+                    },
+                    else => return RuntimeError.InvalidSpirV,
                 },
-                .Vector4u32 => |*lanes| {
-                    if (lane_index >= 4) return RuntimeError.InvalidSpirV;
-                    switch (lane_value) {
-                        .Int => |i| {
-                            if (i.bit_count != 32) return RuntimeError.InvalidSpirV;
-                            lanes[lane_index] = i.value.uint32;
-                        },
-                        else => return RuntimeError.InvalidSpirV,
-                    }
+                .Vector4i32 => |*lanes| switch (lane_value) {
+                    .Int => |i| {
+                        if (i.bit_count != 32) return RuntimeError.InvalidSpirV;
+                        switch (lane_index) {
+                            inline 0...3 => |idx| lanes[idx] = i.value.sint32,
+                            else => return RuntimeError.InvalidSpirV,
+                        }
+                    },
+                    else => return RuntimeError.InvalidSpirV,
+                },
+
+                .Vector2u32 => |*lanes| switch (lane_value) {
+                    .Int => |i| {
+                        if (i.bit_count != 32) return RuntimeError.InvalidSpirV;
+                        switch (lane_index) {
+                            inline 0...1 => |idx| lanes[idx] = i.value.uint32,
+                            else => return RuntimeError.InvalidSpirV,
+                        }
+                    },
+                    else => return RuntimeError.InvalidSpirV,
+                },
+                .Vector3u32 => |*lanes| switch (lane_value) {
+                    .Int => |i| {
+                        if (i.bit_count != 32) return RuntimeError.InvalidSpirV;
+                        switch (lane_index) {
+                            inline 0...2 => |idx| lanes[idx] = i.value.uint32,
+                            else => return RuntimeError.InvalidSpirV,
+                        }
+                    },
+                    else => return RuntimeError.InvalidSpirV,
+                },
+                .Vector4u32 => |*lanes| switch (lane_value) {
+                    .Int => |i| {
+                        if (i.bit_count != 32) return RuntimeError.InvalidSpirV;
+                        switch (lane_index) {
+                            inline 0...3 => |idx| lanes[idx] = i.value.uint32,
+                            else => return RuntimeError.InvalidSpirV,
+                        }
+                    },
+                    else => return RuntimeError.InvalidSpirV,
                 },
 
                 else => return RuntimeError.InvalidSpirV,

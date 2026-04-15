@@ -6,22 +6,22 @@
             .url = "git+https://github.com/zig-gamedev/zmath.git#3a5955b2b72cd081563fbb084eff05bffd1e3fbb",
             .hash = "zmath-0.11.0-dev-wjwivdMsAwD-xaLj76YHUq3t9JDH-X16xuMTmnDzqbu2",
         },
-        .pretty = .{ // For debugging purposes
-            .url = "git+https://github.com/Kbz-8/pretty#117674465efd4d07d5ae9d9d8ca59c2c323a65ba",
-            .hash = "pretty-0.10.6-Tm65r99UAQDEJMgZysD10qE8dinBHr064fPM6YkxVPfB",
-        },
         .NZSL = .{ // For unit tests
-            .url = "git+https://git.kbz8.me/kbz_8/NZigSL#5377dbdf9935b0de767f76ea4650e7aba4516b32",
-            .hash = "NZSL-1.1.2-N0xSVMt6AAC1ncQHA_RafnclWolDA477iTnFmZgdvxd-",
+            .url = "git+https://git.kbz8.me/kbz_8/NZigSL#ab95fc3734da46079fda2a4cd0f14143d92bf633",
+            .hash = "NZSL-1.1.2-N0xSVCR7AACeI_Wa6JPggJzy9_MPCpWC-2OHkMowwX-7",
             .lazy = true,
         },
-        .sdl3 = .{
-            .url = "git+https://codeberg.org/7Games/zig-sdl3?ref=v0.1.6#9c1842246c59f03f87ba59b160ca7e3d5e5ce972",
-            .hash = "sdl3-0.1.6-NmT1Q5sQJgCzT6hLj7WOSrwxE0Qsef1wIkDopbOOFru0",
-            .lazy = true,
+        //.sdl3 = .{
+        //    .url = "git+https://codeberg.org/7Games/zig-sdl3?ref=v0.1.6#9c1842246c59f03f87ba59b160ca7e3d5e5ce972",
+        //    .hash = "sdl3-0.1.6-NmT1Q5sQJgCzT6hLj7WOSrwxE0Qsef1wIkDopbOOFru0",
+        //    .lazy = true,
+        //},
+        .pretty = .{
+            .url = "git+https://github.com/Kbz-8/pretty#d87459a829fe0ae82b408155053e1933e2a16a15",
+            .hash = "pretty-0.10.6-Tm65rw5VAQDqJ-sbE6eoU-yOAr7kzUmAUrUQd7Wzaa9Q",
         },
     },
-    .minimum_zig_version = "0.15.2",
+    .minimum_zig_version = "0.16.0",
     .paths = .{
         "build.zig",
         "build.zig.zon",

@@ -78,7 +78,7 @@ pub const case = struct {
     }
 
     pub fn random(comptime T: type) T {
-        var prng: std.Random.DefaultPrng = .init(@intCast(std.time.microTimestamp()));
+        var prng: std.Random.DefaultPrng = .init(@intCast(std.Io.Timestamp.now(std.testing.io, .real).toMicroseconds()));
         const rand = prng.random();
 
         return switch (@typeInfo(T)) {
@@ -86,7 +86,7 @@ pub const case = struct {
             .float => rand.float(T),
             .vector => |v| blk: {
                 var vec: @Vector(v.len, v.child) = undefined;
-                for (0..v.len) |i| {
+                inline for (0..v.len) |i| {
                     vec[i] = random(v.child);
                 }
                 break :blk vec;

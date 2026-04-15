@@ -127,45 +127,6 @@ pub fn init(allocator: std.mem.Allocator, source: []const SpvWord, options: Modu
     try self.pass(allocator); // Setup pass
     try self.applyDecorations();
 
-    if (std.process.hasEnvVarConstant("SPIRV_INTERPRETER_DEBUG_LOGS")) {
-        var capability_set_names: std.ArrayList([]const u8) = .empty;
-        defer capability_set_names.deinit(allocator);
-
-        var it = self.capabilities.iterator();
-        while (it.next()) |cap| {
-            capability_set_names.append(allocator, @tagName(cap)) catch return ModuleError.OutOfMemory;
-        }
-
-        const capabilities = std.mem.join(allocator, ", ", capability_set_names.items) catch return ModuleError.OutOfMemory;
-        defer allocator.free(capabilities);
-
-        var entry_points_names = std.ArrayList([]const u8).initCapacity(allocator, self.entry_points.items.len) catch return ModuleError.OutOfMemory;
-        defer entry_points_names.deinit(allocator);
-
-        for (self.entry_points.items) |entry_point| {
-            entry_points_names.appendAssumeCapacity(entry_point.name);
-        }
-
-        const entry_points = std.mem.join(allocator, ", ", entry_points_names.items) catch return ModuleError.OutOfMemory;
-        defer allocator.free(entry_points);
-
-        std.log.scoped(.SPIRV_Interpreter).debug(
-            \\Loaded shader module with infos:
-            \\    SPIR-V version:     {d}.{d}
-            \\    Generator:          {s} (ID {d}), encoded version 0x{X}
-            \\    Capabilities:       [{s}]
-            \\    Entry points:       [{s}]
-        , .{
-            self.version_major,
-            self.version_minor,
-            spv.vendorName(self.generator_id),
-            self.generator_id,
-            self.generator_version,
-            capabilities,
-            entry_points,
-        });
-    }
-
     return self;
 }
 

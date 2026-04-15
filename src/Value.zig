@@ -667,13 +667,31 @@ pub const Value = union(Type) {
 
             .Vector => |lanes| (try getPrimitiveField(T, bits, &lanes[lane_index])).*,
 
-            .Vector4i32 => |vec| if (bits == 32) @as(TT, @bitCast(vec[lane_index])) else return RuntimeError.InvalidSpirV,
-            .Vector3i32 => |vec| if (bits == 32) @as(TT, @bitCast(vec[lane_index])) else return RuntimeError.InvalidSpirV,
-            .Vector2i32 => |vec| if (bits == 32) @as(TT, @bitCast(vec[lane_index])) else return RuntimeError.InvalidSpirV,
+            .Vector2i32 => |*vec| switch (lane_index) {
+                inline 0...1 => |i| if (bits == 32) @as(TT, @bitCast(vec[i])) else return RuntimeError.InvalidSpirV,
+                else => return RuntimeError.InvalidSpirV,
+            },
+            .Vector3i32 => |*vec| switch (lane_index) {
+                inline 0...2 => |i| if (bits == 32) @as(TT, @bitCast(vec[i])) else return RuntimeError.InvalidSpirV,
+                else => return RuntimeError.InvalidSpirV,
+            },
+            .Vector4i32 => |*vec| switch (lane_index) {
+                inline 0...3 => |i| if (bits == 32) @as(TT, @bitCast(vec[i])) else return RuntimeError.InvalidSpirV,
+                else => return RuntimeError.InvalidSpirV,
+            },
 
-            .Vector4u32 => |vec| if (bits == 32) @as(TT, @bitCast(vec[lane_index])) else return RuntimeError.InvalidSpirV,
-            .Vector3u32 => |vec| if (bits == 32) @as(TT, @bitCast(vec[lane_index])) else return RuntimeError.InvalidSpirV,
-            .Vector2u32 => |vec| if (bits == 32) @as(TT, @bitCast(vec[lane_index])) else return RuntimeError.InvalidSpirV,
+            .Vector2u32 => |*vec| switch (lane_index) {
+                inline 0...1 => |i| if (bits == 32) @as(TT, @bitCast(vec[i])) else return RuntimeError.InvalidSpirV,
+                else => return RuntimeError.InvalidSpirV,
+            },
+            .Vector3u32 => |*vec| switch (lane_index) {
+                inline 0...2 => |i| if (bits == 32) @as(TT, @bitCast(vec[i])) else return RuntimeError.InvalidSpirV,
+                else => return RuntimeError.InvalidSpirV,
+            },
+            .Vector4u32 => |*vec| switch (lane_index) {
+                inline 0...3 => |i| if (bits == 32) @as(TT, @bitCast(vec[i])) else return RuntimeError.InvalidSpirV,
+                else => return RuntimeError.InvalidSpirV,
+            },
 
             else => RuntimeError.InvalidSpirV,
         };
@@ -685,13 +703,31 @@ pub const Value = union(Type) {
 
             .Vector => |lanes| try setScalarLaneValue(T, bits, &lanes[lane_index], value),
 
-            .Vector2i32 => |*vec| vec[lane_index] = if (bits == 32) @bitCast(value) else return RuntimeError.InvalidSpirV,
-            .Vector3i32 => |*vec| vec[lane_index] = if (bits == 32) @bitCast(value) else return RuntimeError.InvalidSpirV,
-            .Vector4i32 => |*vec| vec[lane_index] = if (bits == 32) @bitCast(value) else return RuntimeError.InvalidSpirV,
+            .Vector2i32 => |*vec| switch (lane_index) {
+                inline 0...1 => |i| vec[i] = if (bits == 32) @bitCast(value) else return RuntimeError.InvalidSpirV,
+                else => return RuntimeError.InvalidSpirV,
+            },
+            .Vector3i32 => |*vec| switch (lane_index) {
+                inline 0...2 => |i| vec[i] = if (bits == 32) @bitCast(value) else return RuntimeError.InvalidSpirV,
+                else => return RuntimeError.InvalidSpirV,
+            },
+            .Vector4i32 => |*vec| switch (lane_index) {
+                inline 0...3 => |i| vec[i] = if (bits == 32) @bitCast(value) else return RuntimeError.InvalidSpirV,
+                else => return RuntimeError.InvalidSpirV,
+            },
 
-            .Vector2u32 => |*vec| vec[lane_index] = if (bits == 32) @bitCast(value) else return RuntimeError.InvalidSpirV,
-            .Vector3u32 => |*vec| vec[lane_index] = if (bits == 32) @bitCast(value) else return RuntimeError.InvalidSpirV,
-            .Vector4u32 => |*vec| vec[lane_index] = if (bits == 32) @bitCast(value) else return RuntimeError.InvalidSpirV,
+            .Vector2u32 => |*vec| switch (lane_index) {
+                inline 0...1 => |i| vec[i] = if (bits == 32) @bitCast(value) else return RuntimeError.InvalidSpirV,
+                else => return RuntimeError.InvalidSpirV,
+            },
+            .Vector3u32 => |*vec| switch (lane_index) {
+                inline 0...2 => |i| vec[i] = if (bits == 32) @bitCast(value) else return RuntimeError.InvalidSpirV,
+                else => return RuntimeError.InvalidSpirV,
+            },
+            .Vector4u32 => |*vec| switch (lane_index) {
+                inline 0...3 => |i| vec[i] = if (bits == 32) @bitCast(value) else return RuntimeError.InvalidSpirV,
+                else => return RuntimeError.InvalidSpirV,
+            },
 
             else => return RuntimeError.InvalidSpirV,
         }

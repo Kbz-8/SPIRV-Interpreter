@@ -101,7 +101,7 @@ test "Bitwise vectors" {
             inline for (types) |T| {
                 const op1: case.Vec(L, T) = .{ .val = case.random(@Vector(L, T)) };
                 var op2: case.Vec(L, T) = .{ .val = case.random(@Vector(L, T)) };
-                for (0..L) |i| op2.val[i] = @mod(op2.val[i], @bitSizeOf(T));
+                inline for (0..L) |i| op2.val[i] = @mod(op2.val[i], @bitSizeOf(T));
                 const expected = switch (op.key) {
                     .BitwiseAnd => op1.val & op2.val,
                     .BitwiseOr => op1.val | op2.val,

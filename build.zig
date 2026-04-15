@@ -30,7 +30,7 @@ pub fn build(b: *std.Build) void {
 
     const no_example = b.option(bool, "no-example", "skips example dependencies fetch") orelse false;
 
-    if (!no_example) {
+    if (!no_example and false) {
         const sdl3 = b.lazyDependency("sdl3", .{ .target = target, .optimize = optimize }) orelse return;
         const example_exe = b.addExecutable(.{
             .name = "spirv_interpreter_example",
