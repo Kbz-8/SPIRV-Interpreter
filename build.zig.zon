@@ -17,8 +17,8 @@
         //    .lazy = true,
         //},
         .pretty = .{
-            .url = "git+https://github.com/Kbz-8/pretty#d87459a829fe0ae82b408155053e1933e2a16a15",
-            .hash = "pretty-0.10.6-Tm65rw5VAQDqJ-sbE6eoU-yOAr7kzUmAUrUQd7Wzaa9Q",
+            .url = "git+https://github.com/Kbz-8/pretty.git#f91d534d033277ca1ae7fcd598a070e8b3ddc532",
+            .hash = "pretty-0.10.6-Tm65r7FTAQA5BEL8tcIcF-Wp4XRC7J7BhuRI0KUnFj2X",
         },
     },
     .minimum_zig_version = "0.16.0",
