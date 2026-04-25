@@ -40,7 +40,7 @@ zig build ffi-c --release=[fast, small, safe]
 
 You can also build a shared lib using
 ```
-zig build ffi-c --release=[fast, small, sage] -Dffi-build-static=false
+zig build ffi-c --release=[fast, small, safe] -Dffi-build-static=false
 ```
 
 You'll find the library in `./zig-out/lib/` and the header file in `./zig-out/include/` or in `./ffi/`.
