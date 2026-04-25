@@ -35,7 +35,7 @@ pub const Module = @import("Module.zig");
 pub const Runtime = @import("Runtime.zig");
 
 const opcodes = @import("opcodes.zig");
-const spv = @import("spv.zig");
+pub const spv = @import("spv.zig");
 
 pub const SpvVoid = spv.SpvVoid;
 pub const SpvByte = spv.SpvByte;

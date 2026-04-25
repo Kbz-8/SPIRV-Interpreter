@@ -3,129 +3,256 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const use_llvm = b.option(bool, "use-llvm", "Use LLVM backend") orelse (b.release_mode != .off);
 
-    const use_llvm = b.option(bool, "use-llvm", "use llvm") orelse (b.release_mode != .off);
-
-    const mod = b.addModule("spv", .{
+    const spv_mod = b.addModule("spv", .{
         .root_source_file = b.path("src/lib.zig"),
         .target = target,
         .optimize = optimize,
     });
 
     const zmath = b.dependency("zmath", .{});
-    mod.addImport("zmath", zmath.module("root"));
+    spv_mod.addImport("zmath", zmath.module("root"));
 
-    const pretty = b.dependency("pretty", .{ .target = target, .optimize = optimize });
-    mod.addImport("pretty", pretty.module("pretty"));
+    const pretty = b.dependency("pretty", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    spv_mod.addImport("pretty", pretty.module("pretty"));
 
-    const lib = b.addLibrary(.{
+    const spv_lib = b.addLibrary(.{
         .name = "spirv_interpreter",
-        .root_module = mod,
+        .root_module = spv_mod,
         .linkage = .dynamic,
         .use_llvm = use_llvm,
     });
-    const lib_install = b.addInstallArtifact(lib, .{});
 
-    // Zig example setup
+    const install_spv_lib = b.addInstallArtifact(spv_lib, .{});
 
-    const no_example = b.option(bool, "no-example", "skips example dependencies fetch") orelse false;
+    addSandbox(b, target, optimize, use_llvm, spv_mod, &install_spv_lib.step);
+    addExample(b, target, optimize, use_llvm, spv_mod, &install_spv_lib.step);
+    addZigTests(b, target, optimize, spv_mod, zmath);
+    addCffi(b, target, optimize, use_llvm, spv_mod);
+    addDocs(b, spv_mod);
+}
 
+fn addExample(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    use_llvm: bool,
+    spv_mod: *std.Build.Module,
+    install_spv_lib_step: *std.Build.Step,
+) void {
+    const no_example = b.option(bool, "no-example", "Skip example build") orelse false;
     if (!no_example and false) {
-        const sdl3 = b.lazyDependency("sdl3", .{ .target = target, .optimize = optimize }) orelse return;
-        const example_exe = b.addExecutable(.{
+        const sdl3 = b.lazyDependency("sdl3", .{
+            .target = target,
+            .optimize = optimize,
+        }) orelse return;
+
+        const exe = b.addExecutable(.{
             .name = "spirv_interpreter_example",
             .root_module = b.createModule(.{
                 .root_source_file = b.path("example/main.zig"),
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{
-                    .{ .name = "spv", .module = mod },
+                    .{ .name = "spv", .module = spv_mod },
                     .{ .name = "sdl3", .module = sdl3.module("sdl3") },
-                    //.{ .name = "pretty", .module = pretty.module("pretty") },
                 },
             }),
             .use_llvm = use_llvm,
         });
 
-        const example_install = b.addInstallArtifact(example_exe, .{});
-        example_install.step.dependOn(&lib_install.step);
+        const install_exe = b.addInstallArtifact(exe, .{});
+        install_exe.step.dependOn(install_spv_lib_step);
 
-        const run_example = b.addRunArtifact(example_exe);
-        run_example.step.dependOn(&example_install.step);
+        const run_exe = b.addRunArtifact(exe);
+        run_exe.step.dependOn(&install_exe.step);
 
-        const run_example_step = b.step("example", "Run the example");
-        run_example_step.dependOn(&run_example.step);
+        const run_step = b.step("example", "Run the example");
+        run_step.dependOn(&run_exe.step);
 
-        const compile_shader_cmd = b.addSystemCommand(&[_][]const u8{ "nzslc", "example/shader.nzsl", "--compile=spv,spv-dis", "-o", "example" });
-        const compile_shader_step = b.step("example-shader", "Compiles example's shader (needs nzslc installed)");
-        compile_shader_step.dependOn(&compile_shader_cmd.step);
+        addShaderCompileStep(
+            b,
+            "example-shader",
+            "Compile example shader using nzslc",
+            "example/shader.nzsl",
+            "example",
+        );
     }
+}
 
-    // Zig sandbox setup
-
-    const sandbox_exe = b.addExecutable(.{
+fn addSandbox(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    use_llvm: bool,
+    spv_mod: *std.Build.Module,
+    install_spv_lib_step: *std.Build.Step,
+) void {
+    const exe = b.addExecutable(.{
         .name = "spirv_interpreter_sandbox",
         .root_module = b.createModule(.{
             .root_source_file = b.path("sandbox/main.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "spv", .module = mod },
-                //.{ .name = "pretty", .module = pretty.module("pretty") },
+                .{ .name = "spv", .module = spv_mod },
             },
         }),
         .use_llvm = use_llvm,
     });
 
-    const sandbox_install = b.addInstallArtifact(sandbox_exe, .{});
-    sandbox_install.step.dependOn(&lib_install.step);
+    const install_exe = b.addInstallArtifact(exe, .{});
+    install_exe.step.dependOn(install_spv_lib_step);
 
-    const run_sandbox = b.addRunArtifact(sandbox_exe);
-    run_sandbox.step.dependOn(&sandbox_install.step);
+    const run_exe = b.addRunArtifact(exe);
+    run_exe.step.dependOn(&install_exe.step);
 
-    const run_sandbox_step = b.step("sandbox", "Run the sandbox");
-    run_sandbox_step.dependOn(&run_sandbox.step);
+    const run_step = b.step("sandbox", "Run the sandbox");
+    run_step.dependOn(&run_exe.step);
 
-    const compile_shader_cmd = b.addSystemCommand(&[_][]const u8{ "nzslc", "sandbox/shader.nzsl", "--compile=spv,spv-dis", "-o", "sandbox" });
-    const compile_shader_step = b.step("sandbox-shader", "Compiles sandbox's shader (needs nzslc installed)");
-    compile_shader_step.dependOn(&compile_shader_cmd.step);
+    addShaderCompileStep(
+        b,
+        "sandbox-shader",
+        "Compile sandbox shader using nzslc",
+        "sandbox/shader.nzsl",
+        "sandbox",
+    );
+}
 
-    // Zig unit tests setup
-
-    const no_test = b.option(bool, "no-test", "skips unit test dependencies fetch") orelse false;
-
-    if (!no_test) {
-        const nzsl = b.lazyDependency("NZSL", .{ .target = target, .optimize = optimize }) orelse return;
-        const lib_tests = b.addTest(.{
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("test/root.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "spv", .module = mod },
-                    .{ .name = "nzsl", .module = nzsl.module("nzigsl") },
-                    .{ .name = "zmath", .module = zmath.module("root") },
-                },
-            }),
-            .test_runner = .{ .path = b.path("test/test_runner.zig"), .mode = .simple },
-        });
-        const run_tests = b.addRunArtifact(lib_tests);
-        const test_step = b.step("test", "Run Zig unit tests");
-        test_step.dependOn(&run_tests.step);
-    }
-
-    // Docs generation
-
-    const autodoc_test = b.addObject(.{
-        .name = "lib",
-        .root_module = mod,
+fn addShaderCompileStep(
+    b: *std.Build,
+    step_name: []const u8,
+    description: []const u8,
+    shader_path: []const u8,
+    output_dir: []const u8,
+) void {
+    const cmd = b.addSystemCommand(&.{
+        "nzslc",
+        shader_path,
+        "--compile=spv,spv-dis",
+        "-o",
+        output_dir,
     });
+
+    const step = b.step(step_name, description);
+    step.dependOn(&cmd.step);
+}
+
+fn addZigTests(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    spv_mod: *std.Build.Module,
+    zmath: *std.Build.Dependency,
+) void {
+    const no_test = b.option(bool, "no-test", "Skip unit test dependencies fetch") orelse false;
+    if (no_test) return;
+
+    const nzsl = b.lazyDependency("NZSL", .{
+        .target = target,
+        .optimize = optimize,
+    }) orelse return;
+
+    const tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/root.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "spv", .module = spv_mod },
+                .{ .name = "nzsl", .module = nzsl.module("nzigsl") },
+                .{ .name = "zmath", .module = zmath.module("root") },
+            },
+        }),
+        .test_runner = .{
+            .path = b.path("test/test_runner.zig"),
+            .mode = .simple,
+        },
+    });
+
+    const run_tests = b.addRunArtifact(tests);
+
+    const test_step = b.step("test", "Run Zig unit tests");
+    test_step.dependOn(&run_tests.step);
+}
+
+fn addCffi(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    use_llvm: bool,
+    spv_mod: *std.Build.Module,
+) void {
+    const static_c_ffi = b.option(bool, "ffi-build-static", "Build C FFI statically") orelse true;
+
+    const c_ffi_mod = b.addModule("c_ffi_spv", .{
+        .root_source_file = b.path("ffi/ffi.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "spv", .module = spv_mod },
+        },
+    });
+
+    const install_header = b.addInstallHeaderFile(
+        b.path("ffi/SpirvInterpreter.h"),
+        "SpirvInterpreter.h",
+    );
+
+    const c_ffi_lib = b.addLibrary(.{
+        .name = "spirv_interpreter_c_ffi",
+        .root_module = c_ffi_mod,
+        .linkage = if (static_c_ffi) .static else .dynamic,
+        .use_llvm = use_llvm,
+    });
+
+    const install_lib = b.addInstallArtifact(c_ffi_lib, .{});
+
+    const ffi_step = b.step("ffi-c", "Build C FFI");
+    ffi_step.dependOn(&install_lib.step);
+    ffi_step.dependOn(&install_header.step);
+
+    const c_test = b.addExecutable(.{
+        .name = "c_test",
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+        .use_llvm = use_llvm,
+    });
+
+    c_test.root_module.addCSourceFile(.{ .file = b.path("test_c/main.c") });
+    c_test.root_module.linkLibrary(c_ffi_lib);
+    c_test.root_module.addSystemIncludePath(b.path("ffi"));
+
+    const install_c_test = b.addInstallArtifact(c_test, .{});
+    install_c_test.step.dependOn(&install_lib.step);
+
+    const run_c_test = b.addRunArtifact(c_test);
+    run_c_test.step.dependOn(&install_c_test.step);
+
+    const test_c_step = b.step("test-c", "Run C test");
+    test_c_step.dependOn(&run_c_test.step);
+}
+
+fn addDocs(b: *std.Build, spv_mod: *std.Build.Module) void {
+    const autodoc_obj = b.addObject(.{
+        .name = "lib",
+        .root_module = spv_mod,
+    });
+
     const install_docs = b.addInstallDirectory(.{
-        .source_dir = autodoc_test.getEmittedDocs(),
+        .source_dir = autodoc_obj.getEmittedDocs(),
         .install_dir = .prefix,
         .install_subdir = "docs",
     });
 
-    const docs_step = b.step("docs", "Build and install the documentation");
+    const docs_step = b.step("docs", "Build and install documentation");
     docs_step.dependOn(&install_docs.step);
 }

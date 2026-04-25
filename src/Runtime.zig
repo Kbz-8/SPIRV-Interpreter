@@ -210,19 +210,19 @@ fn pass(self: *Self, allocator: std.mem.Allocator, op_set: ?std.EnumSet(spv.SpvO
     }
 }
 
-pub fn writeDescriptorSet(self: *const Self, input: []u8, set: SpvWord, binding: SpvWord, descriptor_index: SpvWord) RuntimeError!void {
+pub fn writeDescriptorSet(self: *const Self, input: []const u8, set: SpvWord, binding: SpvWord, descriptor_index: SpvWord) RuntimeError!void {
     if (set < lib.SPIRV_MAX_SET and binding < lib.SPIRV_MAX_SET_BINDINGS) {
         const value = &self.results[self.mod.bindings[set][binding]].variant.?.Variable.value;
         switch (value.*) {
             .Array => |arr| {
                 if (descriptor_index >= arr.values.len)
                     return RuntimeError.NotFound;
-                _ = try arr.values[descriptor_index].write(input);
+                _ = try arr.values[descriptor_index].writeConst(input);
             },
             else => {
                 if (descriptor_index != 0)
                     return RuntimeError.NotFound;
-                _ = try value.write(input);
+                _ = try value.writeConst(input);
             },
         }
     } else {
