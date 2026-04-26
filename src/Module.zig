@@ -189,8 +189,14 @@ fn applyDecorations(self: *Self) ModuleError!void {
                             }
                         },
                         .Output => {
-                            if (decoration.rtype == .Location)
-                                self.output_locations[decoration.literal_1] = @intCast(id);
+                            switch (decoration.rtype) {
+                                .BuiltIn => self.builtins.put(
+                                    std.enums.fromInt(spv.SpvBuiltIn, decoration.literal_1) orelse return ModuleError.InvalidSpirV,
+                                    @intCast(id),
+                                ),
+                                .Location => self.output_locations[decoration.literal_1] = @intCast(id),
+                                else => {},
+                            }
                         },
                         .StorageBuffer, .Uniform, .UniformConstant => {
                             switch (decoration.rtype) {
