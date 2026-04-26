@@ -250,6 +250,14 @@ pub fn readOutput(self: *const Self, output: []u8, result: SpvWord) RuntimeError
     }
 }
 
+pub fn readBuiltIn(self: *const Self, output: []u8, builtin: spv.SpvBuiltIn) RuntimeError!void {
+    if (self.mod.builtins.get(builtin)) |result| {
+        _ = try self.results[result].variant.?.Variable.value.read(output);
+    } else {
+        return RuntimeError.NotFound;
+    }
+}
+
 pub fn writeInput(self: *const Self, input: []const u8, result: SpvWord) RuntimeError!void {
     if (std.mem.indexOfScalar(SpvWord, &self.mod.input_locations, result)) |_| {
         _ = try self.results[result].variant.?.Variable.value.writeConst(input);

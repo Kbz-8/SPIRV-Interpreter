@@ -91,6 +91,11 @@ export fn SpvReadOutput(rt: *spv.Runtime, output: [*]u8, output_size: u32, resul
     return .Success;
 }
 
+export fn SpvReadBuiltIn(rt: *spv.Runtime, output: [*]u8, output_size: u32, builtin: spv.spv.SpvBuiltIn) callconv(.c) ffi.Result {
+    rt.readBuiltIn(output[0..output_size], builtin) catch |err| return toCResult(err);
+    return .Success;
+}
+
 export fn SpvWriteInput(rt: *spv.Runtime, input: [*]const u8, input_size: u32, result: spv.SpvWord) callconv(.c) ffi.Result {
     rt.writeInput(input[0..input_size], result) catch |err| return toCResult(err);
     return .Success;

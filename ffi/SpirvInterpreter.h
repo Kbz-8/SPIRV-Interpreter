@@ -103,6 +103,7 @@ SPV_API SpvResult SpvGetEntryPointByName(SpvRuntime runtime, const char* name, S
 SPV_API SpvResult SpvCallEntryPoint(SpvRuntime runtime, SpvWord entry_point_index);
 
 SPV_API SpvResult SpvReadOutput(SpvRuntime runtime, SpvByte* output, SpvSize output_size, SpvWord result);
+SPV_API SpvResult SpvReadBuiltIn(SpvRuntime runtime, SpvByte* output, SpvSize output_size, SpvBuiltIn builtin);
 
 SPV_API SpvResult SpvWriteInput(SpvRuntime runtime, const SpvByte* input, SpvSize input_size, SpvWord result);
 SPV_API SpvResult SpvWriteBuiltIn(SpvRuntime runtime, const SpvByte* input, SpvSize input_size, SpvBuiltIn builtin);
