@@ -78,6 +78,12 @@ typedef struct
 	SpvSize size;
 } SpvRuntimeSpecializationEntry;
 
+typedef enum
+{
+	SPV_LOCATION_INPUT = 0,
+	SPV_LOCATION_OUTPUT = 1,
+} SpvLocationType;
+
 typedef void* SpvModule;
 typedef void* SpvRuntime;
 
@@ -92,6 +98,7 @@ SPV_API SpvResult SpvFlushDescriptorSets(SpvRuntime runtime);
 SPV_API SpvResult SpvAddSpecializationInfo(SpvRuntime runtime, SpvRuntimeSpecializationEntry entry, const SpvByte* data, SpvSize data_size);
 
 SPV_API SpvResult SpvGetResultByName(SpvRuntime runtime, const char* name, SpvWord* result);
+SPV_API SpvResult SpvGetResultLocation(SpvRuntime runtime, SpvWord location, SpvLocationType type, SpvWord* result);
 SPV_API SpvResult SpvGetEntryPointByName(SpvRuntime runtime, const char* name, SpvWord* result);
 SPV_API SpvResult SpvCallEntryPoint(SpvRuntime runtime, SpvWord entry_point_index);
 

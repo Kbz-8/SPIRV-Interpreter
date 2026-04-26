@@ -99,7 +99,7 @@ pub fn addSpecializationInfo(self: *Self, allocator: std.mem.Allocator, entry: S
     self.specialization_constants.put(allocator, entry.id, slice) catch return RuntimeError.OutOfMemory;
 }
 
-pub fn getEntryPointByName(self: *const Self, name: []const u8) error{NotFound}!SpvWord {
+pub fn getEntryPointByName(self: *const Self, name: []const u8) RuntimeError!SpvWord {
     for (self.mod.entry_points.items, 0..) |entry_point, i| {
         if (blk: {
             // Not using std.mem.eql as entry point names may have longer size than their content
@@ -112,10 +112,10 @@ pub fn getEntryPointByName(self: *const Self, name: []const u8) error{NotFound}!
             break :blk true;
         }) return @intCast(i);
     }
-    return error.NotFound;
+    return RuntimeError.NotFound;
 }
 
-pub fn getResultByName(self: *const Self, name: []const u8) error{NotFound}!SpvWord {
+pub fn getResultByName(self: *const Self, name: []const u8) RuntimeError!SpvWord {
     for (self.results, 0..) |result, i| {
         if (result.name) |result_name| {
             if (blk: {
@@ -127,7 +127,19 @@ pub fn getResultByName(self: *const Self, name: []const u8) error{NotFound}!SpvW
             }) return @intCast(i);
         }
     }
-    return error.NotFound;
+    return RuntimeError.NotFound;
+}
+
+pub fn getResultByLocation(self: *const Self, location: SpvWord, kind: enum { input, output }) RuntimeError!SpvWord {
+    switch (kind) {
+        .input => if (location < self.mod.input_locations.len) {
+            return self.mod.input_locations[location];
+        },
+        .output => if (location < self.mod.output_locations.len) {
+            return self.mod.output_locations[location];
+        },
+    }
+    return RuntimeError.NotFound;
 }
 
 pub fn dumpResultsTable(self: *Self, allocator: std.mem.Allocator, writer: *std.Io.Writer) RuntimeError!void {

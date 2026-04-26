@@ -8,6 +8,11 @@ const CSpecializationEntry = extern struct {
     size: u32,
 };
 
+const LocationType = enum(c_int) {
+    input = 0,
+    output = 1,
+};
+
 fn toCResult(err: spv.Runtime.RuntimeError) ffi.Result {
     return switch (err) {
         spv.Runtime.RuntimeError.DivisionByZero => ffi.Result.DivisionByZero,
@@ -63,6 +68,13 @@ export fn SpvGetEntryPointByName(rt: *spv.Runtime, name: [*:0]const u8, result: 
     return .Success;
 }
 
+export fn SpvGetResultByLocation(rt: *spv.Runtime, location: spv.SpvWord, kind: LocationType, result: *spv.SpvWord) callconv(.c) ffi.Result {
+    result.* = rt.getResultByLocation(location, switch (kind) {
+        .input => .input,
+        .output => .output,
+    }) catch |err| return toCResult(err);
+    return .Success;
+}
 export fn SpvGetResultByName(rt: *spv.Runtime, name: [*:0]const u8, result: *spv.SpvWord) callconv(.c) ffi.Result {
     result.* = rt.getResultByName(std.mem.span(name)) catch |err| return toCResult(err);
     return .Success;
