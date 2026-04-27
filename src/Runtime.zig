@@ -132,10 +132,10 @@ pub fn getResultByName(self: *const Self, name: []const u8) RuntimeError!SpvWord
 
 pub fn getResultByLocation(self: *const Self, location: SpvWord, kind: enum { input, output }) RuntimeError!SpvWord {
     switch (kind) {
-        .input => if (location < self.mod.input_locations.len) {
+        .input => if (location < self.mod.input_locations.len and self.mod.input_locations[location] != 0) {
             return self.mod.input_locations[location];
         },
-        .output => if (location < self.mod.output_locations.len) {
+        .output => if (location < self.mod.output_locations.len and self.mod.output_locations[location] != 0) {
             return self.mod.output_locations[location];
         },
     }
@@ -315,6 +315,19 @@ pub fn flushDescriptorSets(self: *const Self, allocator: std.mem.Allocator) Runt
     for (self.results) |*result| {
         try result.flushPtr(allocator);
     }
+}
+
+pub fn getResultMemorySize(self: *const Self, result: SpvWord) RuntimeError!usize {
+    const value = try self.results[result].getConstValue();
+    return value.getPlainMemorySize();
+}
+
+pub fn hasResultDecoration(self: *const Self, result: SpvWord, decoration: spv.SpvDecoration) bool {
+    for (self.results[result].decorations.items) |result_decoration| {
+        if (result_decoration.rtype == decoration)
+            return true;
+    }
+    return false;
 }
 
 fn reset(self: *Self) void {

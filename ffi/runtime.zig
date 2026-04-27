@@ -4,8 +4,8 @@ const spv = ffi.spv;
 
 const CSpecializationEntry = extern struct {
     id: spv.SpvWord,
-    offset: u32,
-    size: u32,
+    offset: c_ulong,
+    size: c_ulong,
 };
 
 const LocationType = enum(c_int) {
@@ -49,7 +49,7 @@ export fn SpvDeinitRuntime(rt: *spv.Runtime) callconv(.c) void {
     allocator.destroy(rt);
 }
 
-export fn SpvAddSpecializationInfo(rt: *spv.Runtime, entry: CSpecializationEntry, data: [*]const u8, data_size: u32) callconv(.c) ffi.Result {
+export fn SpvAddSpecializationInfo(rt: *spv.Runtime, entry: CSpecializationEntry, data: [*]const u8, data_size: c_ulong) callconv(.c) ffi.Result {
     const allocator = std.heap.c_allocator;
     rt.addSpecializationInfo(
         allocator,
@@ -75,9 +75,19 @@ export fn SpvGetResultByLocation(rt: *spv.Runtime, location: spv.SpvWord, kind: 
     }) catch |err| return toCResult(err);
     return .Success;
 }
+
 export fn SpvGetResultByName(rt: *spv.Runtime, name: [*:0]const u8, result: *spv.SpvWord) callconv(.c) ffi.Result {
     result.* = rt.getResultByName(std.mem.span(name)) catch |err| return toCResult(err);
     return .Success;
+}
+
+export fn SpvGetResultMemorySize(rt: *spv.Runtime, result: spv.SpvWord, size: *c_ulong) callconv(.c) ffi.Result {
+    size.* = rt.getResultMemorySize(result) catch |err| return toCResult(err);
+    return .Success;
+}
+
+export fn SpvHasResultDecoration(rt: *spv.Runtime, result: spv.SpvWord, decoration: spv.spv.SpvDecoration) callconv(.c) c_int {
+    return if (rt.hasResultDecoration(result, decoration)) 1 else 0;
 }
 
 export fn SpvCallEntryPoint(rt: *spv.Runtime, entry_point: spv.SpvWord) callconv(.c) ffi.Result {
@@ -86,27 +96,27 @@ export fn SpvCallEntryPoint(rt: *spv.Runtime, entry_point: spv.SpvWord) callconv
     return .Success;
 }
 
-export fn SpvReadOutput(rt: *spv.Runtime, output: [*]u8, output_size: u32, result: spv.SpvWord) callconv(.c) ffi.Result {
+export fn SpvReadOutput(rt: *spv.Runtime, output: [*]u8, output_size: c_ulong, result: spv.SpvWord) callconv(.c) ffi.Result {
     rt.readOutput(output[0..output_size], result) catch |err| return toCResult(err);
     return .Success;
 }
 
-export fn SpvReadBuiltIn(rt: *spv.Runtime, output: [*]u8, output_size: u32, builtin: spv.spv.SpvBuiltIn) callconv(.c) ffi.Result {
+export fn SpvReadBuiltIn(rt: *spv.Runtime, output: [*]u8, output_size: c_ulong, builtin: spv.spv.SpvBuiltIn) callconv(.c) ffi.Result {
     rt.readBuiltIn(output[0..output_size], builtin) catch |err| return toCResult(err);
     return .Success;
 }
 
-export fn SpvWriteInput(rt: *spv.Runtime, input: [*]const u8, input_size: u32, result: spv.SpvWord) callconv(.c) ffi.Result {
+export fn SpvWriteInput(rt: *spv.Runtime, input: [*]const u8, input_size: c_ulong, result: spv.SpvWord) callconv(.c) ffi.Result {
     rt.writeInput(input[0..input_size], result) catch |err| return toCResult(err);
     return .Success;
 }
 
-export fn SpvWriteBuiltIn(rt: *spv.Runtime, input: [*]const u8, input_size: u32, builtin: spv.spv.SpvBuiltIn) callconv(.c) ffi.Result {
+export fn SpvWriteBuiltIn(rt: *spv.Runtime, input: [*]const u8, input_size: c_ulong, builtin: spv.spv.SpvBuiltIn) callconv(.c) ffi.Result {
     rt.writeBuiltIn(input[0..input_size], builtin) catch |err| return toCResult(err);
     return .Success;
 }
 
-export fn SpvWriteDescriptorSet(rt: *spv.Runtime, input: [*]const u8, input_size: u32, set: spv.SpvWord, binding: spv.SpvWord, descriptor_index: spv.SpvWord) callconv(.c) ffi.Result {
+export fn SpvWriteDescriptorSet(rt: *spv.Runtime, input: [*]const u8, input_size: c_ulong, set: spv.SpvWord, binding: spv.SpvWord, descriptor_index: spv.SpvWord) callconv(.c) ffi.Result {
     rt.writeDescriptorSet(input[0..input_size], set, binding, descriptor_index) catch |err| return toCResult(err);
     return .Success;
 }
