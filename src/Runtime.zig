@@ -242,9 +242,46 @@ pub fn writeDescriptorSet(self: *const Self, input: []const u8, set: SpvWord, bi
     }
 }
 
+fn readResultValue(self: *const Self, output: []u8, result: SpvWord) RuntimeError!void {
+    const variant = self.results[result].variant orelse return RuntimeError.InvalidSpirV;
+    switch (variant) {
+        .Variable => |v| _ = try v.value.read(output),
+        .AccessChain => |a| switch (a.value) {
+            .Pointer => |ptr| switch (ptr.ptr) {
+                .common => |value_ptr| _ = try value_ptr.read(output),
+                .f32_ptr => |value_ptr| std.mem.copyForwards(u8, output[0..@sizeOf(f32)], std.mem.asBytes(value_ptr)),
+                .i32_ptr => |value_ptr| std.mem.copyForwards(u8, output[0..@sizeOf(i32)], std.mem.asBytes(value_ptr)),
+                .u32_ptr => |value_ptr| std.mem.copyForwards(u8, output[0..@sizeOf(u32)], std.mem.asBytes(value_ptr)),
+            },
+            else => _ = try a.value.read(output),
+        },
+        else => return RuntimeError.InvalidSpirV,
+    }
+}
+
+fn writeResultValue(self: *const Self, input: []const u8, result: SpvWord) RuntimeError!void {
+    if (self.results[result].variant) |*variant| {
+        switch (variant.*) {
+            .Variable => |*v| _ = try v.value.writeConst(input),
+            .AccessChain => |*a| switch (a.value) {
+                .Pointer => |ptr| switch (ptr.ptr) {
+                    .common => |value_ptr| _ = try value_ptr.writeConst(input),
+                    .f32_ptr => |value_ptr| std.mem.copyForwards(u8, std.mem.asBytes(value_ptr), input[0..@sizeOf(f32)]),
+                    .i32_ptr => |value_ptr| std.mem.copyForwards(u8, std.mem.asBytes(value_ptr), input[0..@sizeOf(i32)]),
+                    .u32_ptr => |value_ptr| std.mem.copyForwards(u8, std.mem.asBytes(value_ptr), input[0..@sizeOf(u32)]),
+                },
+                else => _ = try a.value.writeConst(input),
+            },
+            else => return RuntimeError.InvalidSpirV,
+        }
+    } else {
+        return RuntimeError.InvalidSpirV;
+    }
+}
+
 pub fn readOutput(self: *const Self, output: []u8, result: SpvWord) RuntimeError!void {
     if (std.mem.indexOfScalar(SpvWord, &self.mod.output_locations, result)) |_| {
-        _ = try self.results[result].variant.?.Variable.value.read(output);
+        try self.readResultValue(output, result);
     } else {
         return RuntimeError.NotFound;
     }
@@ -252,7 +289,7 @@ pub fn readOutput(self: *const Self, output: []u8, result: SpvWord) RuntimeError
 
 pub fn readBuiltIn(self: *const Self, output: []u8, builtin: spv.SpvBuiltIn) RuntimeError!void {
     if (self.mod.builtins.get(builtin)) |result| {
-        _ = try self.results[result].variant.?.Variable.value.read(output);
+        try self.readResultValue(output, result);
     } else {
         return RuntimeError.NotFound;
     }
@@ -260,7 +297,7 @@ pub fn readBuiltIn(self: *const Self, output: []u8, builtin: spv.SpvBuiltIn) Run
 
 pub fn writeInput(self: *const Self, input: []const u8, result: SpvWord) RuntimeError!void {
     if (std.mem.indexOfScalar(SpvWord, &self.mod.input_locations, result)) |_| {
-        _ = try self.results[result].variant.?.Variable.value.writeConst(input);
+        try self.writeResultValue(input, result);
     } else {
         return RuntimeError.NotFound;
     }
@@ -268,7 +305,7 @@ pub fn writeInput(self: *const Self, input: []const u8, result: SpvWord) Runtime
 
 pub fn writeBuiltIn(self: *const Self, input: []const u8, builtin: spv.SpvBuiltIn) RuntimeError!void {
     if (self.mod.builtins.get(builtin)) |result| {
-        _ = try self.results[result].variant.?.Variable.value.writeConst(input);
+        try self.writeResultValue(input, result);
     } else {
         return RuntimeError.NotFound;
     }

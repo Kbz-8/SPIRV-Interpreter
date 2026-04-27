@@ -88,6 +88,7 @@ pub const SetupDispatcher = block: {
         .AtomicUMax = autoSetupConstant,
         .AtomicUMin = autoSetupConstant,
         .AtomicXor = autoSetupConstant,
+        .AccessChain = setupAccessChain,
         .BitCount = autoSetupConstant,
         .BitFieldInsert = autoSetupConstant,
         .BitFieldSExtract = autoSetupConstant,
@@ -145,6 +146,7 @@ pub const SetupDispatcher = block: {
         .IAddCarry = autoSetupConstant,
         .IEqual = autoSetupConstant,
         .ImageRead = autoSetupConstant,
+        .InBoundsAccessChain = setupAccessChain,
         .IMul = autoSetupConstant,
         .INotEqual = autoSetupConstant,
         .ISub = autoSetupConstant,
@@ -1119,6 +1121,39 @@ fn autoSetupConstant(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) Run
     _ = try setupConstant(allocator, rt);
 }
 
+fn setupAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
+    const var_type = try rt.it.next();
+    const id = try rt.it.next();
+    const base_id = try rt.it.next();
+
+    const index_count: usize = @intCast(word_count - 3);
+    const indexes = allocator.alloc(SpvWord, index_count) catch return RuntimeError.OutOfMemory;
+    errdefer allocator.free(indexes);
+
+    for (indexes) |*index| {
+        index.* = try rt.it.next();
+    }
+
+    if (rt.results[id].variant) |*variant| {
+        switch (variant.*) {
+            .AccessChain => |*a| {
+                allocator.free(a.indexes);
+                a.value.deinit(allocator);
+            },
+            else => {},
+        }
+    }
+
+    rt.results[id].variant = .{
+        .AccessChain = .{
+            .target = var_type,
+            .base = base_id,
+            .indexes = indexes,
+            .value = try Value.init(allocator, rt.results, var_type, false),
+        },
+    };
+}
+
 fn copyValue(dst: *Value, src: *const Value) RuntimeError!void {
     const helpers = struct {
         inline fn copySlice(dst_slice: []Value, src_slice: []const Value) RuntimeError!void {
@@ -1269,25 +1304,39 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
-    const index_count = word_count - 3;
+    const index_count: usize = @intCast(word_count - 3);
 
-    if (rt.results[id].variant) |*variant| {
-        switch (variant.*) {
-            .AccessChain => |*a| try a.value.flushPtr(allocator),
-            else => {},
+    const indexes, const free_responsability = blk: {
+        if (rt.results[id].variant) |*variant| {
+            switch (variant.*) {
+                .AccessChain => |*a| {
+                    if (a.indexes.len != index_count)
+                        return RuntimeError.InvalidSpirV;
+                    try a.value.flushPtr(allocator);
+                    a.value.deinit(allocator);
+                    break :blk .{ a.indexes, false };
+                },
+                else => {},
+            }
         }
-    }
+        break :blk .{ allocator.alloc(SpvWord, index_count) catch return RuntimeError.OutOfMemory, true };
+    };
+    errdefer if (free_responsability) allocator.free(indexes);
 
     rt.results[id].variant = .{
         .AccessChain = .{
             .target = var_type,
+            .base = base_id,
+            .indexes = indexes,
             .value = blk: {
                 var is_owner_of_uniform_slice = false;
                 var uniform_slice_window: ?[]u8 = null;
 
                 for (0..index_count) |index| {
                     const is_last = (index == index_count - 1);
-                    const member = &rt.results[try rt.it.next()];
+                    const index_id = try rt.it.next();
+                    indexes[index] = index_id;
+                    const member = &rt.results[index_id];
                     const member_value = switch ((try member.getVariant()).*) {
                         .Constant => |c| &c.value,
                         .Variable => |v| &v.value,
@@ -1488,7 +1537,7 @@ fn opCompositeExtract(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Ru
     const res_type = try rt.it.next();
     const id = try rt.it.next();
     const composite_id = try rt.it.next();
-    const index_count = word_count - 3;
+    const index_count: usize = @intCast(word_count - 3);
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();

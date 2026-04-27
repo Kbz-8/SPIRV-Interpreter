@@ -166,6 +166,106 @@ fn pass(self: *Self, allocator: std.mem.Allocator) ModuleError!void {
     }
 }
 
+fn resolveConstantWord(self: *const Self, id: SpvWord) ?SpvWord {
+    if (id >= self.results.len) return null;
+
+    const variant = self.results[id].variant orelse return null;
+    return switch (variant) {
+        .Constant => |c| switch (c.value) {
+            .Int => |i| i.value.uint32,
+            else => null,
+        },
+        else => null,
+    };
+}
+
+fn findAccessChainToMember(self: *const Self, base_id: SpvWord, member_index: SpvWord) ?SpvWord {
+    for (self.results, 0..) |result, id| {
+        const variant = result.variant orelse continue;
+
+        switch (variant) {
+            .AccessChain => |a| {
+                if (a.base != base_id or a.indexes.len == 0) continue;
+
+                const first_index = self.resolveConstantWord(a.indexes[0]) orelse continue;
+                if (first_index == member_index) return @intCast(id);
+            },
+            else => {},
+        }
+    }
+
+    return null;
+}
+
+fn applyInterfaceDecoration(
+    self: *Self,
+    storage_class: spv.SpvStorageClass,
+    decoration: Result.Decoration,
+    id: SpvWord,
+) ModuleError!void {
+    switch (storage_class) {
+        .Input => switch (decoration.rtype) {
+            .BuiltIn => self.builtins.put(
+                std.enums.fromInt(spv.SpvBuiltIn, decoration.literal_1) orelse return ModuleError.InvalidSpirV,
+                id,
+            ),
+            .Location => self.input_locations[decoration.literal_1] = id,
+            else => {},
+        },
+        .Output => switch (decoration.rtype) {
+            .BuiltIn => self.builtins.put(
+                std.enums.fromInt(spv.SpvBuiltIn, decoration.literal_1) orelse return ModuleError.InvalidSpirV,
+                id,
+            ),
+            .Location => self.output_locations[decoration.literal_1] = id,
+            else => {},
+        },
+        else => {},
+    }
+}
+
+fn applyStructMemberInterfaceDecorations(
+    self: *Self,
+    storage_class: spv.SpvStorageClass,
+    type_word: SpvWord,
+    id: SpvWord,
+) ModuleError!void {
+    switch (storage_class) {
+        .Input, .Output => {},
+        else => return,
+    }
+
+    const type_result = &self.results[type_word];
+    const target_type_word = if (type_result.variant) |variant| switch (variant) {
+        .Type => |t| switch (t) {
+            .Pointer => |ptr| ptr.target,
+            else => type_word,
+        },
+        else => type_word,
+    } else type_word;
+
+    const target_result = &self.results[target_type_word];
+    if (target_result.variant) |variant| {
+        switch (variant) {
+            .Type => |t| switch (t) {
+                .Structure => {
+                    for (target_result.decorations.items) |decoration| {
+                        switch (decoration.rtype) {
+                            .BuiltIn, .Location => {
+                                const member_id = self.findAccessChainToMember(id, decoration.index) orelse continue;
+                                try self.applyInterfaceDecoration(storage_class, decoration, member_id);
+                            },
+                            else => {},
+                        }
+                    }
+                },
+                else => {},
+            },
+            else => {},
+        }
+    }
+}
+
 fn applyDecorations(self: *Self) ModuleError!void {
     for (self.results, 0..) |result, id| {
         if (result.variant == null)
@@ -177,27 +277,9 @@ fn applyDecorations(self: *Self) ModuleError!void {
         for (result.decorations.items) |decoration| {
             switch (result.variant.?) {
                 .Variable => |v| {
+                    try self.applyInterfaceDecoration(v.storage_class, decoration, @intCast(id));
+
                     switch (v.storage_class) {
-                        .Input => {
-                            switch (decoration.rtype) {
-                                .BuiltIn => self.builtins.put(
-                                    std.enums.fromInt(spv.SpvBuiltIn, decoration.literal_1) orelse return ModuleError.InvalidSpirV,
-                                    @intCast(id),
-                                ),
-                                .Location => self.input_locations[decoration.literal_1] = @intCast(id),
-                                else => {},
-                            }
-                        },
-                        .Output => {
-                            switch (decoration.rtype) {
-                                .BuiltIn => self.builtins.put(
-                                    std.enums.fromInt(spv.SpvBuiltIn, decoration.literal_1) orelse return ModuleError.InvalidSpirV,
-                                    @intCast(id),
-                                ),
-                                .Location => self.output_locations[decoration.literal_1] = @intCast(id),
-                                else => {},
-                            }
-                        },
                         .StorageBuffer, .Uniform, .UniformConstant => {
                             switch (decoration.rtype) {
                                 .Binding => binding = decoration.literal_1,
@@ -221,6 +303,12 @@ fn applyDecorations(self: *Self) ModuleError!void {
                 else => {},
             }
         }
+
+        switch (result.variant.?) {
+            .Variable => |v| try self.applyStructMemberInterfaceDecorations(v.storage_class, v.type_word, @intCast(id)),
+            else => {},
+        }
+
         if (set != null and binding != null) {
             self.bindings[set.?][binding.?] = @intCast(id);
         }

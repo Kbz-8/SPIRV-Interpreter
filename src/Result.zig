@@ -201,6 +201,8 @@ pub const VariantData = union(Variant) {
     },
     AccessChain: struct {
         target: SpvWord,
+        base: SpvWord,
+        indexes: []SpvWord,
         value: Value,
     },
     FunctionParameter: struct {
@@ -247,7 +249,10 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
             },
             .Constant => |*c| c.value.deinit(allocator),
             .Variable => |*v| v.value.deinit(allocator),
-            .AccessChain => |*a| a.value.deinit(allocator),
+            .AccessChain => |*a| {
+                allocator.free(a.indexes);
+                a.value.deinit(allocator);
+            },
             .Function => |f| allocator.free(f.params),
             else => {},
         }
@@ -361,6 +366,14 @@ pub fn dupe(self: *const Self, allocator: std.mem.Allocator) RuntimeError!Self {
                             .return_type = f.return_type,
                             .function_type = f.function_type,
                             .params = allocator.dupe(SpvWord, f.params) catch return RuntimeError.OutOfMemory,
+                        },
+                    },
+                    .AccessChain => |a| break :blk .{
+                        .AccessChain = .{
+                            .target = a.target,
+                            .base = a.base,
+                            .indexes = allocator.dupe(SpvWord, a.indexes) catch return RuntimeError.OutOfMemory,
+                            .value = try a.value.dupe(allocator),
                         },
                     },
                     else => break :blk variant,
