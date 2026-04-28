@@ -45,7 +45,7 @@ pub const case = struct {
             var module = try spv.Module.init(allocator, config.source, opt);
             defer module.deinit(allocator);
 
-            var rt = try spv.Runtime.init(allocator, &module);
+            var rt = try spv.Runtime.init(allocator, &module, undefined);
             defer rt.deinit(allocator);
 
             for (config.inputs, 0..) |input, n| {

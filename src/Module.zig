@@ -142,7 +142,7 @@ fn checkEndiannessFromSpvMagic(magic: SpvWord) bool {
 }
 
 fn pass(self: *Self, allocator: std.mem.Allocator) ModuleError!void {
-    var rt = Runtime.init(allocator, self) catch return ModuleError.OutOfMemory;
+    var rt = Runtime.init(allocator, self, undefined) catch return ModuleError.OutOfMemory;
     defer {
         for (self.results, rt.results) |*result, new_result| {
             result.deinit(allocator);

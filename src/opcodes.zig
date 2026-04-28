@@ -324,6 +324,8 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorTimesMatrix)]      = MathEngine(.Float, .VectorTimesMatrix, false).op; // TODO
     runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorTimesScalar)]      = MathEngine(.Float, .VectorTimesScalar, false).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.SMulExtended)]           = opSMulExtended;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageRead)]              = opImageRead;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageWrite)]             = opImageWrite;
     // zig fmt: on
 
     // Extensions init
@@ -2142,6 +2144,270 @@ fn opFunctionParameter(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeEr
     };
     (try (rt.current_function orelse return RuntimeError.InvalidSpirV).getVariant()).Function.params[rt.current_parameter_index] = id;
     rt.current_parameter_index += 1;
+}
+
+fn opImageRead(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    _ = try rt.it.next(); // result Type
+    const result_id = try rt.it.next();
+    const image = &rt.results[try rt.it.next()];
+    const coordinate = try rt.results[try rt.it.next()].getValue();
+    const dst = try rt.results[result_id].getValue();
+
+    const driver_image = switch ((try image.getValue()).*) {
+        .Image => |img| img.driver_image,
+        else => return RuntimeError.InvalidSpirV,
+    };
+
+    const helpers = struct {
+        fn readCoordLane(coord: *const Value, lane_index: usize) RuntimeError!i32 {
+            return switch (coord.*) {
+                .Int => |i| {
+                    if (lane_index != 0) return RuntimeError.OutOfBounds;
+                    return if (i.is_signed) i.value.sint32 else @intCast(i.value.uint32);
+                },
+                .Vector => |lanes| {
+                    if (lane_index >= lanes.len) return RuntimeError.OutOfBounds;
+                    return readCoordLane(&lanes[lane_index], 0);
+                },
+                .Vector4i32 => |v| switch (lane_index) {
+                    inline 0...3 => |idx| v[idx],
+                    else => return RuntimeError.OutOfBounds,
+                },
+                .Vector3i32 => |v| switch (lane_index) {
+                    inline 0...2 => |idx| v[idx],
+                    else => return RuntimeError.OutOfBounds,
+                },
+                .Vector2i32 => |v| switch (lane_index) {
+                    inline 0...1 => |idx| v[idx],
+                    else => return RuntimeError.OutOfBounds,
+                },
+                .Vector4u32 => |v| switch (lane_index) {
+                    inline 0...3 => |idx| @intCast(v[idx]),
+                    else => return RuntimeError.OutOfBounds,
+                },
+                .Vector3u32 => |v| switch (lane_index) {
+                    inline 0...2 => |idx| @intCast(v[idx]),
+                    else => return RuntimeError.OutOfBounds,
+                },
+                .Vector2u32 => |v| switch (lane_index) {
+                    inline 0...1 => |idx| @intCast(v[idx]),
+                    else => return RuntimeError.OutOfBounds,
+                },
+                else => return RuntimeError.InvalidValueType,
+            };
+        }
+
+        fn writeFloatTexel(dst_value: *Value, texel: Runtime.Vec4(f32)) RuntimeError!void {
+            switch (dst_value.*) {
+                .Vector4f32 => |*v| v.* = .{ texel.x, texel.y, texel.z, texel.w },
+                .Vector3f32 => |*v| v.* = .{ texel.x, texel.y, texel.z },
+                .Vector2f32 => |*v| v.* = .{ texel.x, texel.y },
+                .Vector => |lanes| {
+                    if (lanes.len > 4) return RuntimeError.InvalidSpirV;
+                    const values = [_]f32{ texel.x, texel.y, texel.z, texel.w };
+                    for (lanes, 0..) |*lane, i| {
+                        switch (lane.*) {
+                            .Float => |*f| f.value.float32 = values[i],
+                            else => return RuntimeError.InvalidValueType,
+                        }
+                    }
+                },
+                else => return RuntimeError.InvalidValueType,
+            }
+        }
+
+        fn writeIntTexel(dst_value: *Value, texel: Runtime.Vec4(u32)) RuntimeError!void {
+            switch (dst_value.*) {
+                .Vector4i32 => |*v| v.* = .{ @bitCast(texel.x), @bitCast(texel.y), @bitCast(texel.z), @bitCast(texel.w) },
+                .Vector3i32 => |*v| v.* = .{ @bitCast(texel.x), @bitCast(texel.y), @bitCast(texel.z) },
+                .Vector2i32 => |*v| v.* = .{ @bitCast(texel.x), @bitCast(texel.y) },
+                .Vector4u32 => |*v| v.* = .{ texel.x, texel.y, texel.z, texel.w },
+                .Vector3u32 => |*v| v.* = .{ texel.x, texel.y, texel.z },
+                .Vector2u32 => |*v| v.* = .{ texel.x, texel.y },
+                .Vector => |lanes| {
+                    if (lanes.len > 4) return RuntimeError.InvalidSpirV;
+                    const values = [_]u32{ texel.x, texel.y, texel.z, texel.w };
+                    for (lanes, 0..) |*lane, i| {
+                        switch (lane.*) {
+                            .Int => |*int| int.value.uint32 = values[i],
+                            else => return RuntimeError.InvalidValueType,
+                        }
+                    }
+                },
+                else => return RuntimeError.InvalidValueType,
+            }
+        }
+    };
+
+    const x = try helpers.readCoordLane(coordinate, 0);
+    const y = helpers.readCoordLane(coordinate, 1) catch 0;
+    const z = helpers.readCoordLane(coordinate, 2) catch 0;
+
+    switch (dst.*) {
+        .Vector4f32, .Vector3f32, .Vector2f32 => try helpers.writeFloatTexel(dst, try rt.image_api.readImageFloat4(driver_image, x, y, z)),
+        .Vector4i32, .Vector3i32, .Vector2i32, .Vector4u32, .Vector3u32, .Vector2u32 => try helpers.writeIntTexel(dst, try rt.image_api.readImageInt4(driver_image, x, y, z)),
+        .Vector => |lanes| {
+            if (lanes.len == 0) return RuntimeError.InvalidSpirV;
+            switch (lanes[0]) {
+                .Float => try helpers.writeFloatTexel(dst, try rt.image_api.readImageFloat4(driver_image, x, y, z)),
+                .Int => try helpers.writeIntTexel(dst, try rt.image_api.readImageInt4(driver_image, x, y, z)),
+                else => return RuntimeError.InvalidValueType,
+            }
+        },
+        else => return RuntimeError.InvalidValueType,
+    }
+}
+
+
+fn opImageWrite(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const image = &rt.results[try rt.it.next()];
+    const coordinate = try rt.results[try rt.it.next()].getValue();
+    const texel = try rt.results[try rt.it.next()].getValue();
+
+    const driver_image = switch ((try image.getValue()).*) {
+        .Image => |img| img.driver_image,
+        else => return RuntimeError.InvalidSpirV,
+    };
+
+    const helpers = struct {
+        fn readCoordLane(coord: *const Value, lane_index: usize) RuntimeError!i32 {
+            return switch (coord.*) {
+                .Int => |i| {
+                    if (lane_index != 0) return RuntimeError.OutOfBounds;
+                    return if (i.is_signed) i.value.sint32 else @intCast(i.value.uint32);
+                },
+                .Vector => |lanes| {
+                    if (lane_index >= lanes.len) return RuntimeError.OutOfBounds;
+                    return readCoordLane(&lanes[lane_index], 0);
+                },
+                .Vector4i32 => |v| switch (lane_index) {
+                    inline 0...3 => |idx| v[idx],
+                    else => return RuntimeError.OutOfBounds,
+                },
+                .Vector3i32 => |v| switch (lane_index) {
+                    inline 0...2 => |idx| v[idx],
+                    else => return RuntimeError.OutOfBounds,
+                },
+                .Vector2i32 => |v| switch (lane_index) {
+                    inline 0...1 => |idx| v[idx],
+                    else => return RuntimeError.OutOfBounds,
+                },
+                .Vector4u32 => |v| switch (lane_index) {
+                    inline 0...3 => |idx| @intCast(v[idx]),
+                    else => return RuntimeError.OutOfBounds,
+                },
+                .Vector3u32 => |v| switch (lane_index) {
+                    inline 0...2 => |idx| @intCast(v[idx]),
+                    else => return RuntimeError.OutOfBounds,
+                },
+                .Vector2u32 => |v| switch (lane_index) {
+                    inline 0...1 => |idx| @intCast(v[idx]),
+                    else => return RuntimeError.OutOfBounds,
+                },
+                else => return RuntimeError.InvalidValueType,
+            };
+        }
+
+        fn readFloatLane(texel_value: *const Value, lane_index: usize) RuntimeError!f32 {
+            return switch (texel_value.*) {
+                .Float => |f| {
+                    if (lane_index != 0) return RuntimeError.OutOfBounds;
+                    return f.value.float32;
+                },
+                .Vector => |lanes| {
+                    if (lane_index >= lanes.len) return RuntimeError.OutOfBounds;
+                    return readFloatLane(&lanes[lane_index], 0);
+                },
+                .Vector4f32 => |v| switch (lane_index) {
+                    inline 0...3 => |idx| v[idx],
+                    else => return RuntimeError.OutOfBounds,
+                },
+                .Vector3f32 => |v| switch (lane_index) {
+                    inline 0...2 => |idx| v[idx],
+                    else => return RuntimeError.OutOfBounds,
+                },
+                .Vector2f32 => |v| switch (lane_index) {
+                    inline 0...1 => |idx| v[idx],
+                    else => return RuntimeError.OutOfBounds,
+                },
+                else => return RuntimeError.InvalidValueType,
+            };
+        }
+
+        fn readIntLane(texel_value: *const Value, lane_index: usize) RuntimeError!u32 {
+            return switch (texel_value.*) {
+                .Int => |i| {
+                    if (lane_index != 0) return RuntimeError.OutOfBounds;
+                    return if (i.is_signed) @bitCast(i.value.sint32) else i.value.uint32;
+                },
+                .Vector => |lanes| {
+                    if (lane_index >= lanes.len) return RuntimeError.OutOfBounds;
+                    return readIntLane(&lanes[lane_index], 0);
+                },
+                .Vector4i32 => |v| switch (lane_index) {
+                    inline 0...3 => |idx| @bitCast(v[idx]),
+                    else => return RuntimeError.OutOfBounds,
+                },
+                .Vector3i32 => |v| switch (lane_index) {
+                    inline 0...2 => |idx| @bitCast(v[idx]),
+                    else => return RuntimeError.OutOfBounds,
+                },
+                .Vector2i32 => |v| switch (lane_index) {
+                    inline 0...1 => |idx| @bitCast(v[idx]),
+                    else => return RuntimeError.OutOfBounds,
+                },
+                .Vector4u32 => |v| switch (lane_index) {
+                    inline 0...3 => |idx| v[idx],
+                    else => return RuntimeError.OutOfBounds,
+                },
+                .Vector3u32 => |v| switch (lane_index) {
+                    inline 0...2 => |idx| v[idx],
+                    else => return RuntimeError.OutOfBounds,
+                },
+                .Vector2u32 => |v| switch (lane_index) {
+                    inline 0...1 => |idx| v[idx],
+                    else => return RuntimeError.OutOfBounds,
+                },
+                else => return RuntimeError.InvalidValueType,
+            };
+        }
+
+        fn readFloatTexel(texel_value: *const Value) RuntimeError!Runtime.Vec4(f32) {
+            return .{
+                .x = try readFloatLane(texel_value, 0),
+                .y = readFloatLane(texel_value, 1) catch 0.0,
+                .z = readFloatLane(texel_value, 2) catch 0.0,
+                .w = readFloatLane(texel_value, 3) catch 0.0,
+            };
+        }
+
+        fn readIntTexel(texel_value: *const Value) RuntimeError!Runtime.Vec4(u32) {
+            return .{
+                .x = try readIntLane(texel_value, 0),
+                .y = readIntLane(texel_value, 1) catch 0,
+                .z = readIntLane(texel_value, 2) catch 0,
+                .w = readIntLane(texel_value, 3) catch 0,
+            };
+        }
+    };
+
+    const x = try helpers.readCoordLane(coordinate, 0);
+    const y = helpers.readCoordLane(coordinate, 1) catch 0;
+    const z = helpers.readCoordLane(coordinate, 2) catch 0;
+
+    switch (texel.*) {
+        .Float, .Vector4f32, .Vector3f32, .Vector2f32 => try rt.image_api.writeImageFloat4(driver_image, x, y, z, try helpers.readFloatTexel(texel)),
+        .Int, .Vector4i32, .Vector3i32, .Vector2i32, .Vector4u32, .Vector3u32, .Vector2u32 => try rt.image_api.writeImageInt4(driver_image, x, y, z, try helpers.readIntTexel(texel)),
+        .Vector => |lanes| {
+            if (lanes.len == 0) return RuntimeError.InvalidSpirV;
+            switch (lanes[0]) {
+                .Float => try rt.image_api.writeImageFloat4(driver_image, x, y, z, try helpers.readFloatTexel(texel)),
+                .Int => try rt.image_api.writeImageInt4(driver_image, x, y, z, try helpers.readIntTexel(texel)),
+                else => return RuntimeError.InvalidValueType,
+            }
+        },
+        else => return RuntimeError.InvalidValueType,
+    }
 }
 
 fn opLabel(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {

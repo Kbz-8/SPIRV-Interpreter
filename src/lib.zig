@@ -30,7 +30,6 @@
 
 const std = @import("std");
 
-pub const Image = @import("Image.zig");
 pub const Module = @import("Module.zig");
 pub const Runtime = @import("Runtime.zig");
 

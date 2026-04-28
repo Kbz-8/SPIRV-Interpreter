@@ -11,7 +11,6 @@ const SpvByte = spv.SpvByte;
 const SpvWord = spv.SpvWord;
 const SpvBool = spv.SpvBool;
 
-const Image = @import("Image.zig");
 const Module = @import("Module.zig");
 const Result = @import("Result.zig");
 const WordIterator = @import("WordIterator.zig");
@@ -46,6 +45,22 @@ pub const Function = struct {
     ret: *Result,
 };
 
+pub fn Vec4(comptime T: type) type {
+    return struct {
+        x: T,
+        y: T,
+        z: T,
+        w: T,
+    };
+}
+
+pub const ImageAPI = struct {
+    readImageFloat4: *const fn (driver_image: *anyopaque, x: i32, y: i32, z: i32) RuntimeError!Vec4(f32),
+    readImageInt4: *const fn (driver_image: *anyopaque, x: i32, y: i32, z: i32) RuntimeError!Vec4(u32),
+    writeImageFloat4: *const fn (driver_image: *anyopaque, x: i32, y: i32, z: i32, pixel: Vec4(f32)) RuntimeError!void,
+    writeImageInt4: *const fn (driver_image: *anyopaque, x: i32, y: i32, z: i32, pixel: Vec4(u32)) RuntimeError!void,
+};
+
 mod: *Module,
 it: WordIterator,
 
@@ -61,7 +76,9 @@ previous_label: ?SpvWord,
 
 specialization_constants: std.AutoHashMapUnmanaged(u32, []const u8),
 
-pub fn init(allocator: std.mem.Allocator, module: *Module) RuntimeError!Self {
+image_api: ImageAPI,
+
+pub fn init(allocator: std.mem.Allocator, module: *Module, image_api: ImageAPI) RuntimeError!Self {
     return .{
         .mod = module,
         .it = module.it,
@@ -78,6 +95,7 @@ pub fn init(allocator: std.mem.Allocator, module: *Module) RuntimeError!Self {
         .current_label = null,
         .previous_label = null,
         .specialization_constants = .empty,
+        .image_api = image_api,
     };
 }
 

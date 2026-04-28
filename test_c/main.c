@@ -54,7 +54,7 @@ int main(void)
 	}
 
 	SpvRuntime runtime;
-	if(SpvInitRuntime(&runtime, module) != SPV_RESULT_SUCCESS)
+	if(SpvInitRuntime(&runtime, module, (SpvImageAPI){0}) != SPV_RESULT_SUCCESS)
 	{
 		fprintf(stderr, "Runtime init failed\n");
 		return -1;

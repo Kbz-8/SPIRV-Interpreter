@@ -109,17 +109,7 @@ pub const Value = union(Type) {
     Function: noreturn,
     Image: struct {
         type_word: SpvWord,
-        data: []u8,
-
-        pub inline fn getInfos(self: *const @This(), results: []const Result) RuntimeError!@FieldType(Result.TypeData, "Image") {
-            return switch (try results[self.type_word].getConstVariant()) {
-                .Type => |t| switch (t) {
-                    .Image => |i| i,
-                    else => RuntimeError.InvalidSpirV,
-                },
-                else => RuntimeError.InvalidSpirV,
-            };
-        }
+        driver_image: *anyopaque,
     },
     Sampler: struct {},
     SampledImage: struct {},
@@ -236,7 +226,7 @@ pub const Value = union(Type) {
                 .Image => .{
                     .Image = .{
                         .type_word = resolved,
-                        .data = &.{},
+                        .driver_image = undefined,
                     },
                 },
                 .Sampler => RuntimeError.ToDo,
@@ -545,7 +535,7 @@ pub const Value = union(Type) {
                 return offset;
             },
             .RuntimeArray => |*arr| arr.data = input[0..],
-            .Image => |*img| img.data = input[0..],
+            .Image => |*img| img.driver_image = @ptrFromInt(std.mem.bytesToValue(usize, input[0..])),
             else => return RuntimeError.InvalidValueType,
         }
         return 0;

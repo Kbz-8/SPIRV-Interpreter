@@ -85,13 +85,42 @@ typedef enum
 	SPV_LOCATION_OUTPUT = 1,
 } SpvLocationType;
 
+typedef struct
+{
+	float x;
+	float y;
+	float z;
+	float w;
+} SpvVec4f;
+
+typedef struct
+{
+	unsigned int x;
+	unsigned int y;
+	unsigned int z;
+	unsigned int w;
+} SpvVec4u;
+
+typedef SpvResult (*SpvReadImageFloat4_PFN)(void* driver_image, int x, int y, int z, SpvVec4f* dst);
+typedef SpvResult (*SpvReadImageInt4_PFN)(void* driver_image, int x, int y, int z, SpvVec4u* dst);
+typedef SpvResult (*SpvWriteImageFloat4_PFN)(void* driver_image, int x, int y, int z, SpvVec4f src);
+typedef SpvResult (*SpvWriteImageInt4_PFN)(void* driver_image, int x, int y, int z, SpvVec4u src);
+
+typedef struct
+{
+	SpvReadImageFloat4_PFN SpvReadImageFloat4;
+	SpvReadImageInt4_PFN  SpvReadImageInt4;
+	SpvWriteImageFloat4_PFN SpvWriteImageFloat4;
+	SpvWriteImageInt4_PFN SpvWriteImageInt4;
+} SpvImageAPI;
+
 typedef void* SpvModule;
 typedef void* SpvRuntime;
 
 SPV_API SpvResult SpvInitModule(SpvModule* module, const SpvWord* source, SpvSize source_len, SpvModuleOptions options);
 SPV_API void SpvDeinitModule(SpvModule module);
 
-SPV_API SpvResult SpvInitRuntime(SpvRuntime* runtime, SpvModule module);
+SPV_API SpvResult SpvInitRuntime(SpvRuntime* runtime, SpvModule module, SpvImageAPI image_api);
 SPV_API void SpvDeinitRuntime(SpvRuntime runtime);
 
 SPV_API SpvResult SpvFlushDescriptorSets(SpvRuntime runtime);
