@@ -1304,9 +1304,6 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
     const base = &rt.results[base_id];
     var value_ptr = try base.getValue();
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-
     const index_count: usize = @intCast(word_count - 3);
 
     const indexes, const free_responsability = blk: {
@@ -1332,11 +1329,38 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
             .base = base_id,
             .indexes = indexes,
             .value = blk: {
-                var is_owner_of_uniform_slice = false;
+                const helpers = struct {
+                    fn advanceWindow(window: ?[]u8, offset: usize) RuntimeError!?[]u8 {
+                        if (window) |w| {
+                            if (offset > w.len) return RuntimeError.OutOfBounds;
+                            return w[offset..];
+                        }
+                        return null;
+                    }
+
+                    fn advanceWindowSized(window: ?[]u8, offset: usize, size: usize) RuntimeError!?[]u8 {
+                        if (window) |w| {
+                            if (offset > w.len or size > w.len - offset) return RuntimeError.OutOfBounds;
+                            return w[offset .. offset + size];
+                        }
+                        return null;
+                    }
+                };
+
                 var uniform_slice_window: ?[]u8 = null;
+                var uniform_backing_value: ?*Value = null;
+
+                if (std.meta.activeTag(value_ptr.*) == .Pointer) {
+                    const ptr = value_ptr.Pointer;
+                    uniform_slice_window = ptr.uniform_slice_window;
+                    uniform_backing_value = ptr.uniform_backing_value;
+                    switch (ptr.ptr) {
+                        .common => |common| value_ptr = common,
+                        else => return RuntimeError.InvalidSpirV,
+                    }
+                }
 
                 for (0..index_count) |index| {
-                    const is_last = (index == index_count - 1);
                     const index_id = try rt.it.next();
                     indexes[index] = index_id;
                     const member = &rt.results[index_id];
@@ -1349,63 +1373,135 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                     switch (member_value.*) {
                         .Int => |i| {
                             if (std.meta.activeTag(value_ptr.*) == .Pointer) {
-                                value_ptr = value_ptr.Pointer.ptr.common; // Don't know if I should check for specialized pointers
+                                const ptr = value_ptr.Pointer;
+                                uniform_slice_window = ptr.uniform_slice_window;
+                                uniform_backing_value = ptr.uniform_backing_value;
+                                switch (ptr.ptr) {
+                                    .common => |common| value_ptr = common,
+                                    else => return RuntimeError.InvalidSpirV,
+                                }
                             }
+
+                            const component_index: usize = @intCast(i.value.uint32);
 
                             switch (value_ptr.*) {
                                 .Vector, .Matrix => |v| {
-                                    if (i.value.uint32 >= v.len) return RuntimeError.OutOfBounds;
-                                    value_ptr = &v[i.value.uint32];
+                                    if (component_index >= v.len) return RuntimeError.OutOfBounds;
+                                    var offset: usize = 0;
+                                    for (v[0..component_index]) |*element| {
+                                        offset += try element.getPlainMemorySize();
+                                    }
+                                    uniform_slice_window = try helpers.advanceWindow(uniform_slice_window, offset);
+                                    value_ptr = &v[component_index];
                                 },
                                 .Array => |a| {
-                                    if (i.value.uint32 >= a.values.len) return RuntimeError.OutOfBounds;
-                                    value_ptr = &a.values[i.value.uint32];
+                                    if (component_index >= a.values.len) return RuntimeError.OutOfBounds;
+                                    uniform_slice_window = try helpers.advanceWindow(uniform_slice_window, component_index * a.stride);
+                                    value_ptr = &a.values[component_index];
                                 },
                                 .Structure => |s| {
-                                    if (i.value.uint32 >= s.values.len) return RuntimeError.OutOfBounds;
-                                    value_ptr = &s.values[i.value.uint32];
+                                    if (component_index >= s.values.len) return RuntimeError.OutOfBounds;
+                                    var end_offset: usize = 0;
+                                    for (s.values[0..component_index], 0..) |*field, field_index| {
+                                        const field_offset: usize = @intCast(s.offsets[field_index] orelse end_offset);
+                                        end_offset = @max(end_offset, field_offset + try field.getPlainMemorySize());
+                                    }
+                                    const member_offset: usize = @intCast(s.offsets[component_index] orelse end_offset);
+                                    uniform_slice_window = try helpers.advanceWindow(uniform_slice_window, member_offset);
+                                    value_ptr = &s.values[component_index];
                                 },
                                 .RuntimeArray => |*arr| {
-                                    if (i.value.uint32 >= arr.getLen()) return RuntimeError.OutOfBounds;
-                                    value_ptr = try arr.createValueFromIndex(if (is_last) allocator else arena.allocator(), rt.results, i.value.uint32);
-                                    if (is_last)
-                                        is_owner_of_uniform_slice = true;
-                                    uniform_slice_window = arr.data[arr.getOffsetOfIndex(i.value.uint32)..];
+                                    if (component_index >= arr.getLen()) return RuntimeError.OutOfBounds;
+
+                                    const element_offset = arr.getOffsetOfIndex(component_index);
+                                    if (element_offset > arr.data.len or arr.stride > arr.data.len - element_offset)
+                                        return RuntimeError.OutOfBounds;
+
+                                    const backing = try arr.createValueFromIndex(allocator, rt.results, component_index);
+                                    errdefer {
+                                        backing.deinit(allocator);
+                                        allocator.destroy(backing);
+                                    }
+
+                                    if (uniform_backing_value) |old_backing| {
+                                        old_backing.deinit(allocator);
+                                        allocator.destroy(old_backing);
+                                    }
+
+                                    value_ptr = backing;
+                                    uniform_backing_value = backing;
+                                    uniform_slice_window = arr.data[element_offset .. element_offset + arr.stride];
                                 },
-                                .Vector4f32 => |*v| switch (i.value.uint32) {
-                                    inline 0...3 => |idx| break :blk .{ .Pointer = .{ .ptr = .{ .f32_ptr = &v[idx] } } },
+                                .Vector4f32 => |*v| switch (component_index) {
+                                    inline 0...3 => |idx| break :blk .{ .Pointer = .{
+                                        .ptr = .{ .f32_ptr = &v[idx] },
+                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(f32), @sizeOf(f32)),
+                                        .uniform_backing_value = uniform_backing_value,
+                                    } },
                                     else => return RuntimeError.InvalidSpirV,
                                 },
-                                .Vector3f32 => |*v| switch (i.value.uint32) {
-                                    inline 0...2 => |idx| break :blk .{ .Pointer = .{ .ptr = .{ .f32_ptr = &v[idx] } } },
+                                .Vector3f32 => |*v| switch (component_index) {
+                                    inline 0...2 => |idx| break :blk .{ .Pointer = .{
+                                        .ptr = .{ .f32_ptr = &v[idx] },
+                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(f32), @sizeOf(f32)),
+                                        .uniform_backing_value = uniform_backing_value,
+                                    } },
                                     else => return RuntimeError.InvalidSpirV,
                                 },
-                                .Vector2f32 => |*v| switch (i.value.uint32) {
-                                    inline 0...1 => |idx| break :blk .{ .Pointer = .{ .ptr = .{ .f32_ptr = &v[idx] } } },
+                                .Vector2f32 => |*v| switch (component_index) {
+                                    inline 0...1 => |idx| break :blk .{ .Pointer = .{
+                                        .ptr = .{ .f32_ptr = &v[idx] },
+                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(f32), @sizeOf(f32)),
+                                        .uniform_backing_value = uniform_backing_value,
+                                    } },
                                     else => return RuntimeError.InvalidSpirV,
                                 },
-                                .Vector4i32 => |*v| switch (i.value.uint32) {
-                                    inline 0...3 => |idx| break :blk .{ .Pointer = .{ .ptr = .{ .i32_ptr = &v[idx] } } },
+                                .Vector4i32 => |*v| switch (component_index) {
+                                    inline 0...3 => |idx| break :blk .{ .Pointer = .{
+                                        .ptr = .{ .i32_ptr = &v[idx] },
+                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(i32), @sizeOf(i32)),
+                                        .uniform_backing_value = uniform_backing_value,
+                                    } },
                                     else => return RuntimeError.InvalidSpirV,
                                 },
-                                .Vector3i32 => |*v| switch (i.value.uint32) {
-                                    inline 0...2 => |idx| break :blk .{ .Pointer = .{ .ptr = .{ .i32_ptr = &v[idx] } } },
+                                .Vector3i32 => |*v| switch (component_index) {
+                                    inline 0...2 => |idx| break :blk .{ .Pointer = .{
+                                        .ptr = .{ .i32_ptr = &v[idx] },
+                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(i32), @sizeOf(i32)),
+                                        .uniform_backing_value = uniform_backing_value,
+                                    } },
                                     else => return RuntimeError.InvalidSpirV,
                                 },
-                                .Vector2i32 => |*v| switch (i.value.uint32) {
-                                    inline 0...1 => |idx| break :blk .{ .Pointer = .{ .ptr = .{ .i32_ptr = &v[idx] } } },
+                                .Vector2i32 => |*v| switch (component_index) {
+                                    inline 0...1 => |idx| break :blk .{ .Pointer = .{
+                                        .ptr = .{ .i32_ptr = &v[idx] },
+                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(i32), @sizeOf(i32)),
+                                        .uniform_backing_value = uniform_backing_value,
+                                    } },
                                     else => return RuntimeError.InvalidSpirV,
                                 },
-                                .Vector4u32 => |*v| switch (i.value.uint32) {
-                                    inline 0...3 => |idx| break :blk .{ .Pointer = .{ .ptr = .{ .u32_ptr = &v[idx] } } },
+                                .Vector4u32 => |*v| switch (component_index) {
+                                    inline 0...3 => |idx| break :blk .{ .Pointer = .{
+                                        .ptr = .{ .u32_ptr = &v[idx] },
+                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(u32), @sizeOf(u32)),
+                                        .uniform_backing_value = uniform_backing_value,
+                                    } },
                                     else => return RuntimeError.InvalidSpirV,
                                 },
-                                .Vector3u32 => |*v| switch (i.value.uint32) {
-                                    inline 0...2 => |idx| break :blk .{ .Pointer = .{ .ptr = .{ .u32_ptr = &v[idx] } } },
+                                .Vector3u32 => |*v| switch (component_index) {
+                                    inline 0...2 => |idx| break :blk .{ .Pointer = .{
+                                        .ptr = .{ .u32_ptr = &v[idx] },
+                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(u32), @sizeOf(u32)),
+                                        .uniform_backing_value = uniform_backing_value,
+                                    } },
                                     else => return RuntimeError.InvalidSpirV,
                                 },
-                                .Vector2u32 => |*v| switch (i.value.uint32) {
-                                    inline 0...1 => |idx| break :blk .{ .Pointer = .{ .ptr = .{ .u32_ptr = &v[idx] } } },
+                                .Vector2u32 => |*v| switch (component_index) {
+                                    inline 0...1 => |idx| break :blk .{ .Pointer = .{
+                                        .ptr = .{ .u32_ptr = &v[idx] },
+                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(u32), @sizeOf(u32)),
+                                        .uniform_backing_value = uniform_backing_value,
+                                    } },
                                     else => return RuntimeError.InvalidSpirV,
                                 },
                                 else => return RuntimeError.InvalidSpirV,
@@ -1417,15 +1513,14 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                 break :blk .{
                     .Pointer = .{
                         .ptr = .{ .common = value_ptr },
-                        .is_owner_of_uniform_slice = is_owner_of_uniform_slice,
                         .uniform_slice_window = uniform_slice_window,
+                        .uniform_backing_value = uniform_backing_value,
                     },
                 };
             },
         },
     };
 }
-
 fn opAtomicStore(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     const ptr_id = try rt.it.next();
     _ = rt.it.skip(); // scope
@@ -1904,8 +1999,6 @@ fn opMulExtended(comptime is_signed: bool, rt: *Runtime) RuntimeError!void {
 
                 const low: UIntT = @truncate(product_bits);
                 const high: UIntT = @truncate(product_bits >> bits);
-
-                std.debug.print("test 0x{X} - 0x{X}\n", .{ high, low });
 
                 try writeMulExtendedBits(bits, low_dst, lane_index, low);
                 try writeMulExtendedBits(bits, high_dst, lane_index, high);

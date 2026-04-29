@@ -120,8 +120,16 @@ pub const Value = union(Type) {
             i32_ptr: *i32, //< For vector specializations
             u32_ptr: *u32,
         },
-        is_owner_of_uniform_slice: bool = false,
+
+        /// Exact byte window in externally visible descriptor storage that
+        /// corresponds to this pointer. For a pointer to struct member N this
+        /// starts at the member offset, not at the containing struct.
         uniform_slice_window: ?[]u8 = null,
+
+        /// Heap-owned value that backs a pointer into a materialized runtime
+        /// array element. This may differ from ptr.common when the pointer is
+        /// to a child/member of that materialized value.
+        uniform_backing_value: ?*Self = null,
     },
 
     pub inline fn getCompositeDataOrNull(self: *const Self) ?[]Self {
@@ -404,18 +412,13 @@ pub const Value = union(Type) {
                 return offset;
             },
             .Structure => |s| {
-                var offset: usize = 0;
+                var end_offset: usize = 0;
                 for (s.values, 0..) |v, i| {
-                    const read_size = try v.read(output[offset..]);
-                    if (i + 1 < s.offsets.len) {
-                        if (s.offsets[i + 1]) |o| {
-                            offset = o;
-                            continue;
-                        }
-                    }
-                    offset += read_size;
+                    const member_offset: usize = @intCast(s.offsets[i] orelse end_offset);
+                    const read_size = try v.read(output[member_offset..]);
+                    end_offset = @max(end_offset, member_offset + read_size);
                 }
-                return offset;
+                return end_offset;
             },
             else => return RuntimeError.InvalidValueType,
         }
@@ -548,18 +551,13 @@ pub const Value = union(Type) {
                 return offset;
             },
             .Structure => |s| {
-                var offset: usize = 0;
+                var end_offset: usize = 0;
                 for (s.values, 0..) |*v, i| {
-                    const write_size = try v.write(input[offset..]);
-                    if (i + 1 < s.offsets.len) {
-                        if (s.offsets[i + 1]) |o| {
-                            offset = o;
-                            continue;
-                        }
-                    }
-                    offset += write_size;
+                    const member_offset: usize = @intCast(s.offsets[i] orelse end_offset);
+                    const write_size = try v.write(input[member_offset..]);
+                    end_offset = @max(end_offset, member_offset + write_size);
                 }
-                return offset;
+                return end_offset;
             },
             .RuntimeArray => |*arr| arr.data = input[0..],
             .Image => |*img| img.driver_image = @ptrFromInt(std.mem.bytesToValue(usize, input[0..])),
@@ -587,13 +585,8 @@ pub const Value = union(Type) {
             .Structure => |s| blk: {
                 var size: usize = 0;
                 for (s.values, 0..) |v, i| {
-                    if (i + 1 < s.offsets.len) {
-                        if (s.offsets[i + 1]) |o| {
-                            size = o;
-                            continue;
-                        }
-                    }
-                    size += try v.getPlainMemorySize();
+                    const member_offset: usize = @intCast(s.offsets[i] orelse size);
+                    size = @max(size, member_offset + try v.getPlainMemorySize());
                 }
                 break :blk size;
             },
@@ -644,12 +637,27 @@ pub const Value = union(Type) {
                     switch (p.ptr) {
                         .common => |ptr| {
                             _ = try ptr.read(window);
-                            ptr.deinit(allocator);
-                            if (p.is_owner_of_uniform_slice)
-                                allocator.destroy(ptr);
                         },
-                        else => {},
+                        .f32_ptr => |ptr| {
+                            if (window.len < @sizeOf(f32)) return RuntimeError.OutOfBounds;
+                            std.mem.copyForwards(u8, window[0..@sizeOf(f32)], std.mem.asBytes(ptr));
+                        },
+                        .i32_ptr => |ptr| {
+                            if (window.len < @sizeOf(i32)) return RuntimeError.OutOfBounds;
+                            std.mem.copyForwards(u8, window[0..@sizeOf(i32)], std.mem.asBytes(ptr));
+                        },
+                        .u32_ptr => |ptr| {
+                            if (window.len < @sizeOf(u32)) return RuntimeError.OutOfBounds;
+                            std.mem.copyForwards(u8, window[0..@sizeOf(u32)], std.mem.asBytes(ptr));
+                        },
                     }
+
+                    if (p.uniform_backing_value) |backing| {
+                        backing.deinit(allocator);
+                        allocator.destroy(backing);
+                        p.uniform_backing_value = null;
+                    }
+
                     p.uniform_slice_window = null;
                 }
             },
@@ -685,28 +693,64 @@ pub const Value = union(Type) {
             .Vector => |lanes| (try getPrimitiveField(T, bits, &lanes[lane_index])).*,
 
             .Vector2i32 => |*vec| switch (lane_index) {
-                inline 0...1 => |i| if (bits == 32) @as(TT, @bitCast(vec[i])) else return RuntimeError.InvalidSpirV,
+                inline 0...1 => |i| blk: {
+                    if (bits == 32) {
+                        break :blk @as(TT, @bitCast(vec[i]));
+                    } else {
+                        return RuntimeError.InvalidSpirV;
+                    }
+                },
                 else => return RuntimeError.InvalidSpirV,
             },
             .Vector3i32 => |*vec| switch (lane_index) {
-                inline 0...2 => |i| if (bits == 32) @as(TT, @bitCast(vec[i])) else return RuntimeError.InvalidSpirV,
+                inline 0...2 => |i| blk: {
+                    if (bits == 32) {
+                        break :blk @as(TT, @bitCast(vec[i]));
+                    } else {
+                        return RuntimeError.InvalidSpirV;
+                    }
+                },
                 else => return RuntimeError.InvalidSpirV,
             },
             .Vector4i32 => |*vec| switch (lane_index) {
-                inline 0...3 => |i| if (bits == 32) @as(TT, @bitCast(vec[i])) else return RuntimeError.InvalidSpirV,
+                inline 0...3 => |i| blk: {
+                    if (bits == 32) {
+                        break :blk @as(TT, @bitCast(vec[i]));
+                    } else {
+                        return RuntimeError.InvalidSpirV;
+                    }
+                },
                 else => return RuntimeError.InvalidSpirV,
             },
 
             .Vector2u32 => |*vec| switch (lane_index) {
-                inline 0...1 => |i| if (bits == 32) @as(TT, @bitCast(vec[i])) else return RuntimeError.InvalidSpirV,
+                inline 0...1 => |i| blk: {
+                    if (bits == 32) {
+                        break :blk @as(TT, @bitCast(vec[i]));
+                    } else {
+                        return RuntimeError.InvalidSpirV;
+                    }
+                },
                 else => return RuntimeError.InvalidSpirV,
             },
             .Vector3u32 => |*vec| switch (lane_index) {
-                inline 0...2 => |i| if (bits == 32) @as(TT, @bitCast(vec[i])) else return RuntimeError.InvalidSpirV,
+                inline 0...2 => |i| blk: {
+                    if (bits == 32) {
+                        break :blk @as(TT, @bitCast(vec[i]));
+                    } else {
+                        return RuntimeError.InvalidSpirV;
+                    }
+                },
                 else => return RuntimeError.InvalidSpirV,
             },
             .Vector4u32 => |*vec| switch (lane_index) {
-                inline 0...3 => |i| if (bits == 32) @as(TT, @bitCast(vec[i])) else return RuntimeError.InvalidSpirV,
+                inline 0...3 => |i| blk: {
+                    if (bits == 32) {
+                        break :blk @as(TT, @bitCast(vec[i]));
+                    } else {
+                        return RuntimeError.InvalidSpirV;
+                    }
+                },
                 else => return RuntimeError.InvalidSpirV,
             },
 
@@ -721,28 +765,52 @@ pub const Value = union(Type) {
             .Vector => |lanes| try setScalarLaneValue(T, bits, &lanes[lane_index], value),
 
             .Vector2i32 => |*vec| switch (lane_index) {
-                inline 0...1 => |i| vec[i] = if (bits == 32) @bitCast(value) else return RuntimeError.InvalidSpirV,
+                inline 0...1 => |i| if (bits == 32) {
+                    vec[i] = @bitCast(value);
+                } else {
+                    return RuntimeError.InvalidSpirV;
+                },
                 else => return RuntimeError.InvalidSpirV,
             },
             .Vector3i32 => |*vec| switch (lane_index) {
-                inline 0...2 => |i| vec[i] = if (bits == 32) @bitCast(value) else return RuntimeError.InvalidSpirV,
+                inline 0...2 => |i| if (bits == 32) {
+                    vec[i] = @bitCast(value);
+                } else {
+                    return RuntimeError.InvalidSpirV;
+                },
                 else => return RuntimeError.InvalidSpirV,
             },
             .Vector4i32 => |*vec| switch (lane_index) {
-                inline 0...3 => |i| vec[i] = if (bits == 32) @bitCast(value) else return RuntimeError.InvalidSpirV,
+                inline 0...3 => |i| if (bits == 32) {
+                    vec[i] = @bitCast(value);
+                } else {
+                    return RuntimeError.InvalidSpirV;
+                },
                 else => return RuntimeError.InvalidSpirV,
             },
 
             .Vector2u32 => |*vec| switch (lane_index) {
-                inline 0...1 => |i| vec[i] = if (bits == 32) @bitCast(value) else return RuntimeError.InvalidSpirV,
+                inline 0...1 => |i| if (bits == 32) {
+                    vec[i] = @bitCast(value);
+                } else {
+                    return RuntimeError.InvalidSpirV;
+                },
                 else => return RuntimeError.InvalidSpirV,
             },
             .Vector3u32 => |*vec| switch (lane_index) {
-                inline 0...2 => |i| vec[i] = if (bits == 32) @bitCast(value) else return RuntimeError.InvalidSpirV,
+                inline 0...2 => |i| if (bits == 32) {
+                    vec[i] = @bitCast(value);
+                } else {
+                    return RuntimeError.InvalidSpirV;
+                },
                 else => return RuntimeError.InvalidSpirV,
             },
             .Vector4u32 => |*vec| switch (lane_index) {
-                inline 0...3 => |i| vec[i] = if (bits == 32) @bitCast(value) else return RuntimeError.InvalidSpirV,
+                inline 0...3 => |i| if (bits == 32) {
+                    vec[i] = @bitCast(value);
+                } else {
+                    return RuntimeError.InvalidSpirV;
+                },
                 else => return RuntimeError.InvalidSpirV,
             },
 
