@@ -291,73 +291,100 @@ pub const Value = union(Type) {
             .Int => |i| {
                 switch (i.bit_count) {
                     8 => output[0] = @bitCast(i.value.uint8),
-                    16 => std.mem.copyForwards(u8, output[0..], std.mem.asBytes(&i.value.uint16)),
-                    32 => std.mem.copyForwards(u8, output[0..], std.mem.asBytes(&i.value.uint32)),
-                    64 => std.mem.copyForwards(u8, output[0..], std.mem.asBytes(&i.value.uint64)),
+                    16 => @memcpy(output[0..2], std.mem.asBytes(&i.value.uint16)),
+                    32 => @memcpy(output[0..4], std.mem.asBytes(&i.value.uint32)),
+                    64 => @memcpy(output[0..8], std.mem.asBytes(&i.value.uint64)),
                     else => return RuntimeError.InvalidValueType,
                 }
                 return @divExact(i.bit_count, 8);
             },
             .Float => |f| {
                 switch (f.bit_count) {
-                    16 => std.mem.copyForwards(u8, output[0..], std.mem.asBytes(&f.value.float16)),
-                    32 => std.mem.copyForwards(u8, output[0..], std.mem.asBytes(&f.value.float32)),
-                    64 => std.mem.copyForwards(u8, output[0..], std.mem.asBytes(&f.value.float64)),
+                    16 => @memcpy(output[0..2], std.mem.asBytes(&f.value.float16)),
+                    32 => @memcpy(output[0..4], std.mem.asBytes(&f.value.float32)),
+                    64 => @memcpy(output[0..8], std.mem.asBytes(&f.value.float64)),
                     else => return RuntimeError.InvalidValueType,
                 }
                 return @divExact(f.bit_count, 8);
             },
             .Vector4f32 => |vec| {
                 inline for (0..4) |i| {
-                    std.mem.copyForwards(u8, output[(i * 4)..], std.mem.asBytes(&vec[i]));
+                    const start = i * 4;
+                    const end = (i + 1) * 4;
+                    if (start >= output.len or end > output.len) return RuntimeError.OutOfBounds;
+                    @memcpy(output[start..end], std.mem.asBytes(&vec[i]));
                 }
                 return 4 * 4;
             },
             .Vector3f32 => |vec| {
                 inline for (0..3) |i| {
-                    std.mem.copyForwards(u8, output[(i * 4)..], std.mem.asBytes(&vec[i]));
+                    const start = i * 4;
+                    const end = (i + 1) * 4;
+                    if (start >= output.len or end > output.len) return RuntimeError.OutOfBounds;
+                    @memcpy(output[start..end], std.mem.asBytes(&vec[i]));
                 }
                 return 3 * 4;
             },
             .Vector2f32 => |vec| {
                 inline for (0..2) |i| {
-                    std.mem.copyForwards(u8, output[(i * 4)..], std.mem.asBytes(&vec[i]));
+                    const start = i * 4;
+                    const end = (i + 1) * 4;
+                    if (start >= output.len or end > output.len) return RuntimeError.OutOfBounds;
+                    @memcpy(output[start..end], std.mem.asBytes(&vec[i]));
                 }
                 return 2 * 4;
             },
             .Vector4i32 => |vec| {
                 inline for (0..4) |i| {
-                    std.mem.copyForwards(u8, output[(i * 4)..], std.mem.asBytes(&vec[i]));
+                    const start = i * 4;
+                    const end = (i + 1) * 4;
+                    if (start >= output.len or end > output.len) return RuntimeError.OutOfBounds;
+                    @memcpy(output[start..end], std.mem.asBytes(&vec[i]));
                 }
                 return 4 * 4;
             },
             .Vector3i32 => |vec| {
                 inline for (0..3) |i| {
-                    std.mem.copyForwards(u8, output[(i * 4)..], std.mem.asBytes(&vec[i]));
+                    const start = i * 4;
+                    const end = (i + 1) * 4;
+                    if (start >= output.len or end > output.len) return RuntimeError.OutOfBounds;
+                    @memcpy(output[start..end], std.mem.asBytes(&vec[i]));
                 }
                 return 3 * 4;
             },
             .Vector2i32 => |vec| {
                 inline for (0..2) |i| {
-                    std.mem.copyForwards(u8, output[(i * 4)..], std.mem.asBytes(&vec[i]));
+                    const start = i * 4;
+                    const end = (i + 1) * 4;
+                    if (start >= output.len or end > output.len) return RuntimeError.OutOfBounds;
+                    @memcpy(output[start..end], std.mem.asBytes(&vec[i]));
                 }
                 return 2 * 4;
             },
             .Vector4u32 => |vec| {
                 inline for (0..4) |i| {
-                    std.mem.copyForwards(u8, output[(i * 4)..], std.mem.asBytes(&vec[i]));
+                    const start = i * 4;
+                    const end = (i + 1) * 4;
+                    if (start >= output.len or end > output.len) return RuntimeError.OutOfBounds;
+                    @memcpy(output[start..end], std.mem.asBytes(&vec[i]));
                 }
                 return 4 * 4;
             },
             .Vector3u32 => |vec| {
                 inline for (0..3) |i| {
-                    std.mem.copyForwards(u8, output[(i * 4)..], std.mem.asBytes(&vec[i]));
+                    const start = i * 4;
+                    const end = (i + 1) * 4;
+                    if (start >= output.len or end > output.len) return RuntimeError.OutOfBounds;
+                    @memcpy(output[start..end], std.mem.asBytes(&vec[i]));
                 }
                 return 3 * 4;
             },
             .Vector2u32 => |vec| {
                 inline for (0..2) |i| {
-                    std.mem.copyForwards(u8, output[(i * 4)..], std.mem.asBytes(&vec[i]));
+                    const start = i * 4;
+                    const end = (i + 1) * 4;
+                    if (start >= output.len or end > output.len) return RuntimeError.OutOfBounds;
+                    @memcpy(output[start..end], std.mem.asBytes(&vec[i]));
                 }
                 return 2 * 4;
             },
@@ -408,18 +435,18 @@ pub const Value = union(Type) {
             .Int => |*i| {
                 switch (i.bit_count) {
                     8 => i.value.uint8 = @bitCast(input[0]),
-                    16 => std.mem.copyForwards(u8, std.mem.asBytes(&i.value.uint16), input[0..2]),
-                    32 => std.mem.copyForwards(u8, std.mem.asBytes(&i.value.uint32), input[0..4]),
-                    64 => std.mem.copyForwards(u8, std.mem.asBytes(&i.value.uint64), input[0..8]),
+                    16 => @memcpy(std.mem.asBytes(&i.value.uint16), input[0..2]),
+                    32 => @memcpy(std.mem.asBytes(&i.value.uint32), input[0..4]),
+                    64 => @memcpy(std.mem.asBytes(&i.value.uint64), input[0..8]),
                     else => return RuntimeError.InvalidValueType,
                 }
                 return @divExact(i.bit_count, 8);
             },
             .Float => |*f| {
                 switch (f.bit_count) {
-                    16 => std.mem.copyForwards(u8, std.mem.asBytes(&f.value.float16), input[0..2]),
-                    32 => std.mem.copyForwards(u8, std.mem.asBytes(&f.value.float32), input[0..4]),
-                    64 => std.mem.copyForwards(u8, std.mem.asBytes(&f.value.float64), input[0..8]),
+                    16 => @memcpy(std.mem.asBytes(&f.value.float16), input[0..2]),
+                    32 => @memcpy(std.mem.asBytes(&f.value.float32), input[0..4]),
+                    64 => @memcpy(std.mem.asBytes(&f.value.float64), input[0..8]),
                     else => return RuntimeError.InvalidValueType,
                 }
                 return @divExact(f.bit_count, 8);
@@ -429,7 +456,7 @@ pub const Value = union(Type) {
                     const start = i * 4;
                     const end = (i + 1) * 4;
                     if (start >= input.len or end > input.len) return RuntimeError.OutOfBounds;
-                    std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
+                    @memcpy(std.mem.asBytes(&vec[i]), input[start..end]);
                 }
                 return 4 * 4;
             },
@@ -438,7 +465,7 @@ pub const Value = union(Type) {
                     const start = i * 4;
                     const end = (i + 1) * 4;
                     if (start >= input.len or end > input.len) return RuntimeError.OutOfBounds;
-                    std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
+                    @memcpy(std.mem.asBytes(&vec[i]), input[start..end]);
                 }
                 return 3 * 4;
             },
@@ -447,7 +474,7 @@ pub const Value = union(Type) {
                     const start = i * 4;
                     const end = (i + 1) * 4;
                     if (start >= input.len or end > input.len) return RuntimeError.OutOfBounds;
-                    std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
+                    @memcpy(std.mem.asBytes(&vec[i]), input[start..end]);
                 }
                 return 2 * 4;
             },
@@ -456,7 +483,7 @@ pub const Value = union(Type) {
                     const start = i * 4;
                     const end = (i + 1) * 4;
                     if (start >= input.len or end > input.len) return RuntimeError.OutOfBounds;
-                    std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
+                    @memcpy(std.mem.asBytes(&vec[i]), input[start..end]);
                 }
                 return 4 * 4;
             },
@@ -465,7 +492,7 @@ pub const Value = union(Type) {
                     const start = i * 4;
                     const end = (i + 1) * 4;
                     if (start >= input.len or end > input.len) return RuntimeError.OutOfBounds;
-                    std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
+                    @memcpy(std.mem.asBytes(&vec[i]), input[start..end]);
                 }
                 return 3 * 4;
             },
@@ -474,7 +501,7 @@ pub const Value = union(Type) {
                     const start = i * 4;
                     const end = (i + 1) * 4;
                     if (start >= input.len or end > input.len) return RuntimeError.OutOfBounds;
-                    std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
+                    @memcpy(std.mem.asBytes(&vec[i]), input[start..end]);
                 }
                 return 2 * 4;
             },
@@ -483,7 +510,7 @@ pub const Value = union(Type) {
                     const start = i * 4;
                     const end = (i + 1) * 4;
                     if (start >= input.len or end > input.len) return RuntimeError.OutOfBounds;
-                    std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
+                    @memcpy(std.mem.asBytes(&vec[i]), input[start..end]);
                 }
                 return 4 * 4;
             },
@@ -492,7 +519,7 @@ pub const Value = union(Type) {
                     const start = i * 4;
                     const end = (i + 1) * 4;
                     if (start >= input.len or end > input.len) return RuntimeError.OutOfBounds;
-                    std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
+                    @memcpy(std.mem.asBytes(&vec[i]), input[start..end]);
                 }
                 return 3 * 4;
             },
@@ -501,7 +528,7 @@ pub const Value = union(Type) {
                     const start = i * 4;
                     const end = (i + 1) * 4;
                     if (start >= input.len or end > input.len) return RuntimeError.OutOfBounds;
-                    std.mem.copyForwards(u8, std.mem.asBytes(&vec[i]), input[start..end]);
+                    @memcpy(std.mem.asBytes(&vec[i]), input[start..end]);
                 }
                 return 2 * 4;
             },
@@ -790,8 +817,8 @@ pub const Value = union(Type) {
     pub fn resolveLaneBitWidth(self: *const Self) RuntimeError!SpvWord {
         return switch (self.*) {
             .Bool => 8,
-            .Float => |f| f.bit_length,
-            .Int => |i| i.bit_length,
+            .Float => |f| @intCast(f.bit_count),
+            .Int => |i| @intCast(i.bit_count),
             .Vector => |v| v[0].resolveLaneBitWidth(),
             .Vector4f32,
             .Vector3f32,
