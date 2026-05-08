@@ -1315,7 +1315,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                     if (a.indexes.len != index_count)
                         return RuntimeError.InvalidSpirV;
                     try a.value.flushPtr(allocator);
-                    a.value.deinit(allocator);
+                    //a.value.deinit(allocator);
                     break :blk .{ a.indexes, false };
                 },
                 else => {},
