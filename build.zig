@@ -31,7 +31,7 @@ pub fn build(b: *std.Build) void {
 
     addSandbox(b, target, optimize, use_llvm, spv_mod, &install_spv_lib.step);
     addExample(b, target, optimize, use_llvm, spv_mod, &install_spv_lib.step);
-    addZigTests(b, target, optimize, spv_mod, zmath);
+    addZigTests(b, target, optimize, use_llvm, spv_mod, zmath);
     addCffi(b, target, optimize, use_llvm, spv_mod);
     addDocs(b, spv_mod);
 }
@@ -146,6 +146,7 @@ fn addZigTests(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
+    use_llvm: bool,
     spv_mod: *std.Build.Module,
     zmath: *std.Build.Dependency,
 ) void {
@@ -172,6 +173,7 @@ fn addZigTests(
             .path = b.path("test/test_runner.zig"),
             .mode = .simple,
         },
+        .use_llvm = use_llvm,
     });
 
     const run_tests = b.addRunArtifact(tests);

@@ -933,7 +933,7 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
                 fn applyScalar(bit_count: SpvWord, d: *Value, l: *Value, r: *Value) RuntimeError!void {
                     switch (bit_count) {
                         inline 8, 16, 32, 64 => |bits| {
-                            if (bits == 8 and T == .Float) return RuntimeError.InvalidSpirV;
+                            if (bits == 8 and T == .Float) return RuntimeError.UnsupportedSpirV;
 
                             const ScalarT = Value.getPrimitiveFieldType(T, bits);
                             const d_field = try Value.getPrimitiveField(T, bits, d);
@@ -941,13 +941,18 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
                             const r_field = try Value.getPrimitiveField(T, bits, r);
                             d_field.* = try operation(ScalarT, l_field.*, r_field.*);
                         },
-                        else => return RuntimeError.InvalidSpirV,
+                        else => return RuntimeError.UnsupportedSpirV,
                     }
                 }
 
-                inline fn applyVectorTimesScalarF32(d: []Value, l: []const Value, r: f32) void {
+                inline fn applyVectorTimesScalarFloat(comptime bit_count: SpvWord, d: []Value, l: []const Value, r_v: *const Value) RuntimeError!void {
                     for (d, l) |*d_v, l_v| {
-                        d_v.Float.value.float32 = l_v.Float.value.float32 * r;
+                        switch (bit_count) {
+                            16 => d_v.Float.value.float16 = l_v.Float.value.float16 * r_v.Float.value.float16,
+                            32 => d_v.Float.value.float32 = l_v.Float.value.float32 * r_v.Float.value.float32,
+                            64 => d_v.Float.value.float64 = l_v.Float.value.float64 * r_v.Float.value.float64,
+                            else => return RuntimeError.UnsupportedSpirV,
+                        }
                     }
                 }
 
@@ -963,7 +968,7 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
                     }
                 }
 
-                inline fn applySIMDVectorf32(comptime N: usize, d: *@Vector(N, f32), l: *const @Vector(N, f32), r: *const Value) RuntimeError!void {
+                fn applySIMDVectorf32(comptime N: usize, d: *@Vector(N, f32), l: *const @Vector(N, f32), r: *const Value) RuntimeError!void {
                     switch (Op) {
                         .VectorTimesScalar => applyVectorSIMDTimesScalarF32(N, d, l, r.Float.value.float32),
                         else => {
@@ -983,7 +988,10 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
                 .Int, .Float => try operator.applyScalar(lane_bits, dst, lhs, rhs),
 
                 .Vector => |dst_vec| switch (Op) {
-                    .VectorTimesScalar => operator.applyVectorTimesScalarF32(dst_vec, lhs.Vector, rhs.Float.value.float32),
+                    .VectorTimesScalar => switch (lane_bits) {
+                        inline 16, 32, 64 => |bits_count| try operator.applyVectorTimesScalarFloat(bits_count, dst_vec, lhs.Vector, rhs),
+                        else => return RuntimeError.UnsupportedSpirV,
+                    },
                     else => for (dst_vec, lhs.Vector, rhs.Vector) |*d_lane, *l_lane, *r_lane| {
                         try operator.applyScalar(lane_bits, d_lane, l_lane, r_lane);
                     },
@@ -1315,7 +1323,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                     if (a.indexes.len != index_count)
                         return RuntimeError.InvalidSpirV;
                     try a.value.flushPtr(allocator);
-                    //a.value.deinit(allocator);
+                    a.value.deinit(allocator);
                     break :blk .{ a.indexes, false };
                 },
                 else => {},
