@@ -153,9 +153,15 @@ fn addZigTests(
     const no_test = b.option(bool, "no-test", "Skip unit test dependencies fetch") orelse false;
     if (no_test) return;
 
+    const test_filter = b.option(
+        []const u8,
+        "test-filter",
+        "Only run tests whose name contains this substring",
+    );
+
     const nzsl = b.lazyDependency("NZSL", .{
         .target = target,
-        .optimize = optimize,
+        .optimize = .ReleaseFast,
     }) orelse return;
 
     const tests = b.addTest(.{
@@ -173,6 +179,7 @@ fn addZigTests(
             .path = b.path("test/test_runner.zig"),
             .mode = .simple,
         },
+        .filters = if (test_filter) |filter| &.{filter} else &.{},
         .use_llvm = use_llvm,
     });
 

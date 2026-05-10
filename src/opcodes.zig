@@ -289,7 +289,7 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.LogicalNot)]             = CondEngine(.Bool, .LogicalNot).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.LogicalNotEqual)]        = CondEngine(.Bool, .LogicalNotEqual).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.LogicalOr)]              = CondEngine(.Bool, .LogicalOr).op;
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.MatrixTimesMatrix)]      = MathEngine(.Float, .MatrixTimesMatrix, false).op; // TODO
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.MatrixTimesMatrix)]      = MathEngine(.Float, .MatrixTimesMatrix, false).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.MatrixTimesScalar)]      = MathEngine(.Float, .MatrixTimesScalar, false).op; // TODO
     runtime_dispatcher[@intFromEnum(spv.SpvOp.MatrixTimesVector)]      = MathEngine(.Float, .MatrixTimesVector, false).op; // TODO
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Not)]                    = BitEngine(.UInt, .Not).op;
@@ -919,7 +919,9 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
                     return switch (Op) {
                         .Add => if (@typeInfo(TT) == .int) @addWithOverflow(op1, op2)[0] else op1 + op2,
                         .Sub => if (@typeInfo(TT) == .int) @subWithOverflow(op1, op2)[0] else op1 - op2,
-                        .Mul => if (@typeInfo(TT) == .int) @mulWithOverflow(op1, op2)[0] else op1 * op2,
+                        .Mul,
+                        .MatrixTimesMatrix,
+                        => if (@typeInfo(TT) == .int) @mulWithOverflow(op1, op2)[0] else op1 * op2,
                         .Div => blk: {
                             if (op2 == 0) return RuntimeError.DivisionByZero;
                             break :blk if (@typeInfo(TT) == .int) @divTrunc(op1, op2) else op1 / op2;
@@ -1008,6 +1010,19 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
                 .Vector4u32 => |*d| try operator.applySIMDVector(u32, 4, d, &lhs.Vector4u32, &rhs.Vector4u32),
                 .Vector3u32 => |*d| try operator.applySIMDVector(u32, 3, d, &lhs.Vector3u32, &rhs.Vector3u32),
                 .Vector2u32 => |*d| try operator.applySIMDVector(u32, 2, d, &lhs.Vector2u32, &rhs.Vector2u32),
+
+                .Matrix => |dst_m| switch (Op) {
+                    .MatrixTimesMatrix => {
+                        for (dst_m, lhs.Matrix, rhs.Matrix) |*dst_vec, *lhs_vec, *rhs_vec| {
+                            for (dst_vec.Vector, lhs_vec.Vector, rhs_vec.Vector) |*d_lane, *l_lane, *r_lane| {
+                                try operator.applyScalar(lane_bits, d_lane, l_lane, r_lane);
+                            }
+                        }
+                    },
+                    // TODO : matrix times vector
+                    // TODO : matrix times scalar
+                    else => return RuntimeError.ToDo,
+                },
 
                 else => return RuntimeError.InvalidSpirV,
             }
@@ -1600,6 +1615,20 @@ fn opCompositeConstruct(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime)
     }
 
     switch (value.*) {
+        .Matrix => |m| {
+            var index: SpvWord = 0;
+            for (m[0..]) |mat_elem| {
+                if (mat_elem.getCompositeDataOrNull()) |vec| {
+                    for (vec[0..]) |*elem| {
+                        const elem_value = (try rt.results[try rt.it.next()].getVariant()).Constant.value;
+                        elem.* = elem_value;
+                        index += 1;
+                        if (index == index_count)
+                            return;
+                    }
+                }
+            }
+        },
         .RuntimeArray => |arr| {
             var offset: usize = 0;
 

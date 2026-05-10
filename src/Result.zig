@@ -390,6 +390,7 @@ pub fn resolveLaneBitWidth(target_type: TypeData, rt: *const Runtime) RuntimeErr
         .Float => |f| f.bit_length,
         .Int => |i| i.bit_length,
         .Vector => |v| continue :sw (try rt.results[v.components_type_word].getVariant()).Type,
+        .Matrix => |m| continue :sw (try rt.results[m.column_type_word].getVariant()).Type,
         .Vector4f32,
         .Vector3f32,
         .Vector2f32,
@@ -408,6 +409,7 @@ pub fn resolveLaneCount(target_type: TypeData) RuntimeError!SpvWord {
     return switch (target_type) {
         .Bool, .Float, .Int => 1,
         .Vector => |v| v.member_count,
+        .Matrix => |m| m.member_count,
         .Vector4f32, .Vector4i32, .Vector4u32 => 4,
         .Vector3f32, .Vector3i32, .Vector3u32 => 3,
         .Vector2f32, .Vector2i32, .Vector2u32 => 2,
@@ -419,6 +421,7 @@ pub fn resolveSign(target_type: TypeData, rt: *const Runtime) RuntimeError!enum 
     return sw: switch (target_type) {
         .Int => |i| if (i.is_signed) .signed else .unsigned,
         .Vector => |v| continue :sw (try rt.results[v.components_type_word].getVariant()).Type,
+        .Matrix => |m| continue :sw (try rt.results[m.column_type_word].getVariant()).Type,
         .Vector4i32 => .signed,
         .Vector3i32 => .signed,
         .Vector2i32 => .signed,

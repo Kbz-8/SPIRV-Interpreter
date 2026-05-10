@@ -221,3 +221,76 @@ test "Maths vectors with scalars" {
         }
     }
 }
+
+// Tests all mathematical operation on mat3/4 with all NZSL supported primitive types
+test "Maths matrices" {
+    const allocator = std.testing.allocator;
+    const types = [_]type{ f32, f64 };
+    var operations = std.EnumMap(Operations, u8).init(.{
+        .Add = '+',
+        .Sub = '-',
+        .Mul = '*',
+    });
+
+    var it = operations.iterator();
+    while (it.next()) |op| {
+        inline for (3..5) |L| {
+            inline for (types) |T| {
+                const base: case.Mat(L, T) = .{ .val = case.random([L][L]T) };
+                const ratio: case.Mat(L, T) = .{ .val = case.random([L][L]T) };
+                var expected: case.Mat(L, T) = undefined;
+                for (expected.val[0..], base.val[0..], ratio.val[0..]) |*ec, bc, rc| {
+                    for (ec[0..], bc[0..], rc[0..]) |*e, b, r| {
+                        e.* = switch (op.key) {
+                            .Add => b + r,
+                            .Sub => b - r,
+                            .Mul => b * r,
+                            else => unreachable,
+                        };
+                    }
+                }
+
+                const shader = try std.fmt.allocPrint(
+                    allocator,
+                    \\ [nzsl_version("1.1")]
+                    \\ [feature(float64)]
+                    \\ module;
+                    \\ 
+                    \\ struct FragOut
+                    \\ {{
+                    \\     [location(0)] value: mat{d}[{s}]
+                    \\ }}
+                    \\
+                    \\ [entry(frag)]
+                    \\ fn main() -> FragOut
+                    \\ {{
+                    \\     let output: FragOut;
+                    \\     output.value = mat{d}[{s}]({f}) {c} mat{d}[{s}]({f});
+                    \\     return output;
+                    \\ }}
+                ,
+                    .{
+                        L,
+                        @typeName(T),
+                        L,
+                        @typeName(T),
+                        base,
+                        op.value.*,
+                        L,
+                        @typeName(T),
+                        ratio,
+                    },
+                );
+                defer allocator.free(shader);
+                const code = try compileNzsl(allocator, shader);
+                defer allocator.free(code);
+                try case.expect(.{
+                    .source = code,
+                    .expected_outputs = &.{
+                        std.mem.asBytes(&expected),
+                    },
+                });
+            }
+        }
+    }
+}

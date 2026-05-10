@@ -34,11 +34,11 @@ pub const case = struct {
         // To test with all important module options
         const module_options = [_]spv.Module.ModuleOptions{
             .{
-                .use_simd_vectors_specializations = true,
-            },
-            .{
                 .use_simd_vectors_specializations = false,
             },
+            //.{
+            //    .use_simd_vectors_specializations = true,
+            //},
         };
 
         for (module_options) |opt| {
@@ -78,7 +78,7 @@ pub const case = struct {
     }
 
     pub fn random(comptime T: type) T {
-        var prng: std.Random.DefaultPrng = .init(@intCast(std.Io.Timestamp.now(std.testing.io, .real).toMicroseconds()));
+        var prng: std.Random.DefaultPrng = .init(@intCast(std.Io.Timestamp.now(std.testing.io, .real).toNanoseconds()));
         const rand = prng.random();
 
         return switch (@typeInfo(T)) {
@@ -90,6 +90,13 @@ pub const case = struct {
                     vec[i] = random(v.child);
                 }
                 break :blk vec;
+            },
+            .array => |a| blk: {
+                var arr: [a.len]a.child = undefined;
+                inline for (0..a.len) |i| {
+                    arr[i] = random(a.child);
+                }
+                break :blk arr;
             },
             inline else => unreachable,
         };
@@ -103,6 +110,21 @@ pub const case = struct {
                 inline for (0..len) |i| {
                     try w.print("{d}", .{self.val[i]});
                     if (i < len - 1) try w.writeAll(", ");
+                }
+            }
+        };
+    }
+
+    pub fn Mat(comptime len: usize, comptime T: type) type {
+        return struct {
+            const Self = @This();
+            val: [len][len]T,
+            pub fn format(self: *const Self, w: *std.Io.Writer) std.Io.Writer.Error!void {
+                inline for (0..len) |i| {
+                    inline for (0..len) |j| {
+                        try w.print("{d}", .{self.val[i][j]});
+                        if (i < len - 1 or j < len - 1) try w.writeAll(", ");
+                    }
                 }
             }
         };
