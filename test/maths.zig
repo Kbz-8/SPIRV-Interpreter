@@ -1,5 +1,6 @@
 const std = @import("std");
 const root = @import("root.zig");
+const zm = @import("zmath");
 const compileNzsl = root.compileNzsl;
 const case = root.case;
 
@@ -291,6 +292,66 @@ test "Maths matrices" {
                     },
                 });
             }
+        }
+    }
+}
+
+// Tests all mathematical operation on mat3/4 with all NZSL supported vectors
+test "Maths matrices with vectors" {
+    const allocator = std.testing.allocator;
+    const types = [_]type{ f32, f64 };
+
+    inline for (3..5) |L| {
+        inline for (types) |T| {
+            const base: case.Mat(L, T) = .{ .val = case.random([L][L]T) };
+            const ratio: case.Vec(L, T) = .{ .val = case.random(@Vector(L, T)) };
+            var expected: @Vector(L, T) = undefined;
+
+            expected[0] = (base.val[0][0] * ratio.val[0]) + (base.val[0][1] * ratio.val[1]) + (base.val[0][2] * ratio.val[2]) + if (L == 4) (base.val[0][3] * ratio.val[3]) else 0.0;
+            expected[1] = (base.val[1][0] * ratio.val[0]) + (base.val[1][1] * ratio.val[1]) + (base.val[1][2] * ratio.val[2]) + if (L == 4) (base.val[1][3] * ratio.val[3]) else 0.0;
+            expected[2] = (base.val[2][0] * ratio.val[0]) + (base.val[2][1] * ratio.val[1]) + (base.val[2][2] * ratio.val[2]) + if (L == 4) (base.val[2][3] * ratio.val[3]) else 0.0;
+            if (L == 4)
+                expected[3] = (base.val[3][0] * ratio.val[0]) + (base.val[3][1] * ratio.val[1]) + (base.val[3][2] * ratio.val[2]) + (base.val[3][3] * ratio.val[3]);
+
+            const shader = try std.fmt.allocPrint(
+                allocator,
+                \\ [nzsl_version("1.1")]
+                \\ [feature(float64)]
+                \\ module;
+                \\ 
+                \\ struct FragOut
+                \\ {{
+                \\     [location(0)] value: vec{d}[{s}]
+                \\ }}
+                \\
+                \\ [entry(frag)]
+                \\ fn main() -> FragOut
+                \\ {{
+                \\     let output: FragOut;
+                \\     output.value = mat{d}[{s}]({f}) * vec{d}[{s}]({f});
+                \\     return output;
+                \\ }}
+            ,
+                .{
+                    L,
+                    @typeName(T),
+                    L,
+                    @typeName(T),
+                    base,
+                    L,
+                    @typeName(T),
+                    ratio,
+                },
+            );
+            defer allocator.free(shader);
+            const code = try compileNzsl(allocator, shader);
+            defer allocator.free(code);
+            try case.expect(.{
+                .source = code,
+                .expected_outputs = &.{
+                    std.mem.asBytes(&@as([L]T, expected)),
+                },
+            });
         }
     }
 }

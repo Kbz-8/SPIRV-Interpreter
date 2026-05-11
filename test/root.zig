@@ -36,9 +36,9 @@ pub const case = struct {
             .{
                 .use_simd_vectors_specializations = false,
             },
-            //.{
-            //    .use_simd_vectors_specializations = true,
-            //},
+            .{
+                .use_simd_vectors_specializations = true,
+            },
         };
 
         for (module_options) |opt| {

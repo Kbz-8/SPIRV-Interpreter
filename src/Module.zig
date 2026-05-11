@@ -19,6 +19,7 @@ const WordIterator = @import("WordIterator.zig");
 const Self = @This();
 
 pub const ModuleOptions = struct {
+    /// Also affects matrices
     use_simd_vectors_specializations: bool = true,
 };
 

@@ -847,6 +847,10 @@ pub const Value = union(Type) {
         }
     }
 
+    pub fn getPrimitiveFieldConst(comptime T: PrimitiveType, comptime BitCount: SpvWord, v: *const Value) RuntimeError!*const getPrimitiveFieldType(T, BitCount) {
+        return getPrimitiveField(T, BitCount, @constCast(v));
+    }
+
     pub fn getPrimitiveField(comptime T: PrimitiveType, comptime BitCount: SpvWord, v: *Value) RuntimeError!*getPrimitiveFieldType(T, BitCount) {
         if (std.meta.activeTag(v.*) == .Pointer) {
             return switch (v.Pointer.ptr) {
@@ -924,6 +928,30 @@ pub const Value = union(Type) {
             .Vector3u32 => .unsigned,
             .Vector2u32 => .unsigned,
             else => .unsigned,
+        };
+    }
+
+    pub inline fn getVectorSpecialization(self: *const Self, comptime N: usize, comptime T: type) @Vector(N, T) {
+        return switch (T) {
+            f32 => switch (N) {
+                inline 4 => self.Vector4f32,
+                inline 3 => self.Vector3f32,
+                inline 2 => self.Vector2f32,
+                else => unreachable,
+            },
+            i32 => switch (N) {
+                inline 4 => self.Vector4i32,
+                inline 3 => self.Vector3i32,
+                inline 2 => self.Vector2i32,
+                else => unreachable,
+            },
+            u32 => switch (N) {
+                inline 4 => self.Vector4u32,
+                inline 3 => self.Vector3u32,
+                inline 2 => self.Vector2u32,
+                else => unreachable,
+            },
+            else => unreachable,
         };
     }
 };
