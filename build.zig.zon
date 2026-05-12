@@ -11,11 +11,11 @@
             .hash = "NZSL-1.1.4-N0xSVC97AACi1-SuJ_ifNAOBRdCMPIXN1vMgVprfABhH",
             .lazy = true,
         },
-        //.sdl3 = .{
-        //    .url = "git+https://codeberg.org/7Games/zig-sdl3?ref=v0.1.6#9c1842246c59f03f87ba59b160ca7e3d5e5ce972",
-        //    .hash = "sdl3-0.1.6-NmT1Q5sQJgCzT6hLj7WOSrwxE0Qsef1wIkDopbOOFru0",
-        //    .lazy = true,
-        //},
+        .sdl3 = .{
+            .url = "git+https://codeberg.org/7Games/zig-sdl3?ref=v0.2.0#40c2e4b579aa556db37a502c936426aa1c8b5c95",
+            .hash = "sdl3-0.2.0-NmT1Q0mFJwBi9kZmArzh2rfJ_mFshydV0zPGULVlpACc",
+            .lazy = true,
+        },
         .pretty = .{
             .url = "git+https://github.com/Kbz-8/pretty.git#f91d534d033277ca1ae7fcd598a070e8b3ddc532",
             .hash = "pretty-0.10.6-Tm65r7FTAQA5BEL8tcIcF-Wp4XRC7J7BhuRI0KUnFj2X",

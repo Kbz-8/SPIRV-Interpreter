@@ -45,7 +45,7 @@ fn addExample(
     install_spv_lib_step: *std.Build.Step,
 ) void {
     const no_example = b.option(bool, "no-example", "Skip example build") orelse false;
-    if (!no_example and false) {
+    if (!no_example) {
         const sdl3 = b.lazyDependency("sdl3", .{
             .target = target,
             .optimize = optimize,

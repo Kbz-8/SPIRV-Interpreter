@@ -4,13 +4,21 @@ const spv = @import("spv");
 
 const shader_source = @embedFile("shader.spv");
 
-const screen_width = 300;
-const screen_height = 300;
+const screen_width = 400;
+const screen_height = 240;
 
 pub fn main() !void {
     {
         //var gpa: std.heap.DebugAllocator(.{}) = .init;
         //defer _ = gpa.deinit();
+
+        const allocator = std.heap.smp_allocator;
+
+        var threaded: std.Io.Threaded = .init(allocator, .{
+            .async_limit = @enumFromInt(screen_height),
+        });
+        defer threaded.deinit();
+        const io = threaded.io();
 
         defer sdl3.shutdown();
         const init_flags = sdl3.InitFlags{ .video = true, .events = true };
@@ -22,26 +30,28 @@ pub fn main() !void {
 
         const surface = try window.getSurface();
 
-        const allocator = std.heap.smp_allocator;
-
         var module = try spv.Module.init(allocator, @ptrCast(@alignCast(shader_source)), .{});
         defer module.deinit(allocator);
 
-        var runner_cache: std.ArrayList(Runner) = try .initCapacity(allocator, screen_height);
+        const fragment_count = screen_height * screen_width;
+
+        const batch_size = switch (threaded.async_limit) {
+            .nothing => 1,
+            .unlimited => std.Thread.getCpuCount() catch 1, // If we cannot get the CPU count, fallback on single runtime
+            else => |count| @intFromEnum(count),
+        };
+
+        const runners: []Runner = try allocator.alloc(Runner, batch_size);
         defer {
-            for (runner_cache.items) |*runner| {
-                allocator.free(runner.heap);
+            for (runners) |*runner| {
+                runner.rt.deinit(allocator);
             }
-            runner_cache.deinit(allocator);
+            allocator.free(runners);
         }
 
-        for (0..screen_height) |_| {
-            const heap = try allocator.alloc(u8, module.needed_runtime_bytes);
-            errdefer allocator.free(heap);
-
-            var buffer_allocator: std.heap.FixedBufferAllocator = .init(heap);
-            var rt = try spv.Runtime.init(buffer_allocator.allocator(), &module);
-            (try runner_cache.addOne(allocator)).* = .{
+        for (runners) |*runner| {
+            var rt = try spv.Runtime.init(allocator, &module, undefined);
+            runner.* = .{
                 .allocator = allocator,
                 .surface = surface,
                 .rt = rt,
@@ -50,15 +60,13 @@ pub fn main() !void {
                 .time = try rt.getResultByName("time"),
                 .pos = try rt.getResultByName("pos"),
                 .res = try rt.getResultByName("res"),
-                .heap = heap,
+                .invocation_count = fragment_count,
+                .batch_size = batch_size,
             };
         }
+        const timer = std.Io.Timestamp.now(io, .real);
 
-        var thread_pool: std.Thread.Pool = undefined;
-        try thread_pool.init(.{ .allocator = allocator });
-
-        var timer = try std.time.Timer.start();
-
+        var wg: std.Io.Group = .init;
         var quit = false;
         while (!quit) {
             try surface.clear(.{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 });
@@ -76,21 +84,13 @@ pub fn main() !void {
 
                 const pixel_map: [*]u32 = @as([*]u32, @ptrCast(@alignCast((surface.getPixels() orelse return).ptr)));
 
-                const delta: f32 = @as(f32, @floatFromInt(timer.read())) / std.time.ns_per_s;
+                const duration = timer.untilNow(io, .real);
+                const delta: f32 = @as(f32, @floatFromInt(duration.toNanoseconds())) / std.time.ns_per_s;
 
-                var frame_timer = try std.time.Timer.start();
-                defer {
-                    const ns = frame_timer.lap();
-                    const ms = @as(f32, @floatFromInt(ns)) / std.time.ns_per_s;
-                    std.log.info("Took {d:.3}s - {d:.3}fps to render", .{ ms, 1.0 / ms });
+                for (0..@min(batch_size, fragment_count)) |batch_id| {
+                    wg.async(io, Runner.runWrapper, .{ &runners[batch_id], batch_id, pixel_map, delta });
                 }
-
-                var wait_group: std.Thread.WaitGroup = .{};
-                for (0..screen_height) |y| {
-                    const runner = &runner_cache.items[y];
-                    thread_pool.spawnWg(&wait_group, Runner.runWrapper, .{ runner, y, pixel_map, delta });
-                }
-                thread_pool.waitAndWork(&wait_group);
+                try wg.await(io);
             }
 
             try window.updateSurface();
@@ -110,24 +110,29 @@ const Runner = struct {
     time: spv.SpvWord,
     pos: spv.SpvWord,
     res: spv.SpvWord,
-    heap: []u8,
+    invocation_count: usize,
+    batch_size: usize,
 
-    fn runWrapper(self: *Self, y: usize, pixel_map: [*]u32, timer: f32) void {
-        @call(.always_inline, Self.run, .{ self, y, pixel_map, timer }) catch |err| {
+    fn runWrapper(self: *Self, batch_id: usize, pixel_map: [*]u32, timer: f32) void {
+        @call(.always_inline, Self.run, .{ self, batch_id, pixel_map, timer }) catch |err| {
             std.log.err("{s}", .{@errorName(err)});
             if (@errorReturnTrace()) |trace| {
-                std.debug.dumpStackTrace(trace.*);
+                std.debug.dumpErrorReturnTrace(trace);
             }
             std.process.abort();
         };
     }
 
-    fn run(self: *Self, y: usize, pixel_map: [*]u32, timer: f32) !void {
+    fn run(self: *Self, batch_id: usize, pixel_map: [*]u32, timer: f32) !void {
         var rt = self.rt; // Copy to avoid pointer access of `self` at runtime. Okay as Runtime contains only pointers and trivially copyable fields
 
         var output: [4]f32 = undefined;
 
-        for (0..screen_width) |x| {
+        var invocation_index: usize = batch_id;
+        while (invocation_index < self.invocation_count) : (invocation_index += self.batch_size) {
+            const y = @divTrunc(invocation_index, screen_width);
+            const x = @mod(invocation_index, screen_width);
+
             try rt.writeInput(std.mem.asBytes(&timer), self.time);
             try rt.writeInput(std.mem.asBytes(&[_]f32{ @floatFromInt(screen_width), @floatFromInt(screen_height) }), self.res);
             try rt.writeInput(std.mem.asBytes(&[_]f32{ @floatFromInt(x), @floatFromInt(y) }), self.pos);
@@ -135,13 +140,13 @@ const Runner = struct {
             try rt.readOutput(std.mem.asBytes(output[0..]), self.color);
 
             const rgba = self.surface.mapRgba(
-                @intCast(@max(@min(@as(i32, @intFromFloat(output[0] * 255.0)), 255), 0)),
-                @intCast(@max(@min(@as(i32, @intFromFloat(output[1] * 255.0)), 255), 0)),
-                @intCast(@max(@min(@as(i32, @intFromFloat(output[2] * 255.0)), 255), 0)),
-                @intCast(@max(@min(@as(i32, @intFromFloat(output[3] * 255.0)), 255), 0)),
+                @intCast(std.math.clamp(@as(i32, @intFromFloat(output[0] * 255.0)), 0, 255)),
+                @intCast(std.math.clamp(@as(i32, @intFromFloat(output[1] * 255.0)), 0, 255)),
+                @intCast(std.math.clamp(@as(i32, @intFromFloat(output[2] * 255.0)), 0, 255)),
+                @intCast(std.math.clamp(@as(i32, @intFromFloat(output[3] * 255.0)), 0, 255)),
             );
 
-            pixel_map[(y * self.surface.getWidth()) + x] = rgba.value;
+            pixel_map[invocation_index] = rgba.value;
         }
     }
 };
