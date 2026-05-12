@@ -75,7 +75,6 @@ input_locations: [lib.SPIRV_MAX_INPUT_LOCATIONS]SpvWord,
 output_locations: [lib.SPIRV_MAX_OUTPUT_LOCATIONS]SpvWord,
 bindings: [lib.SPIRV_MAX_SET][lib.SPIRV_MAX_SET_BINDINGS]SpvWord,
 builtins: std.EnumMap(spv.SpvBuiltIn, SpvWord),
-push_constants: []Value,
 
 pub fn init(allocator: std.mem.Allocator, source: []const SpvWord, options: ModuleOptions) ModuleError!Self {
     var self: Self = std.mem.zeroInit(Self, .{
@@ -198,12 +197,7 @@ fn findAccessChainToMember(self: *const Self, base_id: SpvWord, member_index: Sp
     return null;
 }
 
-fn applyInterfaceDecoration(
-    self: *Self,
-    storage_class: spv.SpvStorageClass,
-    decoration: Result.Decoration,
-    id: SpvWord,
-) ModuleError!void {
+fn applyInterfaceDecoration(self: *Self, storage_class: spv.SpvStorageClass, decoration: Result.Decoration, id: SpvWord) ModuleError!void {
     switch (storage_class) {
         .Input => switch (decoration.rtype) {
             .BuiltIn => self.builtins.put(
@@ -225,12 +219,7 @@ fn applyInterfaceDecoration(
     }
 }
 
-fn applyStructMemberInterfaceDecorations(
-    self: *Self,
-    storage_class: spv.SpvStorageClass,
-    type_word: SpvWord,
-    id: SpvWord,
-) ModuleError!void {
+fn applyStructMemberInterfaceDecorations(self: *Self, storage_class: spv.SpvStorageClass, type_word: SpvWord, id: SpvWord) ModuleError!void {
     switch (storage_class) {
         .Input, .Output => {},
         else => return,
@@ -281,7 +270,10 @@ fn applyDecorations(self: *Self) ModuleError!void {
                     try self.applyInterfaceDecoration(v.storage_class, decoration, @intCast(id));
 
                     switch (v.storage_class) {
-                        .StorageBuffer, .Uniform, .UniformConstant => {
+                        .StorageBuffer,
+                        .Uniform,
+                        .UniformConstant,
+                        => {
                             switch (decoration.rtype) {
                                 .Binding => binding = decoration.literal_1,
                                 .DescriptorSet => set = decoration.literal_1,

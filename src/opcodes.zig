@@ -1197,7 +1197,7 @@ fn setupAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runt
             .target = var_type,
             .base = base_id,
             .indexes = indexes,
-            .value = try Value.init(allocator, rt.results, var_type, false),
+            .value = try Value.initUnresolved(allocator, rt.results, var_type, false),
         },
     };
 }
@@ -3267,6 +3267,7 @@ fn opVariable(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) R
     const externally_visible_data_storages = [_]spv.SpvStorageClass{
         .Uniform,
         .StorageBuffer,
+        .PushConstant,
     };
 
     const is_externally_visible = std.mem.containsAtLeastScalar(spv.SpvStorageClass, &externally_visible_data_storages, 1, storage_class);

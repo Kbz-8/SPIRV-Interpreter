@@ -143,9 +143,13 @@ pub const Value = union(Type) {
 
     pub fn init(allocator: std.mem.Allocator, results: []const Result, target_type: SpvWord, is_externally_visible: bool) RuntimeError!Self {
         const resolved = results[target_type].resolveTypeWordOrNull() orelse target_type;
-        const member_count = results[resolved].getMemberCounts();
+        return initUnresolved(allocator, results, resolved, is_externally_visible);
+    }
 
-        return switch (results[resolved].variant.?) {
+    pub fn initUnresolved(allocator: std.mem.Allocator, results: []const Result, target_type: SpvWord, is_externally_visible: bool) RuntimeError!Self {
+        const member_count = results[target_type].getMemberCounts();
+
+        return switch (results[target_type].variant.?) {
             .Type => |t| switch (t) {
                 .Void => .{ .Void = .{} },
                 .Bool => .{ .Bool = false },
@@ -233,12 +237,17 @@ pub const Value = union(Type) {
                 },
                 .Image => .{
                     .Image = .{
-                        .type_word = resolved,
+                        .type_word = target_type,
                         .driver_image = undefined,
                     },
                 },
                 .Sampler => RuntimeError.ToDo,
                 .SampledImage => RuntimeError.ToDo,
+                .Pointer => .{
+                    .Pointer = .{
+                        .ptr = undefined,
+                    },
+                },
                 else => RuntimeError.InvalidSpirV,
             },
             else => RuntimeError.InvalidSpirV,

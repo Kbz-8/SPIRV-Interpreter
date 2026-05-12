@@ -240,6 +240,17 @@ fn pass(self: *Self, allocator: std.mem.Allocator, op_set: ?std.EnumSet(spv.SpvO
     }
 }
 
+pub fn populatePushConstants(self: *Self, blob: []const u8) RuntimeError!void {
+    for (self.results) |*result| {
+        if (result.variant == null or std.meta.activeTag(result.variant.?) != .Variable)
+            continue;
+        const variable = &result.variant.?.Variable;
+        if (variable.storage_class != .PushConstant)
+            continue;
+        _ = try variable.value.writeConst(blob);
+    }
+}
+
 pub fn writeDescriptorSet(self: *const Self, input: []const u8, set: SpvWord, binding: SpvWord, descriptor_index: SpvWord) RuntimeError!void {
     if (set < lib.SPIRV_MAX_SET and binding < lib.SPIRV_MAX_SET_BINDINGS) {
         const value = &self.results[self.mod.bindings[set][binding]].variant.?.Variable.value;
