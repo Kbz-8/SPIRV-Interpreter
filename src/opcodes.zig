@@ -1452,7 +1452,13 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                         end_offset = @max(end_offset, field_offset + try field.getPlainMemorySize());
                                     }
                                     const member_offset: usize = @intCast(s.offsets[component_index] orelse end_offset);
-                                    uniform_slice_window = try helpers.advanceWindow(uniform_slice_window, member_offset);
+
+                                    if (uniform_slice_window != null) {
+                                        uniform_slice_window = try helpers.advanceWindow(uniform_slice_window, member_offset);
+                                    } else if (s.external_data) |data| {
+                                        uniform_slice_window = data[0..];
+                                    }
+
                                     value_ptr = &s.values[component_index];
                                 },
                                 .RuntimeArray => |*arr| {

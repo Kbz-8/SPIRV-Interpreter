@@ -253,7 +253,7 @@ pub fn populatePushConstants(self: *Self, blob: []const u8) RuntimeError!void {
 
 pub fn writeDescriptorSet(self: *const Self, input: []const u8, set: SpvWord, binding: SpvWord, descriptor_index: SpvWord) RuntimeError!void {
     if (set < lib.SPIRV_MAX_SET and binding < lib.SPIRV_MAX_SET_BINDINGS) {
-        const value = &self.results[self.mod.bindings[set][binding]].variant.?.Variable.value;
+        const value = &(self.results[self.mod.bindings[set][binding]].variant orelse return).Variable.value;
         switch (value.*) {
             .Array => |arr| {
                 if (descriptor_index >= arr.values.len)

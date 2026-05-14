@@ -103,6 +103,7 @@ pub const Value = union(Type) {
         }
     },
     Structure: struct {
+        external_data: ?[]u8,
         offsets: []const ?SpvWord,
         values: []Self,
     },
@@ -217,6 +218,7 @@ pub const Value = union(Type) {
                 .Structure => |s| blk: {
                     const self: Self = .{
                         .Structure = .{
+                            .external_data = null,
                             .offsets = allocator.dupe(?SpvWord, s.members_offsets) catch return RuntimeError.OutOfMemory,
                             .values = allocator.alloc(Self, member_count) catch return RuntimeError.OutOfMemory,
                         },
@@ -290,6 +292,7 @@ pub const Value = union(Type) {
                     errdefer allocator.free(values);
                     for (values, s.values) |*new_value, value| new_value.* = try value.dupe(allocator);
                     break :blk .{
+                        .external_data = s.external_data,
                         .offsets = allocator.dupe(?SpvWord, s.offsets) catch return RuntimeError.OutOfMemory,
                         .values = values,
                     };
@@ -429,6 +432,7 @@ pub const Value = union(Type) {
                 }
                 return end_offset;
             },
+            .RuntimeArray => {},
             else => return RuntimeError.InvalidValueType,
         }
         return 0;
@@ -559,13 +563,14 @@ pub const Value = union(Type) {
                 }
                 return offset;
             },
-            .Structure => |s| {
+            .Structure => |*s| {
                 var end_offset: usize = 0;
                 for (s.values, 0..) |*v, i| {
                     const member_offset: usize = @intCast(s.offsets[i] orelse end_offset);
                     const write_size = try v.write(input[member_offset..]);
                     end_offset = @max(end_offset, member_offset + write_size);
                 }
+                s.external_data = input[0..end_offset];
                 return end_offset;
             },
             .RuntimeArray => |*arr| arr.data = input[0..],
@@ -649,15 +654,15 @@ pub const Value = union(Type) {
                         },
                         .f32_ptr => |ptr| {
                             if (window.len < @sizeOf(f32)) return RuntimeError.OutOfBounds;
-                            std.mem.copyForwards(u8, window[0..@sizeOf(f32)], std.mem.asBytes(ptr));
+                            @memcpy(window[0..@sizeOf(f32)], std.mem.asBytes(ptr));
                         },
                         .i32_ptr => |ptr| {
                             if (window.len < @sizeOf(i32)) return RuntimeError.OutOfBounds;
-                            std.mem.copyForwards(u8, window[0..@sizeOf(i32)], std.mem.asBytes(ptr));
+                            @memcpy(window[0..@sizeOf(i32)], std.mem.asBytes(ptr));
                         },
                         .u32_ptr => |ptr| {
                             if (window.len < @sizeOf(u32)) return RuntimeError.OutOfBounds;
-                            std.mem.copyForwards(u8, window[0..@sizeOf(u32)], std.mem.asBytes(ptr));
+                            @memcpy(window[0..@sizeOf(u32)], std.mem.asBytes(ptr));
                         },
                     }
 
