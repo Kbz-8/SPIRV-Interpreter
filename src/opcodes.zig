@@ -1687,14 +1687,8 @@ fn opCompositeConstruct(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime)
             }
         },
         .RuntimeArray => |arr| {
-            var offset: usize = 0;
-
-            for (0..index_count) |_| {
-                // DOES NOT WORK : FIXME
-                const elem_value = (try rt.results[try rt.it.next()].getVariant()).Constant.value;
-                std.mem.copyForwards(u8, arr.data[offset..(offset + arr.stride)], std.mem.asBytes(&elem_value));
-                offset += arr.stride;
-            }
+            _ = arr;
+            return RuntimeError.ToDo;
         },
         else => try vectorRoutines(value, rt),
     }
