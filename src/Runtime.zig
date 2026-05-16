@@ -55,10 +55,10 @@ pub fn Vec4(comptime T: type) type {
 }
 
 pub const ImageAPI = struct {
-    readImageFloat4: *const fn (driver_image: *anyopaque, x: i32, y: i32, z: i32) RuntimeError!Vec4(f32),
-    readImageInt4: *const fn (driver_image: *anyopaque, x: i32, y: i32, z: i32) RuntimeError!Vec4(u32),
-    writeImageFloat4: *const fn (driver_image: *anyopaque, x: i32, y: i32, z: i32, pixel: Vec4(f32)) RuntimeError!void,
-    writeImageInt4: *const fn (driver_image: *anyopaque, x: i32, y: i32, z: i32, pixel: Vec4(u32)) RuntimeError!void,
+    readImageFloat4: *const fn (driver_image: *anyopaque, dim: spv.SpvDim, x: i32, y: i32, z: i32) RuntimeError!Vec4(f32),
+    readImageInt4: *const fn (driver_image: *anyopaque, dim: spv.SpvDim, x: i32, y: i32, z: i32) RuntimeError!Vec4(u32),
+    writeImageFloat4: *const fn (driver_image: *anyopaque, dim: spv.SpvDim, x: i32, y: i32, z: i32, pixel: Vec4(f32)) RuntimeError!void,
+    writeImageInt4: *const fn (driver_image: *anyopaque, dim: spv.SpvDim, x: i32, y: i32, z: i32, pixel: Vec4(u32)) RuntimeError!void,
 };
 
 mod: *Module,

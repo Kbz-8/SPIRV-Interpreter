@@ -2495,8 +2495,14 @@ fn opImageRead(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void
     const coordinate = try rt.results[try rt.it.next()].getValue();
     const dst = try rt.results[result_id].getValue();
 
-    const driver_image = switch ((try image.getValue()).*) {
-        .Image => |img| img.driver_image,
+    const driver_image, const image_type = switch ((try image.getValue()).*) {
+        .Image => |img| .{ img.driver_image, switch ((try rt.results[img.type_word].getConstVariant()).*) {
+            .Type => |t| switch (t) {
+                .Image => |i| i,
+                else => return RuntimeError.InvalidSpirV,
+            },
+            else => return RuntimeError.InvalidSpirV,
+        } },
         else => return RuntimeError.InvalidSpirV,
     };
 
@@ -2586,13 +2592,13 @@ fn opImageRead(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void
     const z = helpers.readCoordLane(coordinate, 2) catch 0;
 
     switch (dst.*) {
-        .Vector4f32, .Vector3f32, .Vector2f32 => try helpers.writeFloatTexel(dst, try rt.image_api.readImageFloat4(driver_image, x, y, z)),
-        .Vector4i32, .Vector3i32, .Vector2i32, .Vector4u32, .Vector3u32, .Vector2u32 => try helpers.writeIntTexel(dst, try rt.image_api.readImageInt4(driver_image, x, y, z)),
+        .Vector4f32, .Vector3f32, .Vector2f32 => try helpers.writeFloatTexel(dst, try rt.image_api.readImageFloat4(driver_image, image_type.dim, x, y, z)),
+        .Vector4i32, .Vector3i32, .Vector2i32, .Vector4u32, .Vector3u32, .Vector2u32 => try helpers.writeIntTexel(dst, try rt.image_api.readImageInt4(driver_image, image_type.dim, x, y, z)),
         .Vector => |lanes| {
             if (lanes.len == 0) return RuntimeError.InvalidSpirV;
             switch (lanes[0]) {
-                .Float => try helpers.writeFloatTexel(dst, try rt.image_api.readImageFloat4(driver_image, x, y, z)),
-                .Int => try helpers.writeIntTexel(dst, try rt.image_api.readImageInt4(driver_image, x, y, z)),
+                .Float => try helpers.writeFloatTexel(dst, try rt.image_api.readImageFloat4(driver_image, image_type.dim, x, y, z)),
+                .Int => try helpers.writeIntTexel(dst, try rt.image_api.readImageInt4(driver_image, image_type.dim, x, y, z)),
                 else => return RuntimeError.InvalidValueType,
             }
         },
@@ -2605,8 +2611,14 @@ fn opImageWrite(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!voi
     const coordinate = try rt.results[try rt.it.next()].getValue();
     const texel = try rt.results[try rt.it.next()].getValue();
 
-    const driver_image = switch ((try image.getValue()).*) {
-        .Image => |img| img.driver_image,
+    const driver_image, const image_type = switch ((try image.getValue()).*) {
+        .Image => |img| .{ img.driver_image, switch ((try rt.results[img.type_word].getConstVariant()).*) {
+            .Type => |t| switch (t) {
+                .Image => |i| i,
+                else => return RuntimeError.InvalidSpirV,
+            },
+            else => return RuntimeError.InvalidSpirV,
+        } },
         else => return RuntimeError.InvalidSpirV,
     };
 
@@ -2741,7 +2753,7 @@ fn opImageWrite(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!voi
         .Vector4f32,
         .Vector3f32,
         .Vector2f32,
-        => try rt.image_api.writeImageFloat4(driver_image, x, y, z, try helpers.readFloatTexel(texel)),
+        => try rt.image_api.writeImageFloat4(driver_image, image_type.dim, x, y, z, try helpers.readFloatTexel(texel)),
         .Int,
         .Vector4i32,
         .Vector3i32,
@@ -2749,12 +2761,12 @@ fn opImageWrite(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!voi
         .Vector4u32,
         .Vector3u32,
         .Vector2u32,
-        => try rt.image_api.writeImageInt4(driver_image, x, y, z, try helpers.readIntTexel(texel)),
+        => try rt.image_api.writeImageInt4(driver_image, image_type.dim, x, y, z, try helpers.readIntTexel(texel)),
         .Vector => |lanes| {
             if (lanes.len == 0) return RuntimeError.InvalidSpirV;
             switch (lanes[0]) {
-                .Float => try rt.image_api.writeImageFloat4(driver_image, x, y, z, try helpers.readFloatTexel(texel)),
-                .Int => try rt.image_api.writeImageInt4(driver_image, x, y, z, try helpers.readIntTexel(texel)),
+                .Float => try rt.image_api.writeImageFloat4(driver_image, image_type.dim, x, y, z, try helpers.readFloatTexel(texel)),
+                .Int => try rt.image_api.writeImageInt4(driver_image, image_type.dim, x, y, z, try helpers.readIntTexel(texel)),
                 else => return RuntimeError.InvalidValueType,
             }
         },

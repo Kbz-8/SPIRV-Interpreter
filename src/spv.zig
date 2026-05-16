@@ -263,9 +263,9 @@ pub const SpvStorageClass = enum(u32) {
 };
 
 pub const SpvDim = enum(u32) {
-    _1D = 0,
-    _2D = 1,
-    _3D = 2,
+    @"1D" = 0,
+    @"2D" = 1,
+    @"3D" = 2,
     Cube = 3,
     Rect = 4,
     Buffer = 5,

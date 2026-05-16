@@ -27,10 +27,10 @@ const Vec4u = extern struct {
     w: c_uint,
 };
 
-const readImageFloat4_PFN = *const fn (driver_image: ?*anyopaque, x: c_int, y: c_int, z: c_int, dst: *Vec4f) callconv(.c) ffi.Result;
-const readImageInt4_PFN = *const fn (driver_image: ?*anyopaque, x: c_int, y: c_int, z: c_int, dst: *Vec4u) callconv(.c) ffi.Result;
-const writeImageFloat4_PFN = *const fn (driver_image: ?*anyopaque, x: c_int, y: c_int, z: c_int, src: Vec4f) callconv(.c) ffi.Result;
-const writeImageInt4_PFN = *const fn (driver_image: ?*anyopaque, x: c_int, y: c_int, z: c_int, src: Vec4u) callconv(.c) ffi.Result;
+const readImageFloat4_PFN = *const fn (driver_image: ?*anyopaque, dim: spv.spv.SpvDim, x: c_int, y: c_int, z: c_int, dst: *Vec4f) callconv(.c) ffi.Result;
+const readImageInt4_PFN = *const fn (driver_image: ?*anyopaque, dim: spv.spv.SpvDim, x: c_int, y: c_int, z: c_int, dst: *Vec4u) callconv(.c) ffi.Result;
+const writeImageFloat4_PFN = *const fn (driver_image: ?*anyopaque, dim: spv.spv.SpvDim, x: c_int, y: c_int, z: c_int, src: Vec4f) callconv(.c) ffi.Result;
+const writeImageInt4_PFN = *const fn (driver_image: ?*anyopaque, dim: spv.spv.SpvDim, x: c_int, y: c_int, z: c_int, src: Vec4u) callconv(.c) ffi.Result;
 
 const ImageAPI = extern struct {
     readImageFloat4: readImageFloat4_PFN,
@@ -76,18 +76,19 @@ fn fromCResult(res: ffi.Result) spv.Runtime.RuntimeError!void {
     };
 }
 
+/// Hacky wrapper
 const ImageAPIBridge = struct {
-    threadlocal var current_image_api: ?*const ImageAPI = null; // Hacky
+    threadlocal var current_image_api: ?*const ImageAPI = null;
 
     fn getImageAPI() spv.Runtime.RuntimeError!*const ImageAPI {
         return current_image_api orelse spv.Runtime.RuntimeError.Unknown;
     }
 
-    fn readImageFloat4(driver_image: *anyopaque, x: i32, y: i32, z: i32) spv.Runtime.RuntimeError!spv.Runtime.Vec4(f32) {
+    fn readImageFloat4(driver_image: *anyopaque, dim: spv.spv.SpvDim, x: i32, y: i32, z: i32) spv.Runtime.RuntimeError!spv.Runtime.Vec4(f32) {
         const image_api = try getImageAPI();
 
         var dst: Vec4f = undefined;
-        const result = image_api.readImageFloat4(driver_image, @intCast(x), @intCast(y), @intCast(z), &dst);
+        const result = image_api.readImageFloat4(driver_image, dim, @intCast(x), @intCast(y), @intCast(z), &dst);
 
         try fromCResult(result);
 
@@ -99,11 +100,11 @@ const ImageAPIBridge = struct {
         };
     }
 
-    fn readImageInt4(driver_image: *anyopaque, x: i32, y: i32, z: i32) spv.Runtime.RuntimeError!spv.Runtime.Vec4(u32) {
+    fn readImageInt4(driver_image: *anyopaque, dim: spv.spv.SpvDim, x: i32, y: i32, z: i32) spv.Runtime.RuntimeError!spv.Runtime.Vec4(u32) {
         const image_api = try getImageAPI();
 
         var dst: Vec4u = undefined;
-        const result = image_api.readImageInt4(driver_image, @intCast(x), @intCast(y), @intCast(z), &dst);
+        const result = image_api.readImageInt4(driver_image, dim, @intCast(x), @intCast(y), @intCast(z), &dst);
 
         try fromCResult(result);
 
@@ -115,18 +116,18 @@ const ImageAPIBridge = struct {
         };
     }
 
-    fn writeImageFloat4(driver_image: *anyopaque, x: i32, y: i32, z: i32, pixel: spv.Runtime.Vec4(f32)) spv.Runtime.RuntimeError!void {
+    fn writeImageFloat4(driver_image: *anyopaque, dim: spv.spv.SpvDim, x: i32, y: i32, z: i32, pixel: spv.Runtime.Vec4(f32)) spv.Runtime.RuntimeError!void {
         const image_api = try getImageAPI();
 
-        const result = image_api.writeImageFloat4(driver_image, @intCast(x), @intCast(y), @intCast(z), .{ .x = pixel.x, .y = pixel.y, .z = pixel.z, .w = pixel.w });
+        const result = image_api.writeImageFloat4(driver_image, dim, @intCast(x), @intCast(y), @intCast(z), .{ .x = pixel.x, .y = pixel.y, .z = pixel.z, .w = pixel.w });
 
         try fromCResult(result);
     }
 
-    fn writeImageInt4(driver_image: *anyopaque, x: i32, y: i32, z: i32, pixel: spv.Runtime.Vec4(u32)) spv.Runtime.RuntimeError!void {
+    fn writeImageInt4(driver_image: *anyopaque, dim: spv.spv.SpvDim, x: i32, y: i32, z: i32, pixel: spv.Runtime.Vec4(u32)) spv.Runtime.RuntimeError!void {
         const image_api = try getImageAPI();
 
-        const result = image_api.writeImageInt4(driver_image, @intCast(x), @intCast(y), @intCast(z), .{ .x = pixel.x, .y = pixel.y, .z = pixel.z, .w = pixel.w });
+        const result = image_api.writeImageInt4(driver_image, dim, @intCast(x), @intCast(y), @intCast(z), .{ .x = pixel.x, .y = pixel.y, .z = pixel.z, .w = pixel.w });
 
         try fromCResult(result);
     }

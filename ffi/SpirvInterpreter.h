@@ -38,112 +38,7 @@ extern "C"
 #endif
 
 #ifndef spirv_H
-	typedef enum SpvBuiltIn_ SpvBuiltIn;
-	typedef enum SpvDecoration_ SpvDecoration;
-#endif /* spirv_H */
-
-typedef int SpvBool;
-typedef unsigned char SpvByte;
-typedef unsigned long SpvWord;
-typedef unsigned long SpvSize;
-
-typedef enum
-{
-	SPV_RESULT_SUCCESS = 0,
-	SPV_RESULT_DIVISION_BY_ZERO = -1,
-	SPV_RESULT_INVALID_ENTRY_POINT = -2,
-	SPV_RESULT_INVALID_SPIRV = -3,
-	SPV_RESULT_INVALID_VALUE_TYPE = -4,
-	SPV_RESULT_KILLED = -5,
-	SPV_RESULT_NOT_FOUND = -6,
-	SPV_RESULT_OUT_OF_MEMORY = -7,
-	SPV_RESULT_OUT_OF_BOUNDS = -8,
-	SPV_RESULT_TODO = -9,
-	SPV_RESULT_UNREACHABLE = -10,
-	SPV_RESULT_UNSUPPORTED_SPIRV = -11,
-	SPV_RESULT_UNSUPPORTED_EXTENSION = -12,
-	SPV_RESULT_UNSUPPORTED_ENDIANNESS = -13,
-	SPV_RESULT_INVALID_MAGIC = -14,
-	SPV_RESULT_UNKNOWN = -15,
-} SpvResult;
-
-typedef struct
-{
-	SpvBool use_simd_vectors_specializations;
-} SpvModuleOptions;
-
-typedef struct
-{
-	SpvWord id;
-	SpvSize offset;
-	SpvSize size;
-} SpvRuntimeSpecializationEntry;
-
-typedef enum
-{
-	SPV_LOCATION_INPUT = 0,
-	SPV_LOCATION_OUTPUT = 1,
-} SpvLocationType;
-
-typedef struct
-{
-	float x;
-	float y;
-	float z;
-	float w;
-} SpvVec4f;
-
-typedef struct
-{
-	unsigned int x;
-	unsigned int y;
-	unsigned int z;
-	unsigned int w;
-} SpvVec4u;
-
-typedef SpvResult (*SpvReadImageFloat4_PFN)(void* driver_image, int x, int y, int z, SpvVec4f* dst);
-typedef SpvResult (*SpvReadImageInt4_PFN)(void* driver_image, int x, int y, int z, SpvVec4u* dst);
-typedef SpvResult (*SpvWriteImageFloat4_PFN)(void* driver_image, int x, int y, int z, SpvVec4f src);
-typedef SpvResult (*SpvWriteImageInt4_PFN)(void* driver_image, int x, int y, int z, SpvVec4u src);
-
-typedef struct
-{
-	SpvReadImageFloat4_PFN SpvReadImageFloat4;
-	SpvReadImageInt4_PFN  SpvReadImageInt4;
-	SpvWriteImageFloat4_PFN SpvWriteImageFloat4;
-	SpvWriteImageInt4_PFN SpvWriteImageInt4;
-} SpvImageAPI;
-
-typedef void* SpvModule;
-typedef void* SpvRuntime;
-
-SPV_API SpvResult SpvInitModule(SpvModule* module, const SpvWord* source, SpvSize source_len, SpvModuleOptions options);
-SPV_API void SpvDeinitModule(SpvModule module);
-
-SPV_API SpvResult SpvInitRuntime(SpvRuntime* runtime, SpvModule module, SpvImageAPI image_api);
-SPV_API void SpvDeinitRuntime(SpvRuntime runtime);
-
-SPV_API SpvResult SpvFlushDescriptorSets(SpvRuntime runtime);
-
-SPV_API SpvResult SpvAddSpecializationInfo(SpvRuntime runtime, SpvRuntimeSpecializationEntry entry, const SpvByte* data, SpvSize data_size);
-
-SPV_API SpvResult SpvGetResultByName(SpvRuntime runtime, const char* name, SpvWord* result);
-SPV_API SpvResult SpvGetResultLocation(SpvRuntime runtime, SpvWord location, SpvLocationType type, SpvWord* result);
-SPV_API SpvResult SpvGetEntryPointByName(SpvRuntime runtime, const char* name, SpvWord* result);
-SPV_API SpvResult SpvGetResultMemorySize(SpvRuntime runtime, SpvWord result, SpvSize* size);
-SPV_API SpvBool SpvHasResultDecoration(SpvRuntime runtime, SpvWord result, SpvDecoration decoration);
-
-SPV_API SpvResult SpvCallEntryPoint(SpvRuntime runtime, SpvWord entry_point_index);
-
-SPV_API SpvResult SpvReadOutput(SpvRuntime runtime, SpvByte* output, SpvSize output_size, SpvWord result);
-SPV_API SpvResult SpvReadBuiltIn(SpvRuntime runtime, SpvByte* output, SpvSize output_size, SpvBuiltIn builtin);
-
-SPV_API SpvResult SpvWriteInput(SpvRuntime runtime, const SpvByte* input, SpvSize input_size, SpvWord result);
-SPV_API SpvResult SpvWriteBuiltIn(SpvRuntime runtime, const SpvByte* input, SpvSize input_size, SpvBuiltIn builtin);
-SPV_API SpvResult SpvWriteDescriptorSet(SpvRuntime runtime, const SpvByte* input, SpvSize input_size, SpvWord set, SpvWord binding, SpvWord descriptor_index);
-
-#ifndef spirv_H
-	enum SpvBuiltIn_
+	typedef enum SpvBuiltIn_
 	{
 		SpvBuiltInPosition = 0,
 		SpvBuiltInPointSize = 1,
@@ -295,8 +190,8 @@ SPV_API SpvResult SpvWriteDescriptorSet(SpvRuntime runtime, const SpvByte* input
 		SpvBuiltInHitLSSRadiiNV = 5421,
 		SpvBuiltInClusterIDNV = 5436,
 		SpvBuiltInCullMaskKHR = 6021,
-		SpvBuiltInMax = 0x7fffffff,
-	};
+		SpvBuiltInMax = 0x7fffffff
+	} SpvBuiltIn;
 
 	typedef enum SpvDecoration_ {
 		SpvDecorationRelaxedPrecision = 0,
@@ -497,9 +392,121 @@ SPV_API SpvResult SpvWriteDescriptorSet(SpvRuntime runtime, const SpvByte* input
 		SpvDecorationConditionalINTEL = 6247,
 		SpvDecorationCacheControlLoadINTEL = 6442,
 		SpvDecorationCacheControlStoreINTEL = 6443,
-		SpvDecorationMax = 0x7fffffff,
+		SpvDecorationMax = 0x7fffffff
 	} SpvDecoration;
+
+	typedef enum SpvDim_ {
+		_1D = 0,
+		_2D = 1,
+		_3D = 2,
+		Cube = 3,
+		Rect = 4,
+		Buffer = 5,
+		SubpassData = 6,
+		TileImageDataEXT = 4173,
+		Max = 0x7fffffff
+	} SpvDim;
 #endif /* spirv_H */
+
+typedef int SpvBool;
+typedef unsigned char SpvByte;
+typedef unsigned long SpvWord;
+typedef unsigned long SpvSize;
+
+typedef enum
+{
+	SPV_RESULT_SUCCESS = 0,
+	SPV_RESULT_DIVISION_BY_ZERO = -1,
+	SPV_RESULT_INVALID_ENTRY_POINT = -2,
+	SPV_RESULT_INVALID_SPIRV = -3,
+	SPV_RESULT_INVALID_VALUE_TYPE = -4,
+	SPV_RESULT_KILLED = -5,
+	SPV_RESULT_NOT_FOUND = -6,
+	SPV_RESULT_OUT_OF_MEMORY = -7,
+	SPV_RESULT_OUT_OF_BOUNDS = -8,
+	SPV_RESULT_TODO = -9,
+	SPV_RESULT_UNREACHABLE = -10,
+	SPV_RESULT_UNSUPPORTED_SPIRV = -11,
+	SPV_RESULT_UNSUPPORTED_EXTENSION = -12,
+	SPV_RESULT_UNSUPPORTED_ENDIANNESS = -13,
+	SPV_RESULT_INVALID_MAGIC = -14,
+	SPV_RESULT_UNKNOWN = -15
+} SpvResult;
+
+typedef struct
+{
+	SpvBool use_simd_vectors_specializations;
+} SpvModuleOptions;
+
+typedef struct
+{
+	SpvWord id;
+	SpvSize offset;
+	SpvSize size;
+} SpvRuntimeSpecializationEntry;
+
+typedef enum
+{
+	SPV_LOCATION_INPUT = 0,
+	SPV_LOCATION_OUTPUT = 1
+} SpvLocationType;
+
+typedef struct
+{
+	float x;
+	float y;
+	float z;
+	float w;
+} SpvVec4f;
+
+typedef struct
+{
+	unsigned int x;
+	unsigned int y;
+	unsigned int z;
+	unsigned int w;
+} SpvVec4u;
+
+typedef SpvResult (*SpvReadImageFloat4_PFN)(void* driver_image, SpvDim dim, int x, int y, int z, SpvVec4f* dst);
+typedef SpvResult (*SpvReadImageInt4_PFN)(void* driver_image, SpvDim dim, int x, int y, int z, SpvVec4u* dst);
+typedef SpvResult (*SpvWriteImageFloat4_PFN)(void* driver_image, SpvDim dim, int x, int y, int z, SpvVec4f src);
+typedef SpvResult (*SpvWriteImageInt4_PFN)(void* driver_image, SpvDim dim, int x, int y, int z, SpvVec4u src);
+
+typedef struct
+{
+	SpvReadImageFloat4_PFN SpvReadImageFloat4;
+	SpvReadImageInt4_PFN  SpvReadImageInt4;
+	SpvWriteImageFloat4_PFN SpvWriteImageFloat4;
+	SpvWriteImageInt4_PFN SpvWriteImageInt4;
+} SpvImageAPI;
+
+typedef void* SpvModule;
+typedef void* SpvRuntime;
+
+SPV_API SpvResult SpvInitModule(SpvModule* module, const SpvWord* source, SpvSize source_len, SpvModuleOptions options);
+SPV_API void SpvDeinitModule(SpvModule module);
+
+SPV_API SpvResult SpvInitRuntime(SpvRuntime* runtime, SpvModule module, SpvImageAPI image_api);
+SPV_API void SpvDeinitRuntime(SpvRuntime runtime);
+
+SPV_API SpvResult SpvFlushDescriptorSets(SpvRuntime runtime);
+
+SPV_API SpvResult SpvAddSpecializationInfo(SpvRuntime runtime, SpvRuntimeSpecializationEntry entry, const SpvByte* data, SpvSize data_size);
+
+SPV_API SpvResult SpvGetResultByName(SpvRuntime runtime, const char* name, SpvWord* result);
+SPV_API SpvResult SpvGetResultLocation(SpvRuntime runtime, SpvWord location, SpvLocationType type, SpvWord* result);
+SPV_API SpvResult SpvGetEntryPointByName(SpvRuntime runtime, const char* name, SpvWord* result);
+SPV_API SpvResult SpvGetResultMemorySize(SpvRuntime runtime, SpvWord result, SpvSize* size);
+SPV_API SpvBool SpvHasResultDecoration(SpvRuntime runtime, SpvWord result, SpvDecoration decoration);
+
+SPV_API SpvResult SpvCallEntryPoint(SpvRuntime runtime, SpvWord entry_point_index);
+
+SPV_API SpvResult SpvReadOutput(SpvRuntime runtime, SpvByte* output, SpvSize output_size, SpvWord result);
+SPV_API SpvResult SpvReadBuiltIn(SpvRuntime runtime, SpvByte* output, SpvSize output_size, SpvBuiltIn builtin);
+
+SPV_API SpvResult SpvWriteInput(SpvRuntime runtime, const SpvByte* input, SpvSize input_size, SpvWord result);
+SPV_API SpvResult SpvWriteBuiltIn(SpvRuntime runtime, const SpvByte* input, SpvSize input_size, SpvBuiltIn builtin);
+SPV_API SpvResult SpvWriteDescriptorSet(SpvRuntime runtime, const SpvByte* input, SpvSize input_size, SpvWord set, SpvWord binding, SpvWord descriptor_index);
 
 #ifdef __cplusplus
 }

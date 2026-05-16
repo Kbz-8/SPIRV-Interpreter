@@ -41,6 +41,8 @@ pub const SpvByte = spv.SpvByte;
 pub const SpvWord = spv.SpvWord;
 pub const SpvBool = spv.SpvBool;
 
+pub const SpvDim = spv.SpvDim;
+
 pub const Vec4f32 = @Vector(4, f32);
 pub const Vec3f32 = @Vector(3, f32);
 pub const Vec2f32 = @Vector(2, f32);
