@@ -74,6 +74,8 @@ pub const OpCodeExtFunc = *const fn (std.mem.Allocator, SpvWord, SpvWord, SpvWor
 pub const SetupDispatcher = block: {
     @setEvalBranchQuota(65535);
     break :block std.EnumMap(spv.SpvOp, OpCodeFunc).init(.{
+        .All = autoSetupConstant,
+        .Any = autoSetupConstant,
         .AtomicAnd = autoSetupConstant,
         .AtomicCompareExchange = autoSetupConstant,
         .AtomicExchange = autoSetupConstant,
@@ -222,6 +224,8 @@ pub var runtime_dispatcher = [_]?OpCodeFunc{null} ** spv.SpvOpMaxValue;
 
 pub fn initRuntimeDispatcher() void {
     // zig fmt: off
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.All)]                    = opAll;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.Any)]                    = opAny;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.AccessChain)]            = opAccessChain;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.AtomicLoad)]             = opLoad;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.AtomicStore)]            = opAtomicStore;
@@ -345,6 +349,58 @@ fn extEqlName(a: []const u8, b: []const u8) bool {
 const extensions_map = std.StaticStringMapWithEql([]?OpCodeExtFunc, extEqlName).initComptime(.{
     .{ "GLSL.std.450", GLSL_std_450.runtime_dispatcher[0..] },
 });
+
+fn opAll(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    _ = rt.it.skip();
+    const dst_value = try rt.results[try rt.it.next()].getValue();
+    const vec_value = try rt.results[try rt.it.next()].getValue();
+
+    switch (dst_value.*) {
+        .Bool => |*b| b.* = blk: {
+            switch (vec_value.*) {
+                .Vector => |vec| for (vec[0..]) |elem| {
+                    switch (elem) {
+                        .Bool => |val| {
+                            if (!val)
+                                break :blk false;
+                        },
+                        else => return RuntimeError.InvalidValueType,
+                    }
+                },
+                else => return RuntimeError.InvalidValueType,
+            }
+
+            break :blk true;
+        },
+        else => return RuntimeError.InvalidValueType,
+    }
+}
+
+fn opAny(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    _ = rt.it.skip();
+    const dst_value = try rt.results[try rt.it.next()].getValue();
+    const vec_value = try rt.results[try rt.it.next()].getValue();
+
+    switch (dst_value.*) {
+        .Bool => |*b| b.* = blk: {
+            switch (vec_value.*) {
+                .Vector => |vec| for (vec[0..]) |elem| {
+                    switch (elem) {
+                        .Bool => |val| {
+                            if (val)
+                                break :blk true;
+                        },
+                        else => return RuntimeError.InvalidValueType,
+                    }
+                },
+                else => return RuntimeError.InvalidValueType,
+            }
+
+            break :blk false;
+        },
+        else => return RuntimeError.InvalidValueType,
+    }
+}
 
 fn BitOperator(comptime T: PrimitiveType, comptime Op: BitOp) type {
     return struct {
@@ -583,7 +639,12 @@ fn CondOperator(comptime T: PrimitiveType, comptime Op: CondOp) type {
     return struct {
         inline fn isUnaryOp() bool {
             return comptime switch (Op) {
-                .IsFinite, .IsInf, .IsNan, .IsNormal, .LogicalNot => true,
+                .IsFinite,
+                .IsInf,
+                .IsNan,
+                .IsNormal,
+                .LogicalNot,
+                => true,
                 else => false,
             };
         }
@@ -1685,32 +1746,104 @@ fn opCompositeConstruct(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime)
         fn routines(value2: *Value, rt2: *Runtime) RuntimeError!void {
             switch (value2.*) {
                 .Vector4f32 => |*vec| inline for (0..4) |i| {
-                    vec[i] = (try rt2.results[try rt2.it.next()].getVariant()).Constant.value.Float.value.float32;
+                    switch ((try rt2.results[try rt2.it.next()].getVariant()).Constant.value) {
+                        .Vector4f32 => |v| {
+                            vec.* = v;
+                            return;
+                        },
+                        .Float => |f| vec[i] = f.value.float32,
+                        else => return RuntimeError.InvalidValueType,
+                    }
                 },
+
                 .Vector3f32 => |*vec| inline for (0..3) |i| {
-                    vec[i] = (try rt2.results[try rt2.it.next()].getVariant()).Constant.value.Float.value.float32;
+                    switch ((try rt2.results[try rt2.it.next()].getVariant()).Constant.value) {
+                        .Vector3f32 => |v| {
+                            vec.* = v;
+                            return;
+                        },
+                        .Float => |f| vec[i] = f.value.float32,
+                        else => return RuntimeError.InvalidValueType,
+                    }
                 },
+
                 .Vector2f32 => |*vec| inline for (0..2) |i| {
-                    vec[i] = (try rt2.results[try rt2.it.next()].getVariant()).Constant.value.Float.value.float32;
+                    switch ((try rt2.results[try rt2.it.next()].getVariant()).Constant.value) {
+                        .Vector2f32 => |v| {
+                            vec.* = v;
+                            return;
+                        },
+                        .Float => |f| vec[i] = f.value.float32,
+                        else => return RuntimeError.InvalidValueType,
+                    }
                 },
+
                 .Vector4i32 => |*vec| inline for (0..4) |i| {
-                    vec[i] = (try rt2.results[try rt2.it.next()].getVariant()).Constant.value.Int.value.sint32;
+                    switch ((try rt2.results[try rt2.it.next()].getVariant()).Constant.value) {
+                        .Vector4i32 => |v| {
+                            vec.* = v;
+                            return;
+                        },
+                        .Int => |int| vec[i] = int.value.sint32,
+                        else => return RuntimeError.InvalidValueType,
+                    }
                 },
+
                 .Vector3i32 => |*vec| inline for (0..3) |i| {
-                    vec[i] = (try rt2.results[try rt2.it.next()].getVariant()).Constant.value.Int.value.sint32;
+                    switch ((try rt2.results[try rt2.it.next()].getVariant()).Constant.value) {
+                        .Vector3i32 => |v| {
+                            vec.* = v;
+                            return;
+                        },
+                        .Int => |int| vec[i] = int.value.sint32,
+                        else => return RuntimeError.InvalidValueType,
+                    }
                 },
+
                 .Vector2i32 => |*vec| inline for (0..2) |i| {
-                    vec[i] = (try rt2.results[try rt2.it.next()].getVariant()).Constant.value.Int.value.sint32;
+                    switch ((try rt2.results[try rt2.it.next()].getVariant()).Constant.value) {
+                        .Vector2i32 => |v| {
+                            vec.* = v;
+                            return;
+                        },
+                        .Int => |int| vec[i] = int.value.sint32,
+                        else => return RuntimeError.InvalidValueType,
+                    }
                 },
+
                 .Vector4u32 => |*vec| inline for (0..4) |i| {
-                    vec[i] = (try rt2.results[try rt2.it.next()].getVariant()).Constant.value.Int.value.uint32;
+                    switch ((try rt2.results[try rt2.it.next()].getVariant()).Constant.value) {
+                        .Vector4u32 => |v| {
+                            vec.* = v;
+                            return;
+                        },
+                        .Int => |int| vec[i] = int.value.uint32,
+                        else => return RuntimeError.InvalidValueType,
+                    }
                 },
+
                 .Vector3u32 => |*vec| inline for (0..3) |i| {
-                    vec[i] = (try rt2.results[try rt2.it.next()].getVariant()).Constant.value.Int.value.uint32;
+                    switch ((try rt2.results[try rt2.it.next()].getVariant()).Constant.value) {
+                        .Vector3u32 => |v| {
+                            vec.* = v;
+                            return;
+                        },
+                        .Int => |int| vec[i] = int.value.uint32,
+                        else => return RuntimeError.InvalidValueType,
+                    }
                 },
+
                 .Vector2u32 => |*vec| inline for (0..2) |i| {
-                    vec[i] = (try rt2.results[try rt2.it.next()].getVariant()).Constant.value.Int.value.uint32;
+                    switch ((try rt2.results[try rt2.it.next()].getVariant()).Constant.value) {
+                        .Vector2u32 => |v| {
+                            vec.* = v;
+                            return;
+                        },
+                        .Int => |int| vec[i] = int.value.uint32,
+                        else => return RuntimeError.InvalidValueType,
+                    }
                 },
+
                 else => return RuntimeError.InvalidValueType,
             }
         }
@@ -1737,6 +1870,7 @@ fn opCompositeConstruct(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime)
             _ = arr;
             return RuntimeError.ToDo;
         },
+
         else => try vectorRoutines(value, rt),
     }
 }
@@ -3337,8 +3471,7 @@ fn opVariable(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) R
     _ = initializer;
 }
 
-fn opVectorShuffle(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
-    _ = allocator;
+fn opVectorShuffle(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     _ = try rt.it.next();
 
     const result_id = try rt.it.next();
