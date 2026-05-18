@@ -247,7 +247,7 @@ pub fn populatePushConstants(self: *Self, blob: []const u8) RuntimeError!void {
         const variable = &result.variant.?.Variable;
         if (variable.storage_class != .PushConstant)
             continue;
-        _ = try variable.value.writeConst(blob);
+        _ = try variable.value.write(blob);
     }
 }
 
@@ -258,12 +258,12 @@ pub fn writeDescriptorSet(self: *const Self, input: []const u8, set: SpvWord, bi
             .Array => |arr| {
                 if (descriptor_index >= arr.values.len)
                     return RuntimeError.NotFound;
-                _ = try arr.values[descriptor_index].writeConst(input);
+                _ = try arr.values[descriptor_index].write(input);
             },
             else => {
                 if (descriptor_index != 0)
                     return RuntimeError.NotFound;
-                _ = try value.writeConst(input);
+                _ = try value.write(input);
             },
         }
     } else {
@@ -291,15 +291,15 @@ fn readResultValue(self: *const Self, output: []u8, result: SpvWord) RuntimeErro
 fn writeResultValue(self: *const Self, input: []const u8, result: SpvWord) RuntimeError!void {
     if (self.results[result].variant) |*variant| {
         switch (variant.*) {
-            .Variable => |*v| _ = try v.value.writeConst(input),
+            .Variable => |*v| _ = try v.value.write(input),
             .AccessChain => |*a| switch (a.value) {
                 .Pointer => |ptr| switch (ptr.ptr) {
-                    .common => |value_ptr| _ = try value_ptr.writeConst(input),
+                    .common => |value_ptr| _ = try value_ptr.write(input),
                     .f32_ptr => |value_ptr| std.mem.copyForwards(u8, std.mem.asBytes(value_ptr), input[0..@sizeOf(f32)]),
                     .i32_ptr => |value_ptr| std.mem.copyForwards(u8, std.mem.asBytes(value_ptr), input[0..@sizeOf(i32)]),
                     .u32_ptr => |value_ptr| std.mem.copyForwards(u8, std.mem.asBytes(value_ptr), input[0..@sizeOf(u32)]),
                 },
-                else => _ = try a.value.writeConst(input),
+                else => _ = try a.value.write(input),
             },
             else => return RuntimeError.InvalidSpirV,
         }

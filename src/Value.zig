@@ -83,14 +83,14 @@ pub const Value = union(Type) {
             errdefer allocator.destroy(value);
 
             value.* = try Value.init(allocator, results, self.type_word, false);
-            _ = try value.writeConst(self.data[self.getOffsetOfIndex(index)..]);
+            _ = try value.write(self.data[self.getOffsetOfIndex(index)..]);
 
             return value;
         }
 
         pub inline fn createLocalValueFromIndex(self: *const @This(), allocator: std.mem.Allocator, results: []const Result, index: usize) RuntimeError!Value {
             var value = try Value.init(allocator, results, self.type_word, false);
-            _ = try value.writeConst(self.data[self.getOffsetOfIndex(index)..]);
+            _ = try value.write(self.data[self.getOffsetOfIndex(index)..]);
             return value;
         }
 
@@ -172,13 +172,13 @@ pub const Value = union(Type) {
                     }
                     break :blk self;
                 },
-                .Vector4f32 => .{ .Vector4f32 = Vec4f32{ 0.0, 0.0, 0.0, 0.0 } },
+                .Vector4f32 => .{ .Vector4f32 = Vec4f32{ 0.0, 0.0, 0.0, 1.0 } },
                 .Vector3f32 => .{ .Vector3f32 = Vec3f32{ 0.0, 0.0, 0.0 } },
                 .Vector2f32 => .{ .Vector2f32 = Vec2f32{ 0.0, 0.0 } },
-                .Vector4i32 => .{ .Vector4i32 = Vec4i32{ 0, 0, 0, 0 } },
+                .Vector4i32 => .{ .Vector4i32 = Vec4i32{ 0, 0, 0, 1 } },
                 .Vector3i32 => .{ .Vector3i32 = Vec3i32{ 0, 0, 0 } },
                 .Vector2i32 => .{ .Vector2i32 = Vec2i32{ 0, 0 } },
-                .Vector4u32 => .{ .Vector4u32 = Vec4u32{ 0, 0, 0, 0 } },
+                .Vector4u32 => .{ .Vector4u32 = Vec4u32{ 0, 0, 0, 1 } },
                 .Vector3u32 => .{ .Vector3u32 = Vec3u32{ 0, 0, 0 } },
                 .Vector2u32 => .{ .Vector2u32 = Vec2u32{ 0, 0 } },
                 .Matrix => |m| blk: {
@@ -303,6 +303,23 @@ pub const Value = union(Type) {
     }
 
     pub fn read(self: *const Self, output: []u8) RuntimeError!usize {
+        const vecRoutine = struct {
+            inline fn routine(comptime T: type, vec: T, out: []u8) RuntimeError!usize {
+                const size = @typeInfo(T).vector.len * 4;
+                if (size >= out.len) {
+                    const range = @typeInfo(T).vector.len;
+                    inline for (0..range) |i| {
+                        const start = i * 4;
+                        const end = (i + 1) * 4;
+                        if (start >= out.len or end > out.len) return i * 4;
+                        @memcpy(out[start..end], std.mem.asBytes(&vec[i]));
+                    }
+                }
+                std.mem.bytesAsValue(T, out[0..]).* = vec;
+                return size;
+            }
+        }.routine;
+
         switch (self.*) {
             .Bool => |b| {
                 output[0] = if (b == true) 1 else 0;
@@ -327,87 +344,19 @@ pub const Value = union(Type) {
                 }
                 return @divExact(f.bit_count, 8);
             },
-            .Vector4f32 => |vec| {
-                inline for (0..4) |i| {
-                    const start = i * 4;
-                    const end = (i + 1) * 4;
-                    if (start >= output.len or end > output.len) return RuntimeError.OutOfBounds;
-                    @memcpy(output[start..end], std.mem.asBytes(&vec[i]));
-                }
-                return 4 * 4;
-            },
-            .Vector3f32 => |vec| {
-                inline for (0..3) |i| {
-                    const start = i * 4;
-                    const end = (i + 1) * 4;
-                    if (start >= output.len or end > output.len) return RuntimeError.OutOfBounds;
-                    @memcpy(output[start..end], std.mem.asBytes(&vec[i]));
-                }
-                return 3 * 4;
-            },
-            .Vector2f32 => |vec| {
-                inline for (0..2) |i| {
-                    const start = i * 4;
-                    const end = (i + 1) * 4;
-                    if (start >= output.len or end > output.len) return RuntimeError.OutOfBounds;
-                    @memcpy(output[start..end], std.mem.asBytes(&vec[i]));
-                }
-                return 2 * 4;
-            },
-            .Vector4i32 => |vec| {
-                inline for (0..4) |i| {
-                    const start = i * 4;
-                    const end = (i + 1) * 4;
-                    if (start >= output.len or end > output.len) return RuntimeError.OutOfBounds;
-                    @memcpy(output[start..end], std.mem.asBytes(&vec[i]));
-                }
-                return 4 * 4;
-            },
-            .Vector3i32 => |vec| {
-                inline for (0..3) |i| {
-                    const start = i * 4;
-                    const end = (i + 1) * 4;
-                    if (start >= output.len or end > output.len) return RuntimeError.OutOfBounds;
-                    @memcpy(output[start..end], std.mem.asBytes(&vec[i]));
-                }
-                return 3 * 4;
-            },
-            .Vector2i32 => |vec| {
-                inline for (0..2) |i| {
-                    const start = i * 4;
-                    const end = (i + 1) * 4;
-                    if (start >= output.len or end > output.len) return RuntimeError.OutOfBounds;
-                    @memcpy(output[start..end], std.mem.asBytes(&vec[i]));
-                }
-                return 2 * 4;
-            },
-            .Vector4u32 => |vec| {
-                inline for (0..4) |i| {
-                    const start = i * 4;
-                    const end = (i + 1) * 4;
-                    if (start >= output.len or end > output.len) return RuntimeError.OutOfBounds;
-                    @memcpy(output[start..end], std.mem.asBytes(&vec[i]));
-                }
-                return 4 * 4;
-            },
-            .Vector3u32 => |vec| {
-                inline for (0..3) |i| {
-                    const start = i * 4;
-                    const end = (i + 1) * 4;
-                    if (start >= output.len or end > output.len) return RuntimeError.OutOfBounds;
-                    @memcpy(output[start..end], std.mem.asBytes(&vec[i]));
-                }
-                return 3 * 4;
-            },
-            .Vector2u32 => |vec| {
-                inline for (0..2) |i| {
-                    const start = i * 4;
-                    const end = (i + 1) * 4;
-                    if (start >= output.len or end > output.len) return RuntimeError.OutOfBounds;
-                    @memcpy(output[start..end], std.mem.asBytes(&vec[i]));
-                }
-                return 2 * 4;
-            },
+
+            .Vector4f32 => |vec| return vecRoutine(@TypeOf(vec), vec, output),
+            .Vector3f32 => |vec| return vecRoutine(@TypeOf(vec), vec, output),
+            .Vector2f32 => |vec| return vecRoutine(@TypeOf(vec), vec, output),
+
+            .Vector4i32 => |vec| return vecRoutine(@TypeOf(vec), vec, output),
+            .Vector3i32 => |vec| return vecRoutine(@TypeOf(vec), vec, output),
+            .Vector2i32 => |vec| return vecRoutine(@TypeOf(vec), vec, output),
+
+            .Vector4u32 => |vec| return vecRoutine(@TypeOf(vec), vec, output),
+            .Vector3u32 => |vec| return vecRoutine(@TypeOf(vec), vec, output),
+            .Vector2u32 => |vec| return vecRoutine(@TypeOf(vec), vec, output),
+
             .Vector, .Matrix => |values| {
                 var offset: usize = 0;
                 for (values) |v| {
@@ -438,11 +387,24 @@ pub const Value = union(Type) {
         return 0;
     }
 
-    pub fn writeConst(self: *Self, input: []const u8) RuntimeError!usize {
-        return self.write(@constCast(input));
-    }
+    pub fn write(self: *Self, input: []const u8) RuntimeError!usize {
+        const vecRoutine = struct {
+            inline fn routine(comptime T: type, vec: *T, in: []const u8) RuntimeError!usize {
+                const size = @typeInfo(T).vector.len * 4;
+                if (size >= in.len) {
+                    const range = @typeInfo(T).vector.len;
+                    inline for (0..range) |i| {
+                        const start = i * 4;
+                        const end = (i + 1) * 4;
+                        if (start >= in.len or end > in.len) return i * 4;
+                        @memcpy(std.mem.asBytes(&vec[i]), in[start..end]);
+                    }
+                }
+                vec.* = std.mem.bytesToValue(T, in[0..]);
+                return size;
+            }
+        }.routine;
 
-    pub fn write(self: *Self, input: []u8) RuntimeError!usize {
         switch (self.*) {
             .Bool => |*b| {
                 b.* = if (input[0] != 0) true else false;
@@ -467,87 +429,19 @@ pub const Value = union(Type) {
                 }
                 return @divExact(f.bit_count, 8);
             },
-            .Vector4f32 => |*vec| {
-                inline for (0..4) |i| {
-                    const start = i * 4;
-                    const end = (i + 1) * 4;
-                    if (start >= input.len or end > input.len) return RuntimeError.OutOfBounds;
-                    @memcpy(std.mem.asBytes(&vec[i]), input[start..end]);
-                }
-                return 4 * 4;
-            },
-            .Vector3f32 => |*vec| {
-                inline for (0..3) |i| {
-                    const start = i * 4;
-                    const end = (i + 1) * 4;
-                    if (start >= input.len or end > input.len) return RuntimeError.OutOfBounds;
-                    @memcpy(std.mem.asBytes(&vec[i]), input[start..end]);
-                }
-                return 3 * 4;
-            },
-            .Vector2f32 => |*vec| {
-                inline for (0..2) |i| {
-                    const start = i * 4;
-                    const end = (i + 1) * 4;
-                    if (start >= input.len or end > input.len) return RuntimeError.OutOfBounds;
-                    @memcpy(std.mem.asBytes(&vec[i]), input[start..end]);
-                }
-                return 2 * 4;
-            },
-            .Vector4i32 => |*vec| {
-                inline for (0..4) |i| {
-                    const start = i * 4;
-                    const end = (i + 1) * 4;
-                    if (start >= input.len or end > input.len) return RuntimeError.OutOfBounds;
-                    @memcpy(std.mem.asBytes(&vec[i]), input[start..end]);
-                }
-                return 4 * 4;
-            },
-            .Vector3i32 => |*vec| {
-                inline for (0..3) |i| {
-                    const start = i * 4;
-                    const end = (i + 1) * 4;
-                    if (start >= input.len or end > input.len) return RuntimeError.OutOfBounds;
-                    @memcpy(std.mem.asBytes(&vec[i]), input[start..end]);
-                }
-                return 3 * 4;
-            },
-            .Vector2i32 => |*vec| {
-                inline for (0..2) |i| {
-                    const start = i * 4;
-                    const end = (i + 1) * 4;
-                    if (start >= input.len or end > input.len) return RuntimeError.OutOfBounds;
-                    @memcpy(std.mem.asBytes(&vec[i]), input[start..end]);
-                }
-                return 2 * 4;
-            },
-            .Vector4u32 => |*vec| {
-                inline for (0..4) |i| {
-                    const start = i * 4;
-                    const end = (i + 1) * 4;
-                    if (start >= input.len or end > input.len) return RuntimeError.OutOfBounds;
-                    @memcpy(std.mem.asBytes(&vec[i]), input[start..end]);
-                }
-                return 4 * 4;
-            },
-            .Vector3u32 => |*vec| {
-                inline for (0..3) |i| {
-                    const start = i * 4;
-                    const end = (i + 1) * 4;
-                    if (start >= input.len or end > input.len) return RuntimeError.OutOfBounds;
-                    @memcpy(std.mem.asBytes(&vec[i]), input[start..end]);
-                }
-                return 3 * 4;
-            },
-            .Vector2u32 => |*vec| {
-                inline for (0..2) |i| {
-                    const start = i * 4;
-                    const end = (i + 1) * 4;
-                    if (start >= input.len or end > input.len) return RuntimeError.OutOfBounds;
-                    @memcpy(std.mem.asBytes(&vec[i]), input[start..end]);
-                }
-                return 2 * 4;
-            },
+
+            .Vector4f32 => |*vec| return vecRoutine(@TypeOf(vec.*), vec, input),
+            .Vector3f32 => |*vec| return vecRoutine(@TypeOf(vec.*), vec, input),
+            .Vector2f32 => |*vec| return vecRoutine(@TypeOf(vec.*), vec, input),
+
+            .Vector4i32 => |*vec| return vecRoutine(@TypeOf(vec.*), vec, input),
+            .Vector3i32 => |*vec| return vecRoutine(@TypeOf(vec.*), vec, input),
+            .Vector2i32 => |*vec| return vecRoutine(@TypeOf(vec.*), vec, input),
+
+            .Vector4u32 => |*vec| return vecRoutine(@TypeOf(vec.*), vec, input),
+            .Vector3u32 => |*vec| return vecRoutine(@TypeOf(vec.*), vec, input),
+            .Vector2u32 => |*vec| return vecRoutine(@TypeOf(vec.*), vec, input),
+
             .Vector, .Matrix => |*values| {
                 var offset: usize = 0;
                 for (values.*) |*v| {
@@ -570,10 +464,10 @@ pub const Value = union(Type) {
                     const write_size = try v.write(input[member_offset..]);
                     end_offset = @max(end_offset, member_offset + write_size);
                 }
-                s.external_data = input[0..end_offset];
+                s.external_data = @constCast(input[0..end_offset]);
                 return end_offset;
             },
-            .RuntimeArray => |*arr| arr.data = input[0..],
+            .RuntimeArray => |*arr| arr.data = @constCast(input[0..]),
             .Image => |*img| img.driver_image = @ptrFromInt(std.mem.bytesToValue(usize, input[0..])),
             else => return RuntimeError.InvalidValueType,
         }

@@ -588,8 +588,8 @@ fn CondOperator(comptime T: PrimitiveType, comptime Op: CondOp) type {
             };
         }
 
-        inline fn operationBinary(comptime TT: type, a: TT, b: TT) RuntimeError!bool {
-            if (comptime TT == bool) {
+        inline fn operationBinary(comptime TT: type, a: TT, b: anytype) RuntimeError!bool {
+            if (comptime TT == bool and @TypeOf(b) == bool) {
                 switch (Op) {
                     .LogicalAnd => return a and b,
                     .LogicalOr => return a or b,
@@ -614,13 +614,16 @@ fn CondOperator(comptime T: PrimitiveType, comptime Op: CondOp) type {
                     else => {},
                 }
             }
-            return switch (Op) {
-                .IsFinite => std.math.isFinite(a),
-                .IsInf => std.math.isInf(a),
-                .IsNan => std.math.isNan(a),
-                .IsNormal => std.math.isNormal(a),
-                else => RuntimeError.InvalidSpirV,
-            };
+            if (comptime std.meta.activeTag(@typeInfo(TT)) == .float) {
+                switch (Op) {
+                    .IsFinite => return std.math.isFinite(a),
+                    .IsInf => return std.math.isInf(a),
+                    .IsNan => return std.math.isNan(a),
+                    .IsNormal => return std.math.isNormal(a),
+                    else => {},
+                }
+            }
+            return RuntimeError.InvalidSpirV;
         }
 
         fn applyScalarBits(bit_count: SpvWord, dst_bool: *Value, a_v: *const Value, b_v: ?*const Value) RuntimeError!void {
@@ -654,9 +657,58 @@ fn CondOperator(comptime T: PrimitiveType, comptime Op: CondOp) type {
             comptime N: usize,
             dst: []Value,
             op1: *@Vector(N, ElemT),
-            op2: *@Vector(N, ElemT),
+            op2: *const Value,
         ) RuntimeError!void {
-            inline for (0..N) |i| dst[i].Bool = try operationBinary(ElemT, op1[i], op2[i]);
+            inline for (0..N) |i| {
+                dst[i].Bool = switch (op2.*) {
+                    .Vector4f32 => |vec| if (comptime std.meta.activeTag(@typeInfo(ElemT)) == .float and i < 4)
+                        try operationBinary(ElemT, op1[i], vec[i])
+                    else
+                        return RuntimeError.InvalidSpirV,
+
+                    .Vector3f32 => |vec| if (comptime std.meta.activeTag(@typeInfo(ElemT)) == .float and i < 3)
+                        try operationBinary(ElemT, op1[i], vec[i])
+                    else
+                        return RuntimeError.InvalidSpirV,
+
+                    .Vector2f32 => |vec| if (comptime std.meta.activeTag(@typeInfo(ElemT)) == .float and i < 2)
+                        try operationBinary(ElemT, op1[i], vec[i])
+                    else
+                        return RuntimeError.InvalidSpirV,
+
+                    .Vector4i32 => |vec| if (comptime std.meta.activeTag(@typeInfo(ElemT)) == .int and i < 4)
+                        try operationBinary(ElemT, op1[i], vec[i])
+                    else
+                        return RuntimeError.InvalidSpirV,
+
+                    .Vector3i32 => |vec| if (comptime std.meta.activeTag(@typeInfo(ElemT)) == .int and i < 3)
+                        try operationBinary(ElemT, op1[i], vec[i])
+                    else
+                        return RuntimeError.InvalidSpirV,
+
+                    .Vector2i32 => |vec| if (comptime std.meta.activeTag(@typeInfo(ElemT)) == .int and i < 2)
+                        try operationBinary(ElemT, op1[i], vec[i])
+                    else
+                        return RuntimeError.InvalidSpirV,
+
+                    .Vector4u32 => |vec| if (comptime std.meta.activeTag(@typeInfo(ElemT)) == .int and i < 4)
+                        try operationBinary(ElemT, op1[i], vec[i])
+                    else
+                        return RuntimeError.InvalidSpirV,
+
+                    .Vector3u32 => |vec| if (comptime std.meta.activeTag(@typeInfo(ElemT)) == .int and i < 3)
+                        try operationBinary(ElemT, op1[i], vec[i])
+                    else
+                        return RuntimeError.InvalidSpirV,
+
+                    .Vector2u32 => |vec| if (comptime std.meta.activeTag(@typeInfo(ElemT)) == .int and i < 2)
+                        try operationBinary(ElemT, op1[i], vec[i])
+                    else
+                        return RuntimeError.InvalidSpirV,
+
+                    else => return RuntimeError.InvalidValueType,
+                };
+            }
         }
 
         inline fn applyFixedVectorUnary(
@@ -701,62 +753,51 @@ fn CondEngine(comptime T: PrimitiveType, comptime Op: CondOp) type {
                             try operator.applyScalarBits(lane_bits, d_lane, &a_lane, b_ptr);
                         },
 
-                        .Vector4f32 => |*op1_vec| {
-                            if (comptime operator.isUnaryOp())
-                                try operator.applyFixedVectorUnary(f32, 4, dst_vec, op1_vec)
-                            else
-                                try operator.applyFixedVectorBinary(f32, 4, dst_vec, op1_vec, &op2_value.?.Vector4f32);
-                        },
-                        .Vector3f32 => |*op1_vec| {
-                            if (comptime operator.isUnaryOp())
-                                try operator.applyFixedVectorUnary(f32, 3, dst_vec, op1_vec)
-                            else
-                                try operator.applyFixedVectorBinary(f32, 3, dst_vec, op1_vec, &op2_value.?.Vector3f32);
-                        },
-                        .Vector2f32 => |*op1_vec| {
-                            if (comptime operator.isUnaryOp())
-                                try operator.applyFixedVectorUnary(f32, 2, dst_vec, op1_vec)
-                            else
-                                try operator.applyFixedVectorBinary(f32, 2, dst_vec, op1_vec, &op2_value.?.Vector2f32);
-                        },
+                        .Vector4f32 => |*op1_vec| if (comptime operator.isUnaryOp())
+                            try operator.applyFixedVectorUnary(f32, 4, dst_vec, op1_vec)
+                        else
+                            try operator.applyFixedVectorBinary(f32, 4, dst_vec, op1_vec, op2_value.?),
 
-                        //.Vector4i32 => |*op1_vec| {
-                        //    if (comptime operator.isUnaryOp())
-                        //        try operator.applyFixedVectorUnary(i32, 4, dst_vec, op1_vec)
-                        //    else
-                        //        try operator.applyFixedVectorBinary(i32, 4, dst_vec, op1_vec, &op2_value.?.Vector4i32);
-                        //},
-                        //.Vector3i32 => |*op1_vec| {
-                        //    if (comptime operator.isUnaryOp())
-                        //        try operator.applyFixedVectorUnary(i32, 3, dst_vec, op1_vec)
-                        //    else
-                        //        try operator.applyFixedVectorBinary(i32, 3, dst_vec, op1_vec, &op2_value.?.Vector3i32);
-                        //},
-                        //.Vector2i32 => |*op1_vec| {
-                        //    if (comptime operator.isUnaryOp())
-                        //        try operator.applyFixedVectorUnary(i32, 2, dst_vec, op1_vec)
-                        //    else
-                        //        try operator.applyFixedVectorBinary(i32, 2, dst_vec, op1_vec, &op2_value.?.Vector2i32);
-                        //},
+                        .Vector3f32 => |*op1_vec| if (comptime operator.isUnaryOp())
+                            try operator.applyFixedVectorUnary(f32, 3, dst_vec, op1_vec)
+                        else
+                            try operator.applyFixedVectorBinary(f32, 3, dst_vec, op1_vec, op2_value.?),
 
-                        //.Vector4u32 => |*op1_vec| {
-                        //    if (comptime operator.isUnaryOp())
-                        //        try operator.applyFixedVectorUnary(u32, 4, dst_vec, op1_vec)
-                        //    else
-                        //        try operator.applyFixedVectorBinary(u32, 4, dst_vec, op1_vec, &op2_value.?.Vector4u32);
-                        //},
-                        //.Vector3u32 => |*op1_vec| {
-                        //    if (comptime operator.isUnaryOp())
-                        //        try operator.applyFixedVectorUnary(u32, 3, dst_vec, op1_vec)
-                        //    else
-                        //        try operator.applyFixedVectorBinary(u32, 3, dst_vec, op1_vec, &op2_value.?.Vector3u32);
-                        //},
-                        //.Vector2u32 => |*op1_vec| {
-                        //    if (comptime operator.isUnaryOp())
-                        //        try operator.applyFixedVectorUnary(u32, 2, dst_vec, op1_vec)
-                        //    else
-                        //        try operator.applyFixedVectorBinary(u32, 2, dst_vec, op1_vec, &op2_value.?.Vector2u32);
-                        //},
+                        .Vector2f32 => |*op1_vec| if (comptime operator.isUnaryOp())
+                            try operator.applyFixedVectorUnary(f32, 2, dst_vec, op1_vec)
+                        else
+                            try operator.applyFixedVectorBinary(f32, 2, dst_vec, op1_vec, op2_value.?),
+
+                        .Vector4i32 => |*op1_vec| if (comptime operator.isUnaryOp())
+                            try operator.applyFixedVectorUnary(i32, 4, dst_vec, op1_vec)
+                        else
+                            try operator.applyFixedVectorBinary(i32, 4, dst_vec, op1_vec, op2_value.?),
+
+                        .Vector3i32 => |*op1_vec| if (comptime operator.isUnaryOp())
+                            try operator.applyFixedVectorUnary(i32, 3, dst_vec, op1_vec)
+                        else
+                            try operator.applyFixedVectorBinary(i32, 3, dst_vec, op1_vec, op2_value.?),
+
+                        .Vector2i32 => |*op1_vec| if (comptime operator.isUnaryOp())
+                            try operator.applyFixedVectorUnary(i32, 2, dst_vec, op1_vec)
+                        else
+                            try operator.applyFixedVectorBinary(i32, 2, dst_vec, op1_vec, op2_value.?),
+
+                        .Vector4u32 => |*op1_vec| if (comptime operator.isUnaryOp())
+                            try operator.applyFixedVectorUnary(u32, 4, dst_vec, op1_vec)
+                        else
+                            try operator.applyFixedVectorBinary(u32, 4, dst_vec, op1_vec, op2_value.?),
+
+                        .Vector3u32 => |*op1_vec| if (comptime operator.isUnaryOp())
+                            try operator.applyFixedVectorUnary(u32, 3, dst_vec, op1_vec)
+                        else
+                            try operator.applyFixedVectorBinary(u32, 3, dst_vec, op1_vec, op2_value.?),
+
+                        .Vector2u32 => |*op1_vec| if (comptime operator.isUnaryOp())
+                            try operator.applyFixedVectorUnary(u32, 2, dst_vec, op1_vec)
+                        else
+                            try operator.applyFixedVectorBinary(u32, 2, dst_vec, op1_vec, op2_value.?),
+
                         else => return RuntimeError.InvalidSpirV,
                     }
                 },
@@ -2188,7 +2229,7 @@ fn opSpecConstant(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtim
     for (result.decorations.items) |decoration| {
         if (decoration.rtype == .SpecId) {
             if (rt.specialization_constants.get(decoration.literal_1)) |data| {
-                _ = try (try result.getValue()).writeConst(data);
+                _ = try (try result.getValue()).write(data);
             }
         }
     }
@@ -2204,7 +2245,7 @@ fn opSpecConstantTrue(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) Ru
     for (target.decorations.items) |decoration| {
         if (decoration.rtype == .SpecId) {
             if (rt.specialization_constants.get(decoration.literal_1)) |data| {
-                _ = try (try target.getValue()).writeConst(data);
+                _ = try (try target.getValue()).write(data);
             }
         }
     }
@@ -2220,7 +2261,7 @@ fn opSpecConstantFalse(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) R
     for (target.decorations.items) |decoration| {
         if (decoration.rtype == .SpecId) {
             if (rt.specialization_constants.get(decoration.literal_1)) |data| {
-                _ = try (try target.getValue()).writeConst(data);
+                _ = try (try target.getValue()).write(data);
             }
         }
     }
