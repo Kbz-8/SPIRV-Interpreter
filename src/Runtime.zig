@@ -59,6 +59,7 @@ pub const ImageAPI = struct {
     readImageInt4: *const fn (driver_image: *anyopaque, dim: spv.SpvDim, x: i32, y: i32, z: i32) RuntimeError!Vec4(u32),
     writeImageFloat4: *const fn (driver_image: *anyopaque, dim: spv.SpvDim, x: i32, y: i32, z: i32, pixel: Vec4(f32)) RuntimeError!void,
     writeImageInt4: *const fn (driver_image: *anyopaque, dim: spv.SpvDim, x: i32, y: i32, z: i32, pixel: Vec4(u32)) RuntimeError!void,
+    sampleImageFloat4: *const fn (driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32) RuntimeError!Vec4(f32),
 };
 
 mod: *Module,

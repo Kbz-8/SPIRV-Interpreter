@@ -84,3 +84,7 @@ int main(void)
     return 0;
 }
 ```
+
+## Documentation
+
+A full documentation on how to use this interpreter will come soon (when I'll stop being lazy).

@@ -113,7 +113,11 @@ pub const Value = union(Type) {
         driver_image: *anyopaque,
     },
     Sampler: struct {},
-    SampledImage: struct {},
+    SampledImage: struct {
+        type_word: SpvWord,
+        driver_image: *anyopaque,
+        driver_sampler: *anyopaque,
+    },
     Pointer: struct {
         ptr: union(enum) {
             common: *Self,
@@ -244,7 +248,13 @@ pub const Value = union(Type) {
                     },
                 },
                 .Sampler => RuntimeError.ToDo,
-                .SampledImage => RuntimeError.ToDo,
+                .SampledImage => .{
+                    .SampledImage = .{
+                        .type_word = target_type,
+                        .driver_image = undefined,
+                        .driver_sampler = undefined,
+                    },
+                },
                 .Pointer => .{
                     .Pointer = .{
                         .ptr = undefined,
@@ -469,6 +479,10 @@ pub const Value = union(Type) {
             },
             .RuntimeArray => |*arr| arr.data = @constCast(input[0..]),
             .Image => |*img| img.driver_image = @ptrFromInt(std.mem.bytesToValue(usize, input[0..])),
+            .SampledImage => |*img| {
+                img.driver_image = @ptrFromInt(std.mem.bytesToValue(usize, input[0..]));
+                img.driver_sampler = @ptrFromInt(std.mem.bytesToValue(usize, input[@sizeOf(usize)..]));
+            },
             else => return RuntimeError.InvalidValueType,
         }
         return 0;

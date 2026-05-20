@@ -139,7 +139,9 @@ pub const TypeData = union(Type) {
         access: ?spv.SpvAccessQualifier,
     },
     Sampler: struct {},
-    SampledImage: struct {},
+    SampledImage: struct {
+        image_type: SpvWord,
+    },
     Pointer: struct {
         storage_class: spv.SpvStorageClass,
         target: SpvWord,
@@ -460,7 +462,6 @@ pub fn getMemberCounts(self: *const Self) usize {
                 .Vector2f32, .Vector2i32, .Vector2u32 => return 2,
                 .Matrix => |m| return m.member_count,
                 .Array => |a| return a.member_count,
-                .SampledImage => return 2,
                 .Structure => |s| return s.members_type_word.len,
                 .Function => |f| return f.params.len,
                 else => {},
