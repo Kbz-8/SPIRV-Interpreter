@@ -69,6 +69,7 @@ const BitOp = enum {
 };
 
 const ImageOp = enum {
+    Fetch,
     Read,
     Write,
     SampleImplicitLod,
@@ -158,6 +159,7 @@ pub const SetupDispatcher = block: {
         .INotEqual = autoSetupConstant,
         .ISub = autoSetupConstant,
         .ISubBorrow = autoSetupConstant,
+        .ImageFetch = autoSetupConstant,
         .ImageRead = autoSetupConstant,
         .ImageSampleExplicitLod = autoSetupConstant,
         .ImageSampleImplicitLod = autoSetupConstant,
@@ -290,6 +292,7 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.INotEqual)]              = CondEngine(.SInt, .NotEqual).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ISub)]                   = MathEngine(.SInt, .Sub, false).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ISubBorrow)]             = opISubBorrow;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageFetch)]             = ImageEngine(.Fetch).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageRead)]              = ImageEngine(.Read).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageSampleExplicitLod)] = ImageEngine(.SampleExplicitLod).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageSampleImplicitLod)] = ImageEngine(.SampleImplicitLod).op;
@@ -1363,7 +1366,9 @@ fn ImageEngine(comptime Op: ImageOp) type {
             const dst = try rt.results[result_id].getValue();
 
             switch (Op) {
-                .Read => {
+                .Fetch,
+                .Read,
+                => {
                     const image_operand = try resolveImage(image, rt);
                     const x = try readStorageCoordLane(coordinate, 0);
                     const y = readStorageCoordLane(coordinate, 1) catch 0;
