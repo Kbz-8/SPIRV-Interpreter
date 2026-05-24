@@ -71,9 +71,10 @@ const BitOp = enum {
 const ImageOp = enum {
     Fetch,
     Read,
-    Write,
-    SampleImplicitLod,
+    Resolve,
     SampleExplicitLod,
+    SampleImplicitLod,
+    Write,
 };
 
 pub const OpCodeFunc = *const fn (std.mem.Allocator, SpvWord, *Runtime) RuntimeError!void;
@@ -159,6 +160,7 @@ pub const SetupDispatcher = block: {
         .INotEqual = autoSetupConstant,
         .ISub = autoSetupConstant,
         .ISubBorrow = autoSetupConstant,
+        .Image = autoSetupConstant,
         .ImageFetch = autoSetupConstant,
         .ImageRead = autoSetupConstant,
         .ImageSampleExplicitLod = autoSetupConstant,
@@ -292,6 +294,7 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.INotEqual)]              = CondEngine(.SInt, .NotEqual).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ISub)]                   = MathEngine(.SInt, .Sub, false).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ISubBorrow)]             = opISubBorrow;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.Image)]                  = ImageEngine(.Resolve).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageFetch)]             = ImageEngine(.Fetch).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageRead)]              = ImageEngine(.Read).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageSampleExplicitLod)] = ImageEngine(.SampleExplicitLod).op;
@@ -987,11 +990,13 @@ fn ConversionEngine(comptime from_kind: PrimitiveType, comptime to_kind: Primiti
 fn ImageEngine(comptime Op: ImageOp) type {
     return struct {
         const ImageOperand = struct {
+            type_word: SpvWord,
             driver_image: *anyopaque,
             dim: spv.SpvDim,
         };
 
         const SampledImageOperand = struct {
+            type_word: SpvWord,
             driver_image: *anyopaque,
             driver_sampler: *anyopaque,
             dim: spv.SpvDim,
@@ -1001,6 +1006,7 @@ fn ImageEngine(comptime Op: ImageOp) type {
             return switch ((try rt.results[type_word].getConstVariant()).*) {
                 .Type => |t| switch (t) {
                     .Image => |i| i.dim,
+                    .SampledImage => |i| return resolveImageDim(rt, i.image_type),
                     else => return RuntimeError.InvalidSpirV,
                 },
                 else => return RuntimeError.InvalidSpirV,
@@ -1010,6 +1016,7 @@ fn ImageEngine(comptime Op: ImageOp) type {
         fn resolveImage(image: *Result, rt: *Runtime) RuntimeError!ImageOperand {
             return switch ((try image.getValue()).*) {
                 .Image => |img| .{
+                    .type_word = img.type_word,
                     .driver_image = img.driver_image,
                     .dim = try resolveImageDim(rt, img.type_word),
                 },
@@ -1029,6 +1036,7 @@ fn ImageEngine(comptime Op: ImageOp) type {
                     };
 
                     break :blk .{
+                        .type_word = img.type_word,
                         .driver_image = img.driver_image,
                         .driver_sampler = img.driver_sampler,
                         .dim = try resolveImageDim(rt, sampled_image_type.image_type),
@@ -1346,6 +1354,21 @@ fn ImageEngine(comptime Op: ImageOp) type {
         }
 
         fn op(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+            if (comptime Op == .Resolve) {
+                _ = try rt.it.next(); // result type
+                const dst = try rt.results[try rt.it.next()].getValue();
+                const src = &rt.results[try rt.it.next()];
+
+                const image_operand = try resolveSampledImage(src, rt);
+
+                dst.Image = .{
+                    .driver_image = image_operand.driver_image,
+                    .type_word = image_operand.type_word,
+                };
+
+                return;
+            }
+
             if (comptime Op == .Write) {
                 const image = &rt.results[try rt.it.next()];
                 const coordinate = try rt.results[try rt.it.next()].getValue();
