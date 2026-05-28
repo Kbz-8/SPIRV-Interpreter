@@ -84,6 +84,7 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Exp)]       = MathEngine(.Float, .Exp).opSingleOperator;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Exp2)]      = MathEngine(.Float, .Exp2).opSingleOperator;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.FAbs)]      = MathEngine(.Float, .FAbs).opSingleOperator;
+    runtime_dispatcher[@intFromEnum(ext.GLSLOp.FClamp)]    = MathEngine(.Float, .FClamp).opTripleOperators;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.FMax)]      = MathEngine(.Float, .FMax).opDoubleOperators;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.FSign)]     = MathEngine(.Float, .FSign).opSingleOperator;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Floor)]     = MathEngine(.Float, .Floor).opSingleOperator;
@@ -93,14 +94,16 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Normalize)] = opNormalize;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Round)]     = MathEngine(.Float, .Round).opSingleOperator;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.SAbs)]      = MathEngine(.SInt,  .SAbs).opSingleOperator;
+    runtime_dispatcher[@intFromEnum(ext.GLSLOp.SClamp)]    = MathEngine(.SInt, .SClamp).opTripleOperators;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.SSign)]     = MathEngine(.SInt, .SSign).opSingleOperator;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Sin)]       = MathEngine(.Float, .Sin).opSingleOperator;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Sqrt)]      = MathEngine(.Float, .Sqrt).opSingleOperator;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Tan)]       = MathEngine(.Float, .Tan).opSingleOperator;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Trunc)]     = MathEngine(.Float, .Trunc).opSingleOperator;
-    runtime_dispatcher[@intFromEnum(ext.GLSLOp.FindILsb)] = IntBitEngine(.FindILsb).op;
-    runtime_dispatcher[@intFromEnum(ext.GLSLOp.FindSMsb)] = IntBitEngine(.FindSMsb).op;
-    runtime_dispatcher[@intFromEnum(ext.GLSLOp.FindUMsb)] = IntBitEngine(.FindUMsb).op;
+    runtime_dispatcher[@intFromEnum(ext.GLSLOp.UClamp)]    = MathEngine(.UInt, .UClamp).opTripleOperators;
+    runtime_dispatcher[@intFromEnum(ext.GLSLOp.FindILsb)]  = IntBitEngine(.FindILsb).op;
+    runtime_dispatcher[@intFromEnum(ext.GLSLOp.FindSMsb)]  = IntBitEngine(.FindSMsb).op;
+    runtime_dispatcher[@intFromEnum(ext.GLSLOp.FindUMsb)]  = IntBitEngine(.FindUMsb).op;
     // zig fmt: on
 }
 
@@ -238,6 +241,63 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp) type {
                 .Vector4u32 => |*d| d.* = try operator.operation(@Vector(4, u32), lhs.Vector4u32, rhs.Vector4u32),
                 .Vector3u32 => |*d| d.* = try operator.operation(@Vector(3, u32), lhs.Vector3u32, rhs.Vector3u32),
                 .Vector2u32 => |*d| d.* = try operator.operation(@Vector(2, u32), lhs.Vector2u32, rhs.Vector2u32),
+
+                else => return RuntimeError.InvalidSpirV,
+            }
+        }
+
+        fn opTripleOperators(_: std.mem.Allocator, target_type_id: SpvWord, id: SpvWord, _: SpvWord, rt: *Runtime) RuntimeError!void {
+            const target_type = (try rt.results[target_type_id].getVariant()).Type;
+            const dst = try rt.results[id].getValue();
+            const x = try rt.results[try rt.it.next()].getValue();
+            const min_val = try rt.results[try rt.it.next()].getValue();
+            const max_val = try rt.results[try rt.it.next()].getValue();
+
+            const lane_bits = try Result.resolveLaneBitWidth(target_type, rt);
+
+            const operator = struct {
+                fn operation(comptime TT: type, v: TT, lo: TT, hi: TT) RuntimeError!TT {
+                    return switch (Op) {
+                        .FClamp, .SClamp, .UClamp => @min(@max(v, lo), hi),
+                        else => RuntimeError.InvalidSpirV,
+                    };
+                }
+
+                fn applyScalar(bit_count: SpvWord, d: *Value, v: *const Value, lo: *const Value, hi: *const Value) RuntimeError!void {
+                    switch (bit_count) {
+                        inline 8, 16, 32, 64 => |bits| {
+                            if (bits == 8 and T == .Float) return RuntimeError.InvalidSpirV;
+
+                            const ScalarT = Value.getPrimitiveFieldType(T, bits);
+                            const d_field = try Value.getPrimitiveField(T, bits, d);
+                            const v_field = try Value.getPrimitiveField(T, bits, @constCast(v));
+                            const lo_field = try Value.getPrimitiveField(T, bits, @constCast(lo));
+                            const hi_field = try Value.getPrimitiveField(T, bits, @constCast(hi));
+                            d_field.* = try operation(ScalarT, v_field.*, lo_field.*, hi_field.*);
+                        },
+                        else => return RuntimeError.InvalidSpirV,
+                    }
+                }
+            };
+
+            switch (dst.*) {
+                .Int, .Float => try operator.applyScalar(lane_bits, dst, x, min_val, max_val),
+
+                .Vector => |dst_vec| for (dst_vec, x.Vector, min_val.Vector, max_val.Vector) |*d_lane, x_lane, min_lane, max_lane| {
+                    try operator.applyScalar(lane_bits, d_lane, &x_lane, &min_lane, &max_lane);
+                },
+
+                .Vector4f32 => |*d| d.* = try operator.operation(@Vector(4, f32), x.Vector4f32, min_val.Vector4f32, max_val.Vector4f32),
+                .Vector3f32 => |*d| d.* = try operator.operation(@Vector(3, f32), x.Vector3f32, min_val.Vector3f32, max_val.Vector3f32),
+                .Vector2f32 => |*d| d.* = try operator.operation(@Vector(2, f32), x.Vector2f32, min_val.Vector2f32, max_val.Vector2f32),
+
+                .Vector4i32 => |*d| d.* = try operator.operation(@Vector(4, i32), x.Vector4i32, min_val.Vector4i32, max_val.Vector4i32),
+                .Vector3i32 => |*d| d.* = try operator.operation(@Vector(3, i32), x.Vector3i32, min_val.Vector3i32, max_val.Vector3i32),
+                .Vector2i32 => |*d| d.* = try operator.operation(@Vector(2, i32), x.Vector2i32, min_val.Vector2i32, max_val.Vector2i32),
+
+                .Vector4u32 => |*d| d.* = try operator.operation(@Vector(4, u32), x.Vector4u32, min_val.Vector4u32, max_val.Vector4u32),
+                .Vector3u32 => |*d| d.* = try operator.operation(@Vector(3, u32), x.Vector3u32, min_val.Vector3u32, max_val.Vector3u32),
+                .Vector2u32 => |*d| d.* = try operator.operation(@Vector(2, u32), x.Vector2u32, min_val.Vector2u32, max_val.Vector2u32),
 
                 else => return RuntimeError.InvalidSpirV,
             }
