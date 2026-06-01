@@ -18,6 +18,7 @@ const WordIterator = @import("WordIterator.zig");
 const Self = @This();
 
 pub const RuntimeError = error{
+    Barrier,
     DivisionByZero,
     InvalidEntryPoint,
     InvalidSpirV,
@@ -31,6 +32,11 @@ pub const RuntimeError = error{
     UnsupportedSpirV,
     UnsupportedExtension,
     Unknown,
+};
+
+pub const EntryPointStatus = enum {
+    completed,
+    barrier,
 };
 
 pub const SpecializationEntry = struct {
@@ -119,6 +125,17 @@ pub fn addSpecializationInfo(self: *Self, allocator: std.mem.Allocator, entry: S
     self.specialization_constants.put(allocator, entry.id, slice) catch return RuntimeError.OutOfMemory;
 }
 
+pub fn copySpecializationConstantsFrom(self: *Self, allocator: std.mem.Allocator, other: *const Self) RuntimeError!void {
+    var it = other.specialization_constants.iterator();
+    while (it.next()) |entry| {
+        const slice = allocator.dupe(u8, entry.value_ptr.*) catch return RuntimeError.OutOfMemory;
+        self.specialization_constants.put(allocator, entry.key_ptr.*, slice) catch {
+            allocator.free(slice);
+            return RuntimeError.OutOfMemory;
+        };
+    }
+}
+
 pub fn getEntryPointByName(self: *const Self, name: []const u8) RuntimeError!SpvWord {
     for (self.mod.entry_points.items, 0..) |entry_point, i| {
         if (blk: {
@@ -176,8 +193,11 @@ pub fn dumpResultsTable(self: *Self, allocator: std.mem.Allocator, writer: *std.
 
 /// Calls an entry point, `entry_point_index` being the index of the entry point ordered by declaration in the bytecode
 pub fn callEntryPoint(self: *Self, allocator: std.mem.Allocator, entry_point_index: SpvWord) RuntimeError!void {
-    self.reset();
+    _ = try self.beginEntryPoint(allocator, entry_point_index);
+}
 
+pub fn beginEntryPoint(self: *Self, allocator: std.mem.Allocator, entry_point_index: SpvWord) RuntimeError!EntryPointStatus {
+    self.reset();
     if (entry_point_index > self.mod.entry_points.items.len)
         return RuntimeError.InvalidEntryPoint;
 
@@ -212,7 +232,15 @@ pub fn callEntryPoint(self: *Self, allocator: std.mem.Allocator, entry_point_ind
     }
 
     // Execution pass
-    try self.pass(allocator, null);
+    return self.continueEntryPoint(allocator);
+}
+
+pub fn continueEntryPoint(self: *Self, allocator: std.mem.Allocator) RuntimeError!EntryPointStatus {
+    self.pass(allocator, null) catch |err| switch (err) {
+        RuntimeError.Barrier => return .barrier,
+        else => return err,
+    };
+    return .completed;
 }
 
 fn pass(self: *Self, allocator: std.mem.Allocator, op_set: ?std.EnumSet(spv.SpvOp)) RuntimeError!void {

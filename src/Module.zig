@@ -180,7 +180,7 @@ fn resolveConstantWord(self: *const Self, id: SpvWord) ?SpvWord {
 }
 
 fn findAccessChainToMember(self: *const Self, base_id: SpvWord, member_index: SpvWord) ?SpvWord {
-    for (self.results, 0..) |result, id| {
+    for (self.results, 0..) |*result, id| {
         const variant = result.variant orelse continue;
 
         switch (variant) {
@@ -265,7 +265,7 @@ fn applyDecorations(self: *Self) ModuleError!void {
         var binding: ?usize = null;
 
         for (result.decorations.items) |decoration| {
-            switch (result.variant.?) {
+            if (result.variant) |*variant| switch (variant.*) {
                 .Variable => |v| {
                     try self.applyInterfaceDecoration(v.storage_class, decoration, @intCast(id));
 
@@ -294,13 +294,30 @@ fn applyDecorations(self: *Self) ModuleError!void {
                     }
                 },
                 else => {},
-            }
+            };
         }
 
-        switch (result.variant.?) {
-            .Variable => |v| try self.applyStructMemberInterfaceDecorations(v.storage_class, v.type_word, @intCast(id)),
+        if (result.variant) |*variant| switch (variant.*) {
+            .Variable => |*v| {
+                try self.applyStructMemberInterfaceDecorations(v.storage_class, v.type_word, @intCast(id));
+                switch (v.storage_class) {
+                    .StorageBuffer,
+                    .Uniform,
+                    .PushConstant,
+                    => if (v.value == .Structure) {
+                        if (self.results[v.type_word].variant) |type_variant| switch (type_variant) {
+                            .Type => |type_data| switch (type_data) {
+                                .Structure => |s| @memcpy(@constCast(v.value.Structure.offsets), s.members_offsets),
+                                else => {},
+                            },
+                            else => {},
+                        };
+                    },
+                    else => {},
+                }
+            },
             else => {},
-        }
+        };
 
         if (set != null and binding != null) {
             self.bindings[set.?][binding.?] = @intCast(id);

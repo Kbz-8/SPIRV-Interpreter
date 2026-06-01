@@ -290,6 +290,7 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.CompositeConstruct)]     = opCompositeConstruct;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.CompositeExtract)]       = opCompositeExtract;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.CompositeInsert)]        = opCompositeInsert;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ControlBarrier)]         = opControlBarrier;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ConvertFToS)]            = ConversionEngine(.Float, .SInt).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ConvertFToU)]            = ConversionEngine(.Float, .UInt).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ConvertSToF)]            = ConversionEngine(.SInt, .Float).op;
@@ -349,6 +350,7 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.MatrixTimesMatrix)]      = MathEngine(.Float, .MatrixTimesMatrix, false).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.MatrixTimesScalar)]      = MathEngine(.Float, .MatrixTimesScalar, false).op; // TODO
     runtime_dispatcher[@intFromEnum(spv.SpvOp.MatrixTimesVector)]      = MathEngine(.Float, .MatrixTimesVector, false).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.MemoryBarrier)]          = opMemoryBarrier;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Not)]                    = BitEngine(.UInt, .Not).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Phi)]                    = opPhi;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Return)]                 = opReturn;
@@ -1966,6 +1968,8 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
 fn addDecoration(allocator: std.mem.Allocator, rt: *Runtime, target: SpvWord, decoration_type: spv.SpvDecoration, member: ?SpvWord) RuntimeError!void {
     var decoration = rt.results[target].decorations.addOne(allocator) catch return RuntimeError.OutOfMemory;
     decoration.rtype = decoration_type;
+    decoration.literal_1 = 0;
+    decoration.literal_2 = null;
     decoration.index = if (member) |memb| memb else 0;
 
     switch (decoration_type) {
@@ -2332,7 +2336,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                     if (uniform_slice_window != null) {
                                         uniform_slice_window = try helpers.advanceWindow(uniform_slice_window, member_offset);
                                     } else if (s.external_data) |data| {
-                                        uniform_slice_window = data[0..];
+                                        uniform_slice_window = try helpers.advanceWindow(data, member_offset);
                                     }
 
                                     value_ptr = &s.values[component_index];
@@ -2500,6 +2504,13 @@ fn opBranchConditional(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeEr
 
 fn opCapability(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     rt.mod.capabilities.insert(try rt.it.nextAs(spv.SpvCapability));
+}
+
+fn opControlBarrier(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    _ = rt.it.skip(); // execution scope
+    _ = rt.it.skip(); // memory scope
+    _ = rt.it.skip(); // memory semantics
+    return RuntimeError.Barrier;
 }
 
 fn opCompositeConstruct(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
@@ -3496,6 +3507,11 @@ fn opMemberName(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime)
 fn opMemoryModel(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     rt.mod.addressing = try rt.it.nextAs(spv.SpvAddressingModel);
     rt.mod.memory_model = try rt.it.nextAs(spv.SpvMemoryModel);
+}
+
+fn opMemoryBarrier(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    _ = rt.it.skip(); // memory scope
+    _ = rt.it.skip(); // memory semantics
 }
 
 fn opName(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
