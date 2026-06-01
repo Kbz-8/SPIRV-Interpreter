@@ -31,12 +31,16 @@ const readImageFloat4_PFN = *const fn (driver_image: ?*anyopaque, dim: spv.spv.S
 const readImageInt4_PFN = *const fn (driver_image: ?*anyopaque, dim: spv.spv.SpvDim, x: c_int, y: c_int, z: c_int, dst: *Vec4u) callconv(.c) ffi.Result;
 const writeImageFloat4_PFN = *const fn (driver_image: ?*anyopaque, dim: spv.spv.SpvDim, x: c_int, y: c_int, z: c_int, src: Vec4f) callconv(.c) ffi.Result;
 const writeImageInt4_PFN = *const fn (driver_image: ?*anyopaque, dim: spv.spv.SpvDim, x: c_int, y: c_int, z: c_int, src: Vec4u) callconv(.c) ffi.Result;
+const sampleImageFloat4_PFN = *const fn (driver_image: ?*anyopaque, driver_sampler: ?*anyopaque, dim: spv.spv.SpvDim, x: f32, y: f32, z: f32, dst: *Vec4f) callconv(.c) ffi.Result;
+const queryImageSize_PFN = *const fn (driver_image: ?*anyopaque, dim: spv.spv.SpvDim, arrayed: ffi.SpvCBool, dst: *Vec4u) callconv(.c) ffi.Result;
 
 const ImageAPI = extern struct {
     readImageFloat4: readImageFloat4_PFN,
     readImageInt4: readImageInt4_PFN,
     writeImageFloat4: writeImageFloat4_PFN,
     writeImageInt4: writeImageInt4_PFN,
+    sampleImageFloat4: sampleImageFloat4_PFN,
+    queryImageSize: queryImageSize_PFN,
 };
 
 fn toCResult(err: spv.Runtime.RuntimeError) ffi.Result {
@@ -131,6 +135,38 @@ const ImageAPIBridge = struct {
 
         try fromCResult(result);
     }
+
+    fn sampleImageFloat4(driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.spv.SpvDim, x: f32, y: f32, z: f32) spv.Runtime.RuntimeError!spv.Runtime.Vec4(f32) {
+        const image_api = try getImageAPI();
+
+        var dst: Vec4f = undefined;
+        const result = image_api.sampleImageFloat4(driver_image, driver_sampler, dim, x, y, z, &dst);
+
+        try fromCResult(result);
+
+        return .{
+            .x = dst.x,
+            .y = dst.y,
+            .z = dst.z,
+            .w = dst.w,
+        };
+    }
+
+    fn queryImageSize(driver_image: *anyopaque, dim: spv.spv.SpvDim, arrayed: bool) spv.Runtime.RuntimeError!spv.Runtime.Vec4(u32) {
+        const image_api = try getImageAPI();
+
+        var dst: Vec4u = undefined;
+        const result = image_api.queryImageSize(driver_image, dim, if (arrayed) 1 else 0, &dst);
+
+        try fromCResult(result);
+
+        return .{
+            .x = dst.x,
+            .y = dst.y,
+            .z = dst.z,
+            .w = dst.w,
+        };
+    }
 };
 
 const RuntimeWrapper = struct {
@@ -152,6 +188,8 @@ export fn SpvInitRuntime(rt: **RuntimeWrapper, module: *spv.Module, image_api: I
             .readImageInt4 = ImageAPIBridge.readImageInt4,
             .writeImageFloat4 = ImageAPIBridge.writeImageFloat4,
             .writeImageInt4 = ImageAPIBridge.writeImageInt4,
+            .sampleImageFloat4 = ImageAPIBridge.sampleImageFloat4,
+            .queryImageSize = ImageAPIBridge.queryImageSize,
         },
     ) catch |err| {
         allocator.destroy(rt.*);

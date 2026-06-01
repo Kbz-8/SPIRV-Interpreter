@@ -1,5 +1,6 @@
 const std = @import("std");
 const lib = @import("lib.zig");
+const spv = @import("spv.zig");
 
 const Result = @import("Result.zig");
 const Runtime = @import("Runtime.zig");
@@ -125,6 +126,13 @@ pub const Value = union(Type) {
             i32_ptr: *i32, //< For vector specializations
             u32_ptr: *u32,
         },
+        image_texel: ?struct {
+            driver_image: *anyopaque,
+            dim: spv.SpvDim,
+            x: i32,
+            y: i32,
+            z: i32,
+        } = null,
 
         /// Exact byte window in externally visible descriptor storage that
         /// corresponds to this pointer. For a pointer to struct member N this
@@ -581,6 +589,12 @@ pub const Value = union(Type) {
                     }
 
                     p.uniform_slice_window = null;
+                }
+
+                if (p.uniform_backing_value) |backing| {
+                    backing.deinit(allocator);
+                    allocator.destroy(backing);
+                    p.uniform_backing_value = null;
                 }
             },
             else => {},

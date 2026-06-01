@@ -70,11 +70,28 @@ const BitOp = enum {
 
 const ImageOp = enum {
     Fetch,
+    QuerySize,
     Read,
     Resolve,
     SampleExplicitLod,
     SampleImplicitLod,
     Write,
+};
+
+const AtomicOp = enum {
+    Add,
+    And,
+    CompareExchange,
+    Decrement,
+    Exchange,
+    Increment,
+    MaxSigned,
+    MaxUnsigned,
+    MinSigned,
+    MinUnsigned,
+    Or,
+    Sub,
+    Xor,
 };
 
 pub const OpCodeFunc = *const fn (std.mem.Allocator, SpvWord, *Runtime) RuntimeError!void;
@@ -92,6 +109,7 @@ pub const SetupDispatcher = block: {
         .AtomicIDecrement = autoSetupConstant,
         .AtomicIIncrement = autoSetupConstant,
         .AtomicISub = autoSetupConstant,
+        .AtomicStore = autoSetupConstant,
         .AtomicLoad = autoSetupConstant,
         .AtomicOr = autoSetupConstant,
         .AtomicSMax = autoSetupConstant,
@@ -162,9 +180,11 @@ pub const SetupDispatcher = block: {
         .ISubBorrow = autoSetupConstant,
         .Image = autoSetupConstant,
         .ImageFetch = autoSetupConstant,
+        .ImageQuerySize = autoSetupConstant,
         .ImageRead = autoSetupConstant,
         .ImageSampleExplicitLod = autoSetupConstant,
         .ImageSampleImplicitLod = autoSetupConstant,
+        .ImageTexelPointer = autoSetupConstant,
         .InBoundsAccessChain = setupAccessChain,
         .IsFinite = autoSetupConstant,
         .IsInf = autoSetupConstant,
@@ -241,10 +261,21 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.AccessChain)]            = opAccessChain;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.All)]                    = opAll;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Any)]                    = opAny;
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.AtomicIAdd)]             = MathEngine(.SInt, .Add, true).op;
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.AtomicISub)]             = MathEngine(.SInt, .Sub, true).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.AtomicAnd)]              = AtomicEngine(.And).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.AtomicCompareExchange)]  = AtomicEngine(.CompareExchange).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.AtomicExchange)]         = AtomicEngine(.Exchange).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.AtomicIAdd)]             = AtomicEngine(.Add).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.AtomicIDecrement)]       = AtomicEngine(.Decrement).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.AtomicIIncrement)]       = AtomicEngine(.Increment).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.AtomicISub)]             = AtomicEngine(.Sub).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.AtomicLoad)]             = opLoad;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.AtomicOr)]               = AtomicEngine(.Or).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.AtomicSMax)]             = AtomicEngine(.MaxSigned).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.AtomicSMin)]             = AtomicEngine(.MinSigned).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.AtomicStore)]            = opAtomicStore;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.AtomicUMax)]             = AtomicEngine(.MaxUnsigned).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.AtomicUMin)]             = AtomicEngine(.MinUnsigned).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.AtomicXor)]              = AtomicEngine(.Xor).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.BitCount)]               = BitEngine(.UInt, .BitCount).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.BitFieldInsert)]         = BitEngine(.UInt, .BitFieldInsert).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.BitFieldSExtract)]       = BitEngine(.SInt, .BitFieldSExtract).op;
@@ -296,9 +327,11 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ISubBorrow)]             = opISubBorrow;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Image)]                  = ImageEngine(.Resolve).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageFetch)]             = ImageEngine(.Fetch).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageQuerySize)]         = ImageEngine(.QuerySize).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageRead)]              = ImageEngine(.Read).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageSampleExplicitLod)] = ImageEngine(.SampleExplicitLod).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageSampleImplicitLod)] = ImageEngine(.SampleImplicitLod).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageTexelPointer)]      = opImageTexelPointer;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageWrite)]             = ImageEngine(.Write).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.InBoundsAccessChain)]    = opAccessChain;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.IsFinite)]               = CondEngine(.Float, .IsNan).op;
@@ -993,6 +1026,7 @@ fn ImageEngine(comptime Op: ImageOp) type {
             type_word: SpvWord,
             driver_image: *anyopaque,
             dim: spv.SpvDim,
+            arrayed: bool,
         };
 
         const SampledImageOperand = struct {
@@ -1013,12 +1047,24 @@ fn ImageEngine(comptime Op: ImageOp) type {
             };
         }
 
+        fn resolveImageArrayed(rt: *Runtime, type_word: SpvWord) RuntimeError!bool {
+            return switch ((try rt.results[type_word].getConstVariant()).*) {
+                .Type => |t| switch (t) {
+                    .Image => |i| i.arrayed != 0,
+                    .SampledImage => |i| return resolveImageArrayed(rt, i.image_type),
+                    else => return RuntimeError.InvalidSpirV,
+                },
+                else => return RuntimeError.InvalidSpirV,
+            };
+        }
+
         fn resolveImage(image: *Result, rt: *Runtime) RuntimeError!ImageOperand {
             return switch ((try image.getValue()).*) {
                 .Image => |img| .{
                     .type_word = img.type_word,
                     .driver_image = img.driver_image,
                     .dim = try resolveImageDim(rt, img.type_word),
+                    .arrayed = try resolveImageArrayed(rt, img.type_word),
                 },
                 else => return RuntimeError.InvalidSpirV,
             };
@@ -1353,6 +1399,30 @@ fn ImageEngine(comptime Op: ImageOp) type {
             }
         }
 
+        fn queryImageSize(rt: *Runtime, dst: *Value, image_operand: ImageOperand) RuntimeError!void {
+            const size = try rt.image_api.queryImageSize(image_operand.driver_image, image_operand.dim, image_operand.arrayed);
+            switch (dst.*) {
+                .Int => |*v| v.value.uint32 = size.x,
+                .Vector2i32 => |*v| v.* = .{ @bitCast(size.x), @bitCast(size.y) },
+                .Vector3i32 => |*v| v.* = .{ @bitCast(size.x), @bitCast(size.y), @bitCast(size.z) },
+                .Vector4i32 => |*v| v.* = .{ @bitCast(size.x), @bitCast(size.y), @bitCast(size.z), @bitCast(size.w) },
+                .Vector2u32 => |*v| v.* = .{ size.x, size.y },
+                .Vector3u32 => |*v| v.* = .{ size.x, size.y, size.z },
+                .Vector4u32 => |*v| v.* = .{ size.x, size.y, size.z, size.w },
+                .Vector => |lanes| {
+                    const values = [_]u32{ size.x, size.y, size.z, size.w };
+                    for (lanes, 0..) |*lane, i| {
+                        if (i >= values.len) return RuntimeError.InvalidSpirV;
+                        switch (lane.*) {
+                            .Int => |*int| int.value.uint32 = values[i],
+                            else => return RuntimeError.InvalidValueType,
+                        }
+                    }
+                },
+                else => return RuntimeError.InvalidValueType,
+            }
+        }
+
         fn op(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
             if (comptime Op == .Resolve) {
                 _ = try rt.it.next(); // result type
@@ -1385,6 +1455,12 @@ fn ImageEngine(comptime Op: ImageOp) type {
             _ = try rt.it.next(); // result type
             const result_id = try rt.it.next();
             const image = &rt.results[try rt.it.next()];
+            if (comptime Op == .QuerySize) {
+                const image_operand = try resolveImage(image, rt);
+                const dst = try rt.results[result_id].getValue();
+                return try queryImageSize(rt, dst, image_operand);
+            }
+
             const coordinate = try rt.results[try rt.it.next()].getValue();
             const dst = try rt.results[result_id].getValue();
 
@@ -1438,6 +1514,232 @@ fn ImageEngine(comptime Op: ImageOp) type {
 
                 else => return RuntimeError.InvalidSpirV,
             }
+        }
+    };
+}
+
+fn resolveImageDimForTexelPointer(rt: *Runtime, type_word: SpvWord) RuntimeError!spv.SpvDim {
+    return switch ((try rt.results[type_word].getConstVariant()).*) {
+        .Type => |t| switch (t) {
+            .Image => |i| i.dim,
+            .SampledImage => |i| return resolveImageDimForTexelPointer(rt, i.image_type),
+            else => return RuntimeError.InvalidSpirV,
+        },
+        else => return RuntimeError.InvalidSpirV,
+    };
+}
+
+fn readStorageCoordLaneForTexelPointer(coord: *const Value, lane_index: usize) RuntimeError!i32 {
+    return switch (coord.*) {
+        .Int => |i| {
+            if (lane_index != 0) return RuntimeError.OutOfBounds;
+            return if (i.is_signed) i.value.sint32 else @intCast(i.value.uint32);
+        },
+        .Vector => |lanes| {
+            if (lane_index >= lanes.len) return RuntimeError.OutOfBounds;
+            return readStorageCoordLaneForTexelPointer(&lanes[lane_index], 0);
+        },
+        .Vector4i32 => |v| switch (lane_index) {
+            inline 0...3 => |idx| v[idx],
+            else => return RuntimeError.OutOfBounds,
+        },
+        .Vector3i32 => |v| switch (lane_index) {
+            inline 0...2 => |idx| v[idx],
+            else => return RuntimeError.OutOfBounds,
+        },
+        .Vector2i32 => |v| switch (lane_index) {
+            inline 0...1 => |idx| v[idx],
+            else => return RuntimeError.OutOfBounds,
+        },
+        .Vector4u32 => |v| switch (lane_index) {
+            inline 0...3 => |idx| @intCast(v[idx]),
+            else => return RuntimeError.OutOfBounds,
+        },
+        .Vector3u32 => |v| switch (lane_index) {
+            inline 0...2 => |idx| @intCast(v[idx]),
+            else => return RuntimeError.OutOfBounds,
+        },
+        .Vector2u32 => |v| switch (lane_index) {
+            inline 0...1 => |idx| @intCast(v[idx]),
+            else => return RuntimeError.OutOfBounds,
+        },
+        else => return RuntimeError.InvalidValueType,
+    };
+}
+
+fn opImageTexelPointer(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
+    _ = word_count;
+    const result_type = try rt.it.next();
+    const result_id = try rt.it.next();
+    const image_id = try rt.it.next();
+    const coord = try rt.results[try rt.it.next()].getValue();
+    _ = try rt.it.next(); // sample
+
+    const image = switch ((try rt.results[image_id].getValue()).*) {
+        .Image => |img| img,
+        else => return RuntimeError.InvalidSpirV,
+    };
+    const dim = try resolveImageDimForTexelPointer(rt, image.type_word);
+    const x = try readStorageCoordLaneForTexelPointer(coord, 0);
+    const y = readStorageCoordLaneForTexelPointer(coord, 1) catch 0;
+    const z = readStorageCoordLaneForTexelPointer(coord, 2) catch 0;
+    const texel = try rt.image_api.readImageInt4(image.driver_image, dim, x, y, z);
+
+    const pointer_type = switch ((try rt.results[result_type].getConstVariant()).*) {
+        .Type => |t| switch (t) {
+            .Pointer => |ptr| ptr,
+            else => return RuntimeError.InvalidSpirV,
+        },
+        else => return RuntimeError.InvalidSpirV,
+    };
+    const target_type = switch ((try rt.results[pointer_type.target].getConstVariant()).*) {
+        .Type => |t| t,
+        else => return RuntimeError.InvalidSpirV,
+    };
+
+    const backing = allocator.create(Value) catch return RuntimeError.OutOfMemory;
+    errdefer allocator.destroy(backing);
+    backing.* = switch (target_type) {
+        .Int => |i| .{ .Int = .{
+            .bit_count = i.bit_length,
+            .is_signed = i.is_signed,
+            .value = if (i.is_signed) .{ .sint32 = @bitCast(texel.x) } else .{ .uint32 = texel.x },
+        } },
+        else => return RuntimeError.InvalidSpirV,
+    };
+    errdefer backing.deinit(allocator);
+
+    if (rt.results[result_id].variant) |*variant| {
+        switch (variant.*) {
+            .AccessChain => |*a| {
+                allocator.free(a.indexes);
+                a.value.deinit(allocator);
+            },
+            else => {},
+        }
+    }
+
+    const indexes = allocator.alloc(SpvWord, 0) catch return RuntimeError.OutOfMemory;
+    rt.results[result_id].variant = .{
+        .AccessChain = .{
+            .target = result_type,
+            .base = image_id,
+            .indexes = indexes,
+            .value = .{ .Pointer = .{
+                .ptr = .{ .common = backing },
+                .image_texel = .{
+                    .driver_image = image.driver_image,
+                    .dim = dim,
+                    .x = x,
+                    .y = y,
+                    .z = z,
+                },
+                .uniform_backing_value = backing,
+            } },
+        },
+    };
+}
+
+fn writeImageTexelPointer(rt: *Runtime, ptr: *Value) RuntimeError!void {
+    if (std.meta.activeTag(ptr.*) != .Pointer)
+        return;
+    const image_texel = ptr.Pointer.image_texel orelse return;
+    const value = switch (ptr.Pointer.ptr) {
+        .common => |v| v,
+        else => return RuntimeError.InvalidSpirV,
+    };
+    const component = switch (value.*) {
+        .Int => |i| if (i.is_signed) @as(u32, @bitCast(i.value.sint32)) else i.value.uint32,
+        else => return RuntimeError.InvalidValueType,
+    };
+    try rt.image_api.writeImageInt4(
+        image_texel.driver_image,
+        image_texel.dim,
+        image_texel.x,
+        image_texel.y,
+        image_texel.z,
+        .{ .x = component, .y = 0, .z = 0, .w = 0 },
+    );
+}
+
+fn AtomicEngine(comptime Op: AtomicOp) type {
+    return struct {
+        fn apply(old: u32, value: u32, comparator: u32) u32 {
+            return switch (Op) {
+                .Add => old +% value,
+                .And => old & value,
+                .CompareExchange => if (old == comparator) value else old,
+                .Decrement => old -% 1,
+                .Exchange => value,
+                .Increment => old +% 1,
+                .MaxSigned => @bitCast(@max(@as(i32, @bitCast(old)), @as(i32, @bitCast(value)))),
+                .MaxUnsigned => @max(old, value),
+                .MinSigned => @bitCast(@min(@as(i32, @bitCast(old)), @as(i32, @bitCast(value)))),
+                .MinUnsigned => @min(old, value),
+                .Or => old | value,
+                .Sub => old -% value,
+                .Xor => old ^ value,
+            };
+        }
+
+        fn readU32(value: *const Value) RuntimeError!u32 {
+            return switch (value.*) {
+                .Int => |i| if (i.is_signed) @bitCast(i.value.sint32) else i.value.uint32,
+                .Pointer => |p| switch (p.ptr) {
+                    .common => |v| readU32(v),
+                    .u32_ptr => |ptr| ptr.*,
+                    .i32_ptr => |ptr| @bitCast(ptr.*),
+                    else => return RuntimeError.InvalidValueType,
+                },
+                else => return RuntimeError.InvalidValueType,
+            };
+        }
+
+        fn writeU32(value: *Value, bits: u32) RuntimeError!void {
+            switch (value.*) {
+                .Int => |*i| {
+                    if (i.is_signed) {
+                        i.value.sint32 = @bitCast(bits);
+                    } else {
+                        i.value.uint32 = bits;
+                    }
+                },
+                .Pointer => |p| switch (p.ptr) {
+                    .common => |v| try writeU32(v, bits),
+                    .u32_ptr => |ptr| ptr.* = bits,
+                    .i32_ptr => |ptr| ptr.* = @bitCast(bits),
+                    else => return RuntimeError.InvalidValueType,
+                },
+                else => return RuntimeError.InvalidValueType,
+            }
+        }
+
+        fn op(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+            _ = try rt.it.next(); // result type
+            const dst = try rt.results[try rt.it.next()].getValue();
+            const ptr = try rt.results[try rt.it.next()].getValue();
+            _ = try rt.it.next(); // scope
+            _ = try rt.it.next(); // semantics
+
+            if (comptime Op == .CompareExchange) {
+                _ = try rt.it.next(); // unequal semantics
+            }
+
+            const value: u32 = switch (Op) {
+                .Decrement, .Increment => 0,
+                else => try readU32(try rt.results[try rt.it.next()].getValue()),
+            };
+            const comparator: u32 = if (comptime Op == .CompareExchange)
+                try readU32(try rt.results[try rt.it.next()].getValue())
+            else
+                0;
+
+            const old = try readU32(ptr);
+            const new = apply(old, value, comparator);
+            try writeU32(ptr, new);
+            try writeU32(dst, old);
+            try writeImageTexelPointer(rt, ptr);
+            try ptr.flushPtr(allocator);
         }
     };
 }
@@ -1839,17 +2141,45 @@ fn copyValue(dst: *Value, src: *const Value) RuntimeError!void {
     };
 
     if (std.meta.activeTag(dst.*) == .Pointer) {
-        switch (dst.Pointer.ptr) {
-            .common => |dst_val_ptr| return switch (src.*) {
-                .Pointer => |src_ptr| switch (src_ptr.ptr) {
-                    .common => |src_val_ptr| try copyValue(dst_val_ptr, src_val_ptr),
-                    else => dst_val_ptr.* = src.*,
-                },
-                else => try copyValue(dst_val_ptr, src),
+        const dst_ptr = dst.Pointer;
+        switch (dst_ptr.ptr) {
+            .common => |dst_val_ptr| {
+                switch (src.*) {
+                    .Pointer => |src_ptr| switch (src_ptr.ptr) {
+                        .common => |src_val_ptr| try copyValue(dst_val_ptr, src_val_ptr),
+                        else => dst_val_ptr.* = src.*,
+                    },
+                    else => try copyValue(dst_val_ptr, src),
+                }
+                if (dst_ptr.uniform_slice_window) |window| {
+                    _ = try dst_val_ptr.read(window);
+                }
+                return;
             },
-            .f32_ptr => |dst_f32_ptr| try helpers.writeF32(dst_f32_ptr, src),
-            .i32_ptr => |dst_i32_ptr| try helpers.writeI32(dst_i32_ptr, src),
-            .u32_ptr => |dst_u32_ptr| try helpers.writeU32(dst_u32_ptr, src),
+            .f32_ptr => |dst_f32_ptr| {
+                try helpers.writeF32(dst_f32_ptr, src);
+                if (dst_ptr.uniform_slice_window) |window| {
+                    if (window.len < @sizeOf(f32)) return RuntimeError.OutOfBounds;
+                    @memcpy(window[0..@sizeOf(f32)], std.mem.asBytes(dst_f32_ptr));
+                }
+                return;
+            },
+            .i32_ptr => |dst_i32_ptr| {
+                try helpers.writeI32(dst_i32_ptr, src);
+                if (dst_ptr.uniform_slice_window) |window| {
+                    if (window.len < @sizeOf(i32)) return RuntimeError.OutOfBounds;
+                    @memcpy(window[0..@sizeOf(i32)], std.mem.asBytes(dst_i32_ptr));
+                }
+                return;
+            },
+            .u32_ptr => |dst_u32_ptr| {
+                try helpers.writeU32(dst_u32_ptr, src);
+                if (dst_ptr.uniform_slice_window) |window| {
+                    if (window.len < @sizeOf(u32)) return RuntimeError.OutOfBounds;
+                    @memcpy(window[0..@sizeOf(u32)], std.mem.asBytes(dst_u32_ptr));
+                }
+                return;
+            },
         }
     }
 

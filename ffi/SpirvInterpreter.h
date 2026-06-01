@@ -471,6 +471,8 @@ typedef SpvResult (*SpvReadImageFloat4_PFN)(void* driver_image, SpvDim dim, int 
 typedef SpvResult (*SpvReadImageInt4_PFN)(void* driver_image, SpvDim dim, int x, int y, int z, SpvVec4u* dst);
 typedef SpvResult (*SpvWriteImageFloat4_PFN)(void* driver_image, SpvDim dim, int x, int y, int z, SpvVec4f src);
 typedef SpvResult (*SpvWriteImageInt4_PFN)(void* driver_image, SpvDim dim, int x, int y, int z, SpvVec4u src);
+typedef SpvResult (*SpvSampleImageFloat4_PFN)(void* driver_image, void* driver_sampler, SpvDim dim, float x, float y, float z, SpvVec4f* dst);
+typedef SpvResult (*SpvQueryImageSize_PFN)(void* driver_image, SpvDim dim, SpvBool arrayed, SpvVec4u* dst);
 
 typedef struct
 {
@@ -478,6 +480,8 @@ typedef struct
 	SpvReadImageInt4_PFN  SpvReadImageInt4;
 	SpvWriteImageFloat4_PFN SpvWriteImageFloat4;
 	SpvWriteImageInt4_PFN SpvWriteImageInt4;
+	SpvSampleImageFloat4_PFN SpvSampleImageFloat4;
+	SpvQueryImageSize_PFN SpvQueryImageSize;
 } SpvImageAPI;
 
 typedef void* SpvModule;
