@@ -9,8 +9,6 @@ const SpvByte = spv.SpvByte;
 const SpvWord = spv.SpvWord;
 const SpvBool = spv.SpvBool;
 
-const SpvBinding = spv.SpvBinding;
-
 const Result = @import("Result.zig");
 const Runtime = @import("Runtime.zig");
 const Value = @import("Value.zig").Value;
@@ -28,6 +26,12 @@ const SpvEntryPoint = struct {
     id: SpvWord,
     name: []const u8,
     globals: []SpvWord,
+};
+
+const BindingEntry = struct {
+    set: SpvWord,
+    binding: SpvWord,
+    result: SpvWord,
 };
 
 pub const ModuleError = error{
@@ -73,7 +77,7 @@ geometry_output: SpvWord,
 
 input_locations: [lib.SPIRV_MAX_INPUT_LOCATIONS]SpvWord,
 output_locations: [lib.SPIRV_MAX_OUTPUT_LOCATIONS]SpvWord,
-bindings: [lib.SPIRV_MAX_SET][lib.SPIRV_MAX_SET_BINDINGS]SpvWord,
+bindings: std.ArrayList(BindingEntry),
 builtins: std.EnumMap(spv.SpvBuiltIn, SpvWord),
 
 pub fn init(allocator: std.mem.Allocator, source: []const SpvWord, options: ModuleOptions) ModuleError!Self {
@@ -82,12 +86,14 @@ pub fn init(allocator: std.mem.Allocator, source: []const SpvWord, options: Modu
         .code = allocator.dupe(SpvWord, source) catch return ModuleError.OutOfMemory,
         .extensions = std.ArrayList([]const u8).empty,
         .entry_points = std.ArrayList(SpvEntryPoint).empty,
+        .bindings = std.ArrayList(BindingEntry).empty,
         .capabilities = std.EnumSet(spv.SpvCapability).initEmpty(),
         .local_size_x = 1,
         .local_size_y = 1,
         .local_size_z = 1,
     });
     errdefer allocator.free(self.code);
+    errdefer self.bindings.deinit(allocator);
 
     op.initRuntimeDispatcher();
 
@@ -125,7 +131,7 @@ pub fn init(allocator: std.mem.Allocator, source: []const SpvWord, options: Modu
     _ = self.it.skip(); // Skip schema
 
     try self.pass(allocator); // Setup pass
-    try self.applyDecorations();
+    try self.applyDecorations(allocator);
 
     return self;
 }
@@ -256,13 +262,13 @@ fn applyStructMemberInterfaceDecorations(self: *Self, storage_class: spv.SpvStor
     }
 }
 
-fn applyDecorations(self: *Self) ModuleError!void {
+fn applyDecorations(self: *Self, allocator: std.mem.Allocator) ModuleError!void {
     for (self.results, 0..) |result, id| {
         if (result.variant == null)
             continue;
 
-        var set: ?usize = null;
-        var binding: ?usize = null;
+        var set: ?SpvWord = null;
+        var binding: ?SpvWord = null;
 
         for (result.decorations.items) |decoration| {
             if (result.variant) |*variant| switch (variant.*) {
@@ -320,9 +326,22 @@ fn applyDecorations(self: *Self) ModuleError!void {
         };
 
         if (set != null and binding != null) {
-            self.bindings[set.?][binding.?] = @intCast(id);
+            self.bindings.append(allocator, .{
+                .set = set.?,
+                .binding = binding.?,
+                .result = @intCast(id),
+            }) catch return ModuleError.OutOfMemory;
         }
     }
+}
+
+pub fn getBindingResult(self: *const Self, set: SpvWord, binding: SpvWord) ?SpvWord {
+    for (self.bindings.items) |entry| {
+        if (entry.set == set and entry.binding == binding) {
+            return entry.result;
+        }
+    }
+    return null;
 }
 
 pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
@@ -337,6 +356,7 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
         allocator.free(ext);
     }
     self.extensions.deinit(allocator);
+    self.bindings.deinit(allocator);
 
     for (self.results) |*result| {
         result.deinit(allocator);

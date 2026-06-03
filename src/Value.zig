@@ -113,7 +113,9 @@ pub const Value = union(Type) {
         type_word: SpvWord,
         driver_image: *anyopaque,
     },
-    Sampler: struct {},
+    Sampler: struct {
+        driver_sampler: *anyopaque,
+    },
     SampledImage: struct {
         type_word: SpvWord,
         driver_image: *anyopaque,
@@ -255,7 +257,11 @@ pub const Value = union(Type) {
                         .driver_image = undefined,
                     },
                 },
-                .Sampler => RuntimeError.ToDo,
+                .Sampler => .{
+                    .Sampler = .{
+                        .driver_sampler = undefined,
+                    },
+                },
                 .SampledImage => .{
                     .SampledImage = .{
                         .type_word = target_type,
@@ -487,6 +493,7 @@ pub const Value = union(Type) {
             },
             .RuntimeArray => |*arr| arr.data = @constCast(input[0..]),
             .Image => |*img| img.driver_image = @ptrFromInt(std.mem.bytesToValue(usize, input[0..])),
+            .Sampler => |*sampler| sampler.driver_sampler = @ptrFromInt(std.mem.bytesToValue(usize, input[0..])),
             .SampledImage => |*img| {
                 img.driver_image = @ptrFromInt(std.mem.bytesToValue(usize, input[0..]));
                 img.driver_sampler = @ptrFromInt(std.mem.bytesToValue(usize, input[@sizeOf(usize)..]));

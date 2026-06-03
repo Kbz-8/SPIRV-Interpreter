@@ -217,6 +217,7 @@ pub const SetupDispatcher = block: {
         .SMulExtended = autoSetupConstant,
         .SNegate = autoSetupConstant,
         .SRem = autoSetupConstant,
+        .SampledImage = autoSetupConstant,
         .SatConvertSToU = autoSetupConstant,
         .SatConvertUToS = autoSetupConstant,
         .Select = autoSetupConstant,
@@ -229,6 +230,7 @@ pub const SetupDispatcher = block: {
         .TypeFloat = opTypeFloat,
         .TypeFunction = opTypeFunction,
         .TypeImage = opTypeImage,
+        .TypeSampler = opTypeSampler,
         .TypeSampledImage = opTypeSampledImage,
         .TypeInt = opTypeInt,
         .TypeMatrix = opTypeMatrix,
@@ -334,6 +336,7 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageSampleImplicitLod)] = ImageEngine(.SampleImplicitLod).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageTexelPointer)]      = opImageTexelPointer;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageWrite)]             = ImageEngine(.Write).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.SampledImage)]           = opSampledImage;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.InBoundsAccessChain)]    = opAccessChain;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.IsFinite)]               = CondEngine(.Float, .IsNan).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.IsInf)]                  = CondEngine(.Float, .IsInf).op;
@@ -1134,6 +1137,14 @@ fn ImageEngine(comptime Op: ImageOp) type {
 
         fn readSampleCoordLane(coord: *const Value, lane_index: usize) RuntimeError!f32 {
             return switch (coord.*) {
+                .Float => |f| {
+                    if (lane_index != 0) return RuntimeError.OutOfBounds;
+                    return f.value.float32;
+                },
+                .Int => |i| {
+                    if (lane_index != 0) return RuntimeError.OutOfBounds;
+                    return if (i.is_signed) @floatFromInt(i.value.sint32) else @floatFromInt(i.value.uint32);
+                },
                 .Vector => |lanes| {
                     if (lane_index >= lanes.len) return RuntimeError.OutOfBounds;
                     return readSampleCoordLane(&lanes[lane_index], 0);
@@ -3790,6 +3801,36 @@ fn opTypeSampledImage(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeErr
     };
 }
 
+fn opTypeSampler(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const id = try rt.it.next();
+    rt.results[id].variant = .{
+        .Type = .{
+            .Sampler = .{},
+        },
+    };
+}
+
+fn opSampledImage(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const type_word = try rt.it.next();
+    const dst = try rt.results[try rt.it.next()].getValue();
+    const image = try rt.results[try rt.it.next()].getValue();
+    const sampler = try rt.results[try rt.it.next()].getValue();
+
+    dst.* = .{
+        .SampledImage = .{
+            .type_word = type_word,
+            .driver_image = switch (image.*) {
+                .Image => |img| img.driver_image,
+                else => return RuntimeError.InvalidSpirV,
+            },
+            .driver_sampler = switch (sampler.*) {
+                .Sampler => |s| s.driver_sampler,
+                else => return RuntimeError.InvalidSpirV,
+            },
+        },
+    };
+}
+
 fn opTypeInt(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     const id = try rt.it.next();
     rt.results[id].variant = .{
@@ -3979,7 +4020,7 @@ fn opVariable(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) R
             .storage_class = storage_class,
             .type_word = resolved_word,
             .type = resolved_type,
-            .value = try Value.init(allocator, rt.results, resolved_word, is_externally_visible),
+            .value = try Value.init(allocator, rt.results, resolved_word, is_externally_visible and resolved_type != .Array),
         },
     };
 

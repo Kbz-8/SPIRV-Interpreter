@@ -246,7 +246,9 @@ pub fn continueEntryPoint(self: *Self, allocator: std.mem.Allocator) RuntimeErro
 fn pass(self: *Self, allocator: std.mem.Allocator, op_set: ?std.EnumSet(spv.SpvOp)) RuntimeError!void {
     self.it.did_jump = false; // To reset function jump
     while (self.it.nextOrNull()) |opcode_data| {
-        const word_count = ((opcode_data & (~spv.SpvOpCodeMask)) >> spv.SpvWordCountShift) - 1;
+        const word_count_with_header = (opcode_data & (~spv.SpvOpCodeMask)) >> spv.SpvWordCountShift;
+        if (word_count_with_header == 0) return RuntimeError.InvalidSpirV;
+        const word_count = word_count_with_header - 1;
         const opcode = (opcode_data & spv.SpvOpCodeMask);
 
         if (op_set) |set| {
@@ -282,22 +284,19 @@ pub fn populatePushConstants(self: *Self, blob: []const u8) RuntimeError!void {
 }
 
 pub fn writeDescriptorSet(self: *const Self, input: []const u8, set: SpvWord, binding: SpvWord, descriptor_index: SpvWord) RuntimeError!void {
-    if (set < lib.SPIRV_MAX_SET and binding < lib.SPIRV_MAX_SET_BINDINGS) {
-        const value = &(self.results[self.mod.bindings[set][binding]].variant orelse return).Variable.value;
-        switch (value.*) {
-            .Array => |arr| {
-                if (descriptor_index >= arr.values.len)
-                    return RuntimeError.NotFound;
-                _ = try arr.values[descriptor_index].write(input);
-            },
-            else => {
-                if (descriptor_index != 0)
-                    return RuntimeError.NotFound;
-                _ = try value.write(input);
-            },
-        }
-    } else {
-        return RuntimeError.NotFound;
+    const result = self.mod.getBindingResult(set, binding) orelse return RuntimeError.NotFound;
+    const value = &(self.results[result].variant orelse return).Variable.value;
+    switch (value.*) {
+        .Array => |arr| {
+            if (descriptor_index >= arr.values.len)
+                return RuntimeError.NotFound;
+            _ = try arr.values[descriptor_index].write(input);
+        },
+        else => {
+            if (descriptor_index != 0)
+                return RuntimeError.NotFound;
+            _ = try value.write(input);
+        },
     }
 }
 
