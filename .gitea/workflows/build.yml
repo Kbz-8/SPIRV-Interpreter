@@ -6,10 +6,6 @@ on:
   pull_request:
     branches: [ "master" ]
 
-permissions:
-  contents: read
-  deployments: write
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -24,6 +20,9 @@ jobs:
 
     - name: Building
       run: zig build -Dno-example=true
+
+    - name: Building FFI
+      run: zig build ffi-c -Dno-example=true
 
     - name: Generating docs
       run: zig build docs -Dno-example=true

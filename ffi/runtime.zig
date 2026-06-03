@@ -45,37 +45,39 @@ const ImageAPI = extern struct {
 
 fn toCResult(err: spv.Runtime.RuntimeError) ffi.Result {
     return switch (err) {
+        spv.Runtime.RuntimeError.Barrier => ffi.Result.Barrier,
         spv.Runtime.RuntimeError.DivisionByZero => ffi.Result.DivisionByZero,
         spv.Runtime.RuntimeError.InvalidEntryPoint => ffi.Result.InvalidEntryPoint,
         spv.Runtime.RuntimeError.InvalidSpirV => ffi.Result.InvalidSpirV,
         spv.Runtime.RuntimeError.InvalidValueType => ffi.Result.InvalidValueType,
         spv.Runtime.RuntimeError.Killed => ffi.Result.Killed,
         spv.Runtime.RuntimeError.NotFound => ffi.Result.NotFound,
-        spv.Runtime.RuntimeError.OutOfMemory => ffi.Result.OutOfMemory,
         spv.Runtime.RuntimeError.OutOfBounds => ffi.Result.OutOfBounds,
+        spv.Runtime.RuntimeError.OutOfMemory => ffi.Result.OutOfMemory,
         spv.Runtime.RuntimeError.ToDo => ffi.Result.ToDo,
-        spv.Runtime.RuntimeError.Unreachable => ffi.Result.Unreachable,
-        spv.Runtime.RuntimeError.UnsupportedSpirV => ffi.Result.UnsupportedSpirV,
-        spv.Runtime.RuntimeError.UnsupportedExtension => ffi.Result.UnsupportedExtension,
         spv.Runtime.RuntimeError.Unknown => ffi.Result.Unknown,
+        spv.Runtime.RuntimeError.Unreachable => ffi.Result.Unreachable,
+        spv.Runtime.RuntimeError.UnsupportedExtension => ffi.Result.UnsupportedExtension,
+        spv.Runtime.RuntimeError.UnsupportedSpirV => ffi.Result.UnsupportedSpirV,
     };
 }
 
 fn fromCResult(res: ffi.Result) spv.Runtime.RuntimeError!void {
     return switch (res) {
+        ffi.Result.Barrier => spv.Runtime.RuntimeError.Barrier,
         ffi.Result.DivisionByZero => spv.Runtime.RuntimeError.DivisionByZero,
         ffi.Result.InvalidEntryPoint => spv.Runtime.RuntimeError.InvalidEntryPoint,
         ffi.Result.InvalidSpirV => spv.Runtime.RuntimeError.InvalidSpirV,
         ffi.Result.InvalidValueType => spv.Runtime.RuntimeError.InvalidValueType,
         ffi.Result.Killed => spv.Runtime.RuntimeError.Killed,
         ffi.Result.NotFound => spv.Runtime.RuntimeError.NotFound,
-        ffi.Result.OutOfMemory => spv.Runtime.RuntimeError.OutOfMemory,
         ffi.Result.OutOfBounds => spv.Runtime.RuntimeError.OutOfBounds,
+        ffi.Result.OutOfMemory => spv.Runtime.RuntimeError.OutOfMemory,
         ffi.Result.ToDo => spv.Runtime.RuntimeError.ToDo,
-        ffi.Result.Unreachable => spv.Runtime.RuntimeError.Unreachable,
-        ffi.Result.UnsupportedSpirV => spv.Runtime.RuntimeError.UnsupportedSpirV,
-        ffi.Result.UnsupportedExtension => spv.Runtime.RuntimeError.UnsupportedExtension,
         ffi.Result.Unknown => spv.Runtime.RuntimeError.Unknown,
+        ffi.Result.Unreachable => spv.Runtime.RuntimeError.Unreachable,
+        ffi.Result.UnsupportedExtension => spv.Runtime.RuntimeError.UnsupportedExtension,
+        ffi.Result.UnsupportedSpirV => spv.Runtime.RuntimeError.UnsupportedSpirV,
         else => {},
     };
 }

@@ -6,21 +6,22 @@ pub const SpvCSize = c_ulong;
 
 pub const Result = enum(c_int) {
     Success = 0,
+    Barrier = 1,
+    Killed = 2,
     DivisionByZero = -1,
     InvalidEntryPoint = -2,
     InvalidSpirV = -3,
     InvalidValueType = -4,
-    Killed = -5,
-    NotFound = -6,
-    OutOfMemory = -7,
-    OutOfBounds = -8,
-    ToDo = -9,
-    Unreachable = -10,
-    UnsupportedSpirV = -11,
-    UnsupportedExtension = -12,
-    UnsupportedEndianness = -13,
-    InvalidMagic = -14,
-    Unknown = -15,
+    NotFound = -5,
+    OutOfMemory = -6,
+    OutOfBounds = -7,
+    ToDo = -8,
+    Unreachable = -9,
+    UnsupportedSpirV = -10,
+    UnsupportedExtension = -11,
+    UnsupportedEndianness = -12,
+    InvalidMagic = -13,
+    Unknown = -14,
 };
 
 comptime {
