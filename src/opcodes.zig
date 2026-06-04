@@ -1625,6 +1625,7 @@ fn opImageTexelPointer(allocator: std.mem.Allocator, word_count: SpvWord, rt: *R
     if (rt.results[result_id].variant) |*variant| {
         switch (variant.*) {
             .AccessChain => |*a| {
+                try a.value.flushPtr(allocator);
                 allocator.free(a.indexes);
                 a.value.deinit(allocator);
             },
@@ -1648,6 +1649,7 @@ fn opImageTexelPointer(allocator: std.mem.Allocator, word_count: SpvWord, rt: *R
                     .z = z,
                 },
                 .uniform_backing_value = backing,
+                .owns_uniform_backing_value = true,
             } },
         },
     };
@@ -1816,7 +1818,12 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
         fn applySIMDVectorf32(comptime N: usize, d: *@Vector(N, f32), l: *const Value, r: *const Value) RuntimeError!void {
             switch (Op) {
                 .MatrixTimesVector => inline for (0..N) |i| {
-                    d[i] = @reduce(.Add, l.Matrix[i].getVectorSpecialization(N, f32) * r.getVectorSpecialization(N, f32));
+                    const l_vec = l.Matrix[i].getVectorSpecialization(N, f32);
+                    const r_vec = r.getVectorSpecialization(N, f32);
+                    d[i] = 0;
+                    inline for (0..N) |j| {
+                        d[i] += l_vec[j] * r_vec[j];
+                    }
                 },
                 else => try applyDirectSIMDVectorf32(N, d, l.getVectorSpecialization(N, f32), r),
             }
@@ -2048,6 +2055,7 @@ fn setupAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runt
     if (rt.results[id].variant) |*variant| {
         switch (variant.*) {
             .AccessChain => |*a| {
+                try a.value.flushPtr(allocator);
                 allocator.free(a.indexes);
                 a.value.deinit(allocator);
             },
@@ -2285,11 +2293,13 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
 
                 var uniform_slice_window: ?[]u8 = null;
                 var uniform_backing_value: ?*Value = null;
+                var owns_uniform_backing_value = false;
 
                 if (std.meta.activeTag(value_ptr.*) == .Pointer) {
                     const ptr = value_ptr.Pointer;
                     uniform_slice_window = ptr.uniform_slice_window;
                     uniform_backing_value = ptr.uniform_backing_value;
+                    owns_uniform_backing_value = false;
                     switch (ptr.ptr) {
                         .common => |common| value_ptr = common,
                         else => return RuntimeError.InvalidSpirV,
@@ -2312,6 +2322,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                 const ptr = value_ptr.Pointer;
                                 uniform_slice_window = ptr.uniform_slice_window;
                                 uniform_backing_value = ptr.uniform_backing_value;
+                                owns_uniform_backing_value = false;
                                 switch (ptr.ptr) {
                                     .common => |common| value_ptr = common,
                                     else => return RuntimeError.InvalidSpirV,
@@ -2365,13 +2376,14 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                         allocator.destroy(backing);
                                     }
 
-                                    if (uniform_backing_value) |old_backing| {
+                                    if (owns_uniform_backing_value) if (uniform_backing_value) |old_backing| {
                                         old_backing.deinit(allocator);
                                         allocator.destroy(old_backing);
-                                    }
+                                    };
 
                                     value_ptr = backing;
                                     uniform_backing_value = backing;
+                                    owns_uniform_backing_value = true;
                                     uniform_slice_window = arr.data[element_offset .. element_offset + arr.stride];
                                 },
                                 .Vector4f32 => |*v| switch (component_index) {
@@ -2379,6 +2391,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                         .ptr = .{ .f32_ptr = &v[idx] },
                                         .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(f32), @sizeOf(f32)),
                                         .uniform_backing_value = uniform_backing_value,
+                                        .owns_uniform_backing_value = owns_uniform_backing_value,
                                     } },
                                     else => return RuntimeError.InvalidSpirV,
                                 },
@@ -2387,6 +2400,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                         .ptr = .{ .f32_ptr = &v[idx] },
                                         .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(f32), @sizeOf(f32)),
                                         .uniform_backing_value = uniform_backing_value,
+                                        .owns_uniform_backing_value = owns_uniform_backing_value,
                                     } },
                                     else => return RuntimeError.InvalidSpirV,
                                 },
@@ -2395,6 +2409,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                         .ptr = .{ .f32_ptr = &v[idx] },
                                         .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(f32), @sizeOf(f32)),
                                         .uniform_backing_value = uniform_backing_value,
+                                        .owns_uniform_backing_value = owns_uniform_backing_value,
                                     } },
                                     else => return RuntimeError.InvalidSpirV,
                                 },
@@ -2403,6 +2418,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                         .ptr = .{ .i32_ptr = &v[idx] },
                                         .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(i32), @sizeOf(i32)),
                                         .uniform_backing_value = uniform_backing_value,
+                                        .owns_uniform_backing_value = owns_uniform_backing_value,
                                     } },
                                     else => return RuntimeError.InvalidSpirV,
                                 },
@@ -2411,6 +2427,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                         .ptr = .{ .i32_ptr = &v[idx] },
                                         .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(i32), @sizeOf(i32)),
                                         .uniform_backing_value = uniform_backing_value,
+                                        .owns_uniform_backing_value = owns_uniform_backing_value,
                                     } },
                                     else => return RuntimeError.InvalidSpirV,
                                 },
@@ -2419,6 +2436,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                         .ptr = .{ .i32_ptr = &v[idx] },
                                         .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(i32), @sizeOf(i32)),
                                         .uniform_backing_value = uniform_backing_value,
+                                        .owns_uniform_backing_value = owns_uniform_backing_value,
                                     } },
                                     else => return RuntimeError.InvalidSpirV,
                                 },
@@ -2427,6 +2445,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                         .ptr = .{ .u32_ptr = &v[idx] },
                                         .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(u32), @sizeOf(u32)),
                                         .uniform_backing_value = uniform_backing_value,
+                                        .owns_uniform_backing_value = owns_uniform_backing_value,
                                     } },
                                     else => return RuntimeError.InvalidSpirV,
                                 },
@@ -2435,6 +2454,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                         .ptr = .{ .u32_ptr = &v[idx] },
                                         .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(u32), @sizeOf(u32)),
                                         .uniform_backing_value = uniform_backing_value,
+                                        .owns_uniform_backing_value = owns_uniform_backing_value,
                                     } },
                                     else => return RuntimeError.InvalidSpirV,
                                 },
@@ -2443,6 +2463,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                         .ptr = .{ .u32_ptr = &v[idx] },
                                         .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(u32), @sizeOf(u32)),
                                         .uniform_backing_value = uniform_backing_value,
+                                        .owns_uniform_backing_value = owns_uniform_backing_value,
                                     } },
                                     else => return RuntimeError.InvalidSpirV,
                                 },
@@ -2457,6 +2478,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                         .ptr = .{ .common = value_ptr },
                         .uniform_slice_window = uniform_slice_window,
                         .uniform_backing_value = uniform_backing_value,
+                        .owns_uniform_backing_value = owns_uniform_backing_value,
                     },
                 };
             },
@@ -2795,7 +2817,8 @@ fn opCompositeInsert(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Run
                         return;
                     }
 
-                    var elem_value = try arr.createLocalValueFromIndex(alloc, results, elem_offset);
+                    var elem_value = try arr.createLocalValueFromIndex(alloc, results, index);
+                    defer elem_value.deinit(alloc);
                     try insertAt(alloc, results, &elem_value, object_value, indices[1..]);
                     _ = try elem_value.read(arr.data[elem_offset..]);
                 },

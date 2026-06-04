@@ -80,18 +80,22 @@ pub const Value = union(Type) {
         data: []u8,
 
         pub inline fn createValueFromIndex(self: *const @This(), allocator: std.mem.Allocator, results: []const Result, index: usize) RuntimeError!*Value {
+            const offset = try self.getCheckedOffsetOfIndex(index);
             const value = allocator.create(Value) catch return RuntimeError.OutOfMemory;
             errdefer allocator.destroy(value);
 
             value.* = try Value.init(allocator, results, self.type_word, false);
-            _ = try value.write(self.data[self.getOffsetOfIndex(index)..]);
+            errdefer value.deinit(allocator);
+            _ = try value.write(self.data[offset .. offset + self.stride]);
 
             return value;
         }
 
         pub inline fn createLocalValueFromIndex(self: *const @This(), allocator: std.mem.Allocator, results: []const Result, index: usize) RuntimeError!Value {
+            const offset = try self.getCheckedOffsetOfIndex(index);
             var value = try Value.init(allocator, results, self.type_word, false);
-            _ = try value.write(self.data[self.getOffsetOfIndex(index)..]);
+            errdefer value.deinit(allocator);
+            _ = try value.write(self.data[offset .. offset + self.stride]);
             return value;
         }
 
@@ -99,7 +103,15 @@ pub const Value = union(Type) {
             return self.stride * index;
         }
 
+        pub inline fn getCheckedOffsetOfIndex(self: *const @This(), index: usize) RuntimeError!usize {
+            const offset = self.getOffsetOfIndex(index);
+            if (self.stride == 0 or offset > self.data.len or self.stride > self.data.len - offset)
+                return RuntimeError.OutOfBounds;
+            return offset;
+        }
+
         pub inline fn getLen(self: *const @This()) usize {
+            if (self.stride == 0) return 0;
             return @divTrunc(self.data.len, self.stride);
         }
     },
@@ -145,6 +157,7 @@ pub const Value = union(Type) {
         /// array element. This may differ from ptr.common when the pointer is
         /// to a child/member of that materialized value.
         uniform_backing_value: ?*Self = null,
+        owns_uniform_backing_value: bool = false,
     },
 
     pub inline fn getCompositeDataOrNull(self: *const Self) ?[]Self {
@@ -330,40 +343,54 @@ pub const Value = union(Type) {
         const vecRoutine = struct {
             inline fn routine(comptime T: type, vec: T, out: []u8) RuntimeError!usize {
                 const size = @typeInfo(T).vector.len * 4;
-                if (size >= out.len) {
-                    const range = @typeInfo(T).vector.len;
-                    inline for (0..range) |i| {
-                        const start = i * 4;
-                        const end = (i + 1) * 4;
-                        if (start >= out.len or end > out.len) return i * 4;
-                        @memcpy(out[start..end], std.mem.asBytes(&vec[i]));
-                    }
-                }
-                std.mem.bytesAsValue(T, out[0..]).* = vec;
+                if (out.len < size) return RuntimeError.OutOfBounds;
+                std.mem.bytesAsValue(T, out[0..size]).* = vec;
                 return size;
             }
         }.routine;
 
         switch (self.*) {
             .Bool => |b| {
+                if (output.len < 1) return RuntimeError.OutOfBounds;
                 output[0] = if (b == true) 1 else 0;
                 return 1;
             },
             .Int => |i| {
                 switch (i.bit_count) {
-                    8 => output[0] = @bitCast(i.value.uint8),
-                    16 => @memcpy(output[0..2], std.mem.asBytes(&i.value.uint16)),
-                    32 => @memcpy(output[0..4], std.mem.asBytes(&i.value.uint32)),
-                    64 => @memcpy(output[0..8], std.mem.asBytes(&i.value.uint64)),
+                    8 => {
+                        if (output.len < 1) return RuntimeError.OutOfBounds;
+                        output[0] = @bitCast(i.value.uint8);
+                    },
+                    16 => {
+                        if (output.len < 2) return RuntimeError.OutOfBounds;
+                        @memcpy(output[0..2], std.mem.asBytes(&i.value.uint16));
+                    },
+                    32 => {
+                        if (output.len < 4) return RuntimeError.OutOfBounds;
+                        @memcpy(output[0..4], std.mem.asBytes(&i.value.uint32));
+                    },
+                    64 => {
+                        if (output.len < 8) return RuntimeError.OutOfBounds;
+                        @memcpy(output[0..8], std.mem.asBytes(&i.value.uint64));
+                    },
                     else => return RuntimeError.InvalidValueType,
                 }
                 return @divExact(i.bit_count, 8);
             },
             .Float => |f| {
                 switch (f.bit_count) {
-                    16 => @memcpy(output[0..2], std.mem.asBytes(&f.value.float16)),
-                    32 => @memcpy(output[0..4], std.mem.asBytes(&f.value.float32)),
-                    64 => @memcpy(output[0..8], std.mem.asBytes(&f.value.float64)),
+                    16 => {
+                        if (output.len < 2) return RuntimeError.OutOfBounds;
+                        @memcpy(output[0..2], std.mem.asBytes(&f.value.float16));
+                    },
+                    32 => {
+                        if (output.len < 4) return RuntimeError.OutOfBounds;
+                        @memcpy(output[0..4], std.mem.asBytes(&f.value.float32));
+                    },
+                    64 => {
+                        if (output.len < 8) return RuntimeError.OutOfBounds;
+                        @memcpy(output[0..8], std.mem.asBytes(&f.value.float64));
+                    },
                     else => return RuntimeError.InvalidValueType,
                 }
                 return @divExact(f.bit_count, 8);
@@ -400,6 +427,7 @@ pub const Value = union(Type) {
                 var end_offset: usize = 0;
                 for (s.values, 0..) |v, i| {
                     const member_offset: usize = @intCast(s.offsets[i] orelse end_offset);
+                    if (member_offset > output.len) return RuntimeError.OutOfBounds;
                     const read_size = try v.read(output[member_offset..]);
                     end_offset = @max(end_offset, member_offset + read_size);
                 }
@@ -415,40 +443,54 @@ pub const Value = union(Type) {
         const vecRoutine = struct {
             inline fn routine(comptime T: type, vec: *T, in: []const u8) RuntimeError!usize {
                 const size = @typeInfo(T).vector.len * 4;
-                if (size >= in.len) {
-                    const range = @typeInfo(T).vector.len;
-                    inline for (0..range) |i| {
-                        const start = i * 4;
-                        const end = (i + 1) * 4;
-                        if (start >= in.len or end > in.len) return i * 4;
-                        @memcpy(std.mem.asBytes(&vec[i]), in[start..end]);
-                    }
-                }
-                vec.* = std.mem.bytesToValue(T, in[0..]);
+                if (in.len < size) return RuntimeError.OutOfBounds;
+                vec.* = std.mem.bytesToValue(T, in[0..size]);
                 return size;
             }
         }.routine;
 
         switch (self.*) {
             .Bool => |*b| {
+                if (input.len < 1) return RuntimeError.OutOfBounds;
                 b.* = if (input[0] != 0) true else false;
                 return 1;
             },
             .Int => |*i| {
                 switch (i.bit_count) {
-                    8 => i.value.uint8 = @bitCast(input[0]),
-                    16 => @memcpy(std.mem.asBytes(&i.value.uint16), input[0..2]),
-                    32 => @memcpy(std.mem.asBytes(&i.value.uint32), input[0..4]),
-                    64 => @memcpy(std.mem.asBytes(&i.value.uint64), input[0..8]),
+                    8 => {
+                        if (input.len < 1) return RuntimeError.OutOfBounds;
+                        i.value.uint8 = @bitCast(input[0]);
+                    },
+                    16 => {
+                        if (input.len < 2) return RuntimeError.OutOfBounds;
+                        @memcpy(std.mem.asBytes(&i.value.uint16), input[0..2]);
+                    },
+                    32 => {
+                        if (input.len < 4) return RuntimeError.OutOfBounds;
+                        @memcpy(std.mem.asBytes(&i.value.uint32), input[0..4]);
+                    },
+                    64 => {
+                        if (input.len < 8) return RuntimeError.OutOfBounds;
+                        @memcpy(std.mem.asBytes(&i.value.uint64), input[0..8]);
+                    },
                     else => return RuntimeError.InvalidValueType,
                 }
                 return @divExact(i.bit_count, 8);
             },
             .Float => |*f| {
                 switch (f.bit_count) {
-                    16 => @memcpy(std.mem.asBytes(&f.value.float16), input[0..2]),
-                    32 => @memcpy(std.mem.asBytes(&f.value.float32), input[0..4]),
-                    64 => @memcpy(std.mem.asBytes(&f.value.float64), input[0..8]),
+                    16 => {
+                        if (input.len < 2) return RuntimeError.OutOfBounds;
+                        @memcpy(std.mem.asBytes(&f.value.float16), input[0..2]);
+                    },
+                    32 => {
+                        if (input.len < 4) return RuntimeError.OutOfBounds;
+                        @memcpy(std.mem.asBytes(&f.value.float32), input[0..4]);
+                    },
+                    64 => {
+                        if (input.len < 8) return RuntimeError.OutOfBounds;
+                        @memcpy(std.mem.asBytes(&f.value.float64), input[0..8]);
+                    },
                     else => return RuntimeError.InvalidValueType,
                 }
                 return @divExact(f.bit_count, 8);
@@ -466,7 +508,25 @@ pub const Value = union(Type) {
             .Vector3u32 => |*vec| return vecRoutine(@TypeOf(vec.*), vec, input),
             .Vector2u32 => |*vec| return vecRoutine(@TypeOf(vec.*), vec, input),
 
-            .Vector, .Matrix => |*values| {
+            .Vector => |*values| {
+                var offset: usize = 0;
+                for (values.*) |*v| {
+                    offset += try v.write(input[offset..]);
+                }
+                return offset;
+            },
+            .Matrix => |*values| {
+                const matrix_stride = 16;
+                if (values.len != 0) {
+                    const column_size = try values.*[0].getPlainMemorySize();
+                    if (column_size < matrix_stride and input.len >= (values.len - 1) * matrix_stride + column_size) {
+                        for (values.*, 0..) |*v, column| {
+                            _ = try v.write(input[column * matrix_stride ..]);
+                        }
+                        return (values.len - 1) * matrix_stride + column_size;
+                    }
+                }
+
                 var offset: usize = 0;
                 for (values.*) |*v| {
                     offset += try v.write(input[offset..]);
@@ -485,22 +545,47 @@ pub const Value = union(Type) {
                 var end_offset: usize = 0;
                 for (s.values, 0..) |*v, i| {
                     const member_offset: usize = @intCast(s.offsets[i] orelse end_offset);
+                    if (member_offset > input.len) return RuntimeError.OutOfBounds;
                     const write_size = try v.write(input[member_offset..]);
                     end_offset = @max(end_offset, member_offset + write_size);
                 }
+                if (end_offset > input.len) return RuntimeError.OutOfBounds;
                 s.external_data = @constCast(input[0..end_offset]);
                 return end_offset;
             },
             .RuntimeArray => |*arr| arr.data = @constCast(input[0..]),
-            .Image => |*img| img.driver_image = @ptrFromInt(std.mem.bytesToValue(usize, input[0..])),
-            .Sampler => |*sampler| sampler.driver_sampler = @ptrFromInt(std.mem.bytesToValue(usize, input[0..])),
+            .Image => |*img| {
+                if (input.len < @sizeOf(usize)) return RuntimeError.OutOfBounds;
+                img.driver_image = @ptrFromInt(std.mem.bytesToValue(usize, input[0..@sizeOf(usize)]));
+            },
+            .Sampler => |*sampler| {
+                if (input.len < @sizeOf(usize)) return RuntimeError.OutOfBounds;
+                sampler.driver_sampler = @ptrFromInt(std.mem.bytesToValue(usize, input[0..@sizeOf(usize)]));
+            },
             .SampledImage => |*img| {
-                img.driver_image = @ptrFromInt(std.mem.bytesToValue(usize, input[0..]));
-                img.driver_sampler = @ptrFromInt(std.mem.bytesToValue(usize, input[@sizeOf(usize)..]));
+                if (input.len < @sizeOf(usize) * 2) return RuntimeError.OutOfBounds;
+                img.driver_image = @ptrFromInt(std.mem.bytesToValue(usize, input[0..@sizeOf(usize)]));
+                img.driver_sampler = @ptrFromInt(std.mem.bytesToValue(usize, input[@sizeOf(usize)..][0..@sizeOf(usize)]));
             },
             else => return RuntimeError.InvalidValueType,
         }
         return 0;
+    }
+
+    pub fn clearExternalData(self: *Self) void {
+        switch (self.*) {
+            .Vector, .Matrix => |values| {
+                for (values) |*value| value.clearExternalData();
+            },
+            .Array => |*arr| {
+                for (arr.values) |*value| value.clearExternalData();
+            },
+            .Structure => |*s| {
+                s.external_data = null;
+                for (s.values) |*value| value.clearExternalData();
+            },
+            else => {},
+        }
     }
 
     pub fn getPlainMemorySize(self: *const Self) RuntimeError!usize {
@@ -568,6 +653,7 @@ pub const Value = union(Type) {
     }
 
     pub fn flushPtr(self: *Self, allocator: std.mem.Allocator) RuntimeError!void {
+        _ = allocator;
         switch (self.*) {
             .Pointer => |*p| {
                 if (p.uniform_slice_window) |window| {
@@ -589,19 +675,7 @@ pub const Value = union(Type) {
                         },
                     }
 
-                    if (p.uniform_backing_value) |backing| {
-                        backing.deinit(allocator);
-                        allocator.destroy(backing);
-                        p.uniform_backing_value = null;
-                    }
-
                     p.uniform_slice_window = null;
-                }
-
-                if (p.uniform_backing_value) |backing| {
-                    backing.deinit(allocator);
-                    allocator.destroy(backing);
-                    p.uniform_backing_value = null;
                 }
             },
             else => {},
@@ -622,6 +696,16 @@ pub const Value = union(Type) {
                 for (s.values) |*value| value.deinit(allocator);
                 allocator.free(s.values);
                 allocator.free(s.offsets);
+            },
+            .Pointer => |*p| {
+                if (p.owns_uniform_backing_value) {
+                    if (p.uniform_backing_value) |backing| {
+                        backing.deinit(allocator);
+                        allocator.destroy(backing);
+                    }
+                }
+                p.uniform_backing_value = null;
+                p.owns_uniform_backing_value = false;
             },
             else => {},
         }

@@ -94,6 +94,16 @@ pub fn init(allocator: std.mem.Allocator, module: *Module, image_api: ImageAPI) 
             const results = allocator.dupe(Result, module.results) catch return RuntimeError.OutOfMemory;
             for (results, module.results) |*new_result, result| {
                 new_result.* = result.dupe(allocator) catch return RuntimeError.OutOfMemory;
+                if (new_result.variant) |*variant| {
+                    switch (variant.*) {
+                        .AccessChain => |*access_chain| {
+                            allocator.free(access_chain.indexes);
+                            access_chain.value.deinit(allocator);
+                            new_result.variant = null;
+                        },
+                        else => {},
+                    }
+                }
             }
             break :blk results;
         },
@@ -192,13 +202,13 @@ pub fn dumpResultsTable(self: *Self, allocator: std.mem.Allocator, writer: *std.
 }
 
 /// Calls an entry point, `entry_point_index` being the index of the entry point ordered by declaration in the bytecode
-pub fn callEntryPoint(self: *Self, allocator: std.mem.Allocator, entry_point_index: SpvWord) RuntimeError!void {
+pub inline fn callEntryPoint(self: *Self, allocator: std.mem.Allocator, entry_point_index: SpvWord) RuntimeError!void {
     _ = try self.beginEntryPoint(allocator, entry_point_index);
 }
 
 pub fn beginEntryPoint(self: *Self, allocator: std.mem.Allocator, entry_point_index: SpvWord) RuntimeError!EntryPointStatus {
     self.reset();
-    if (entry_point_index > self.mod.entry_points.items.len)
+    if (entry_point_index >= self.mod.entry_points.items.len)
         return RuntimeError.InvalidEntryPoint;
 
     // Spec constants pass
@@ -307,9 +317,18 @@ fn readResultValue(self: *const Self, output: []u8, result: SpvWord) RuntimeErro
         .AccessChain => |a| switch (a.value) {
             .Pointer => |ptr| switch (ptr.ptr) {
                 .common => |value_ptr| _ = try value_ptr.read(output),
-                .f32_ptr => |value_ptr| std.mem.copyForwards(u8, output[0..@sizeOf(f32)], std.mem.asBytes(value_ptr)),
-                .i32_ptr => |value_ptr| std.mem.copyForwards(u8, output[0..@sizeOf(i32)], std.mem.asBytes(value_ptr)),
-                .u32_ptr => |value_ptr| std.mem.copyForwards(u8, output[0..@sizeOf(u32)], std.mem.asBytes(value_ptr)),
+                .f32_ptr => |value_ptr| {
+                    if (output.len < @sizeOf(f32)) return RuntimeError.OutOfBounds;
+                    std.mem.copyForwards(u8, output[0..@sizeOf(f32)], std.mem.asBytes(value_ptr));
+                },
+                .i32_ptr => |value_ptr| {
+                    if (output.len < @sizeOf(i32)) return RuntimeError.OutOfBounds;
+                    std.mem.copyForwards(u8, output[0..@sizeOf(i32)], std.mem.asBytes(value_ptr));
+                },
+                .u32_ptr => |value_ptr| {
+                    if (output.len < @sizeOf(u32)) return RuntimeError.OutOfBounds;
+                    std.mem.copyForwards(u8, output[0..@sizeOf(u32)], std.mem.asBytes(value_ptr));
+                },
             },
             else => _ = try a.value.read(output),
         },
@@ -324,9 +343,18 @@ fn writeResultValue(self: *const Self, input: []const u8, result: SpvWord) Runti
             .AccessChain => |*a| switch (a.value) {
                 .Pointer => |ptr| switch (ptr.ptr) {
                     .common => |value_ptr| _ = try value_ptr.write(input),
-                    .f32_ptr => |value_ptr| std.mem.copyForwards(u8, std.mem.asBytes(value_ptr), input[0..@sizeOf(f32)]),
-                    .i32_ptr => |value_ptr| std.mem.copyForwards(u8, std.mem.asBytes(value_ptr), input[0..@sizeOf(i32)]),
-                    .u32_ptr => |value_ptr| std.mem.copyForwards(u8, std.mem.asBytes(value_ptr), input[0..@sizeOf(u32)]),
+                    .f32_ptr => |value_ptr| {
+                        if (input.len < @sizeOf(f32)) return RuntimeError.OutOfBounds;
+                        std.mem.copyForwards(u8, std.mem.asBytes(value_ptr), input[0..@sizeOf(f32)]);
+                    },
+                    .i32_ptr => |value_ptr| {
+                        if (input.len < @sizeOf(i32)) return RuntimeError.OutOfBounds;
+                        std.mem.copyForwards(u8, std.mem.asBytes(value_ptr), input[0..@sizeOf(i32)]);
+                    },
+                    .u32_ptr => |value_ptr| {
+                        if (input.len < @sizeOf(u32)) return RuntimeError.OutOfBounds;
+                        std.mem.copyForwards(u8, std.mem.asBytes(value_ptr), input[0..@sizeOf(u32)]);
+                    },
                 },
                 else => _ = try a.value.write(input),
             },
@@ -335,6 +363,69 @@ fn writeResultValue(self: *const Self, input: []const u8, result: SpvWord) Runti
     } else {
         return RuntimeError.InvalidSpirV;
     }
+}
+
+const InputLocationTarget = struct {
+    result: SpvWord,
+    matrix_column: ?usize = null,
+};
+
+fn resolveInputLocationTarget(self: *const Self, location: SpvWord) RuntimeError!InputLocationTarget {
+    if (location < self.mod.input_locations.len and self.mod.input_locations[location] != 0) {
+        const result = self.mod.input_locations[location];
+        const value = try self.results[result].getConstValue();
+        switch (value.*) {
+            .Matrix => return .{ .result = result, .matrix_column = 0 },
+            else => return .{ .result = result },
+        }
+    }
+
+    var base_location = location;
+    while (base_location > 0) {
+        base_location -= 1;
+
+        const result = if (base_location < self.mod.input_locations.len)
+            self.mod.input_locations[base_location]
+        else
+            0;
+        if (result == 0) continue;
+
+        const location_offset: usize = @intCast(location - base_location);
+        const value = try self.results[result].getConstValue();
+        switch (value.*) {
+            .Matrix => |columns| {
+                if (location_offset < columns.len) {
+                    return .{
+                        .result = result,
+                        .matrix_column = location_offset,
+                    };
+                }
+            },
+            else => {},
+        }
+    }
+
+    return RuntimeError.NotFound;
+}
+
+fn getInputLocationTargetValue(self: *const Self, target: InputLocationTarget) RuntimeError!*@import("Value.zig").Value {
+    const value = switch ((try self.results[target.result].getVariant()).*) {
+        .Variable => |*v| &v.value,
+        .AccessChain => |*a| &a.value,
+        else => return RuntimeError.InvalidSpirV,
+    };
+
+    if (target.matrix_column) |column| {
+        switch (value.*) {
+            .Matrix => |columns| {
+                if (column >= columns.len) return RuntimeError.OutOfBounds;
+                return &columns[column];
+            },
+            else => return RuntimeError.InvalidValueType,
+        }
+    }
+
+    return value;
 }
 
 pub fn readOutput(self: *const Self, output: []u8, result: SpvWord) RuntimeError!void {
@@ -356,9 +447,26 @@ pub fn readBuiltIn(self: *const Self, output: []u8, builtin: spv.SpvBuiltIn) Run
 pub fn writeInput(self: *const Self, input: []const u8, result: SpvWord) RuntimeError!void {
     if (std.mem.indexOfScalar(SpvWord, &self.mod.input_locations, result)) |_| {
         try self.writeResultValue(input, result);
+        if (self.results[result].variant) |*variant| switch (variant.*) {
+            .Variable => |*v| v.value.clearExternalData(),
+            .AccessChain => |*a| a.value.clearExternalData(),
+            else => {},
+        };
     } else {
         return RuntimeError.NotFound;
     }
+}
+
+pub fn getInputLocationMemorySize(self: *const Self, location: SpvWord) RuntimeError!usize {
+    const target = try self.resolveInputLocationTarget(location);
+    return (try self.getInputLocationTargetValue(target)).getPlainMemorySize();
+}
+
+pub fn writeInputLocation(self: *const Self, input: []const u8, location: SpvWord) RuntimeError!void {
+    const target = try self.resolveInputLocationTarget(location);
+    const value = try self.getInputLocationTargetValue(target);
+    _ = try value.write(input);
+    value.clearExternalData();
 }
 
 pub fn writeBuiltIn(self: *const Self, input: []const u8, builtin: spv.SpvBuiltIn) RuntimeError!void {
@@ -388,8 +496,40 @@ pub fn hasResultDecoration(self: *const Self, result: SpvWord, decoration: spv.S
     return false;
 }
 
+pub fn resetInvocation(self: *Self, allocator: std.mem.Allocator) void {
+    for (self.results) |*result| {
+        if (result.variant) |*variant| {
+            switch (variant.*) {
+                .AccessChain => |*access_chain| {
+                    access_chain.value.flushPtr(allocator) catch {};
+                },
+                else => {},
+            }
+        }
+    }
+
+    for (self.results) |*result| {
+        if (result.variant) |*variant| {
+            switch (variant.*) {
+                .AccessChain => |*access_chain| {
+                    access_chain.value.deinit(allocator);
+                    allocator.free(access_chain.indexes);
+                    result.variant = null;
+                },
+                .FunctionParameter => |*parameter| {
+                    parameter.value_ptr = null;
+                },
+                else => {},
+            }
+        }
+    }
+
+    self.reset();
+}
+
 fn reset(self: *Self) void {
     self.function_stack.clearRetainingCapacity();
+    self.current_parameter_index = 0;
     self.current_function = null;
     self.current_label = null;
     self.previous_label = null;
