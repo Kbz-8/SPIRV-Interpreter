@@ -224,6 +224,11 @@ pub const SetupDispatcher = block: {
         .ShiftLeftLogical = autoSetupConstant,
         .ShiftRightArithmetic = autoSetupConstant,
         .ShiftRightLogical = autoSetupConstant,
+        .SpecConstant = opSpecConstant,
+        .SpecConstantComposite = opConstantComposite,
+        .SpecConstantFalse = opSpecConstantFalse,
+        .SpecConstantOp = opSpecConstantOp,
+        .SpecConstantTrue = opSpecConstantTrue,
         .SourceExtension = opSourceExtension,
         .TypeArray = opTypeArray,
         .TypeBool = opTypeBool,
@@ -378,6 +383,7 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.SpecConstantOp)]         = opSpecConstantOp;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.SpecConstantTrue)]       = opSpecConstantTrue;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Store)]                  = opStore;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.Switch)]                 = opSwitch;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.UConvert)]               = ConversionEngine(.UInt, .UInt).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.UDiv)]                   = MathEngine(.UInt, .Div, false).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.UGreaterThan)]           = CondEngine(.UInt, .Greater).op;
@@ -3220,20 +3226,95 @@ fn opSpecConstantFalse(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) R
     }
 }
 
+fn opSwitch(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
+    if (word_count < 2)
+        return RuntimeError.InvalidSpirV;
+
+    const selector = try rt.results[try rt.it.next()].getValue();
+    const default_target = try rt.it.next();
+
+    const SelectorData = struct {
+        value: u64,
+        literal_width: SpvWord,
+    };
+    const selector_data: SelectorData = switch (selector.*) {
+        .Int => |i| switch (i.bit_count) {
+            8 => .{ .value = @as(u64, i.value.uint8), .literal_width = @as(SpvWord, 1) },
+            16 => .{ .value = @as(u64, i.value.uint16), .literal_width = @as(SpvWord, 1) },
+            32 => .{ .value = @as(u64, i.value.uint32), .literal_width = @as(SpvWord, 1) },
+            64 => .{ .value = i.value.uint64, .literal_width = @as(SpvWord, 2) },
+            else => return RuntimeError.InvalidSpirV,
+        },
+        else => return RuntimeError.InvalidValueType,
+    };
+    const selector_value = selector_data.value;
+    const literal_width = selector_data.literal_width;
+
+    var target = default_target;
+    var remaining = word_count - 2;
+    while (remaining != 0) {
+        if (remaining < literal_width + 1)
+            return RuntimeError.InvalidSpirV;
+
+        const literal = if (literal_width == 2) blk: {
+            const low = @as(u64, try rt.it.next());
+            const high = @as(u64, try rt.it.next());
+            break :blk (high << 32) | low;
+        } else try rt.it.next();
+        const literal_target = try rt.it.next();
+
+        if (literal == selector_value)
+            target = literal_target;
+
+        remaining -= literal_width + 1;
+    }
+
+    rt.previous_label = rt.current_label;
+    _ = rt.it.jumpToSourceLocation(switch ((try rt.results[target].getVariant()).*) {
+        .Label => |l| l.source_location,
+        else => return RuntimeError.InvalidSpirV,
+    });
+}
+
 fn opSpecConstantOp(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
     if (word_count < 3)
         return RuntimeError.InvalidSpirV;
 
-    const start_location = rt.it.emitSourceLocation();
-
-    _ = try setupConstant(allocator, rt);
+    const target = try setupConstant(allocator, rt);
     const inner_op = try rt.it.nextAs(spv.SpvOp);
 
-    _ = rt.it.goToSourceLocation(start_location);
-    rt.it.forceSkipIndex(2);
+    const target_value = try target.getValue();
+    switch (target_value.*) {
+        .Int => |*dst| {
+            if (word_count != 5)
+                return RuntimeError.UnsupportedSpirV;
 
-    const pfn = runtime_dispatcher[@intFromEnum(inner_op)] orelse return RuntimeError.UnsupportedSpirV;
-    try pfn(allocator, word_count - 1, rt);
+            const lhs = (try rt.results[try rt.it.next()].getValue()).Int;
+            const rhs = (try rt.results[try rt.it.next()].getValue()).Int;
+            const lhs_u = lhs.value.uint64;
+            const rhs_u = rhs.value.uint64;
+
+            dst.value.uint64 = switch (inner_op) {
+                .IAdd => @addWithOverflow(lhs_u, rhs_u)[0],
+                .ISub => @subWithOverflow(lhs_u, rhs_u)[0],
+                .IMul => @mulWithOverflow(lhs_u, rhs_u)[0],
+                .UDiv => if (rhs_u != 0) @divTrunc(lhs_u, rhs_u) else return RuntimeError.DivisionByZero,
+                .UMod => if (rhs_u != 0) @mod(lhs_u, rhs_u) else return RuntimeError.DivisionByZero,
+                .SDiv => switch (dst.bit_count) {
+                    32 => @as(u32, @bitCast(@divTrunc(lhs.value.sint32, rhs.value.sint32))),
+                    64 => @bitCast(@divTrunc(lhs.value.sint64, rhs.value.sint64)),
+                    else => return RuntimeError.UnsupportedSpirV,
+                },
+                .SMod => switch (dst.bit_count) {
+                    32 => @as(u32, @bitCast(@mod(lhs.value.sint32, rhs.value.sint32))),
+                    64 => @bitCast(@mod(lhs.value.sint64, rhs.value.sint64)),
+                    else => return RuntimeError.UnsupportedSpirV,
+                },
+                else => return RuntimeError.UnsupportedSpirV,
+            };
+        },
+        else => return RuntimeError.UnsupportedSpirV,
+    }
 }
 
 fn opCopyMemory(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {

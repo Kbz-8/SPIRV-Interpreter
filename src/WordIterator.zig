@@ -56,6 +56,7 @@ pub inline fn nextAs(self: *Self, comptime E: type) RuntimeError!E {
     if (self.next_force_skip) |skip_index| {
         if (self.index == skip_index) {
             _ = self.skip();
+            self.next_force_skip = null;
         }
     }
     return self.nextAsOrNull(E) orelse return RuntimeError.InvalidSpirV;

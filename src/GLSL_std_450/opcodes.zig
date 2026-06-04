@@ -86,6 +86,7 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.FAbs)]      = MathEngine(.Float, .FAbs).opSingleOperator;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.FClamp)]    = MathEngine(.Float, .FClamp).opTripleOperators;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.FMax)]      = MathEngine(.Float, .FMax).opDoubleOperators;
+    runtime_dispatcher[@intFromEnum(ext.GLSLOp.FMin)]      = MathEngine(.Float, .FMin).opDoubleOperators;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.FSign)]     = MathEngine(.Float, .FSign).opSingleOperator;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Floor)]     = MathEngine(.Float, .Floor).opSingleOperator;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Length)]    = opLength;
@@ -203,6 +204,7 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp) type {
                 fn operation(comptime TT: type, l: TT, r: TT) RuntimeError!TT {
                     return switch (Op) {
                         .FMax => @max(l, r),
+                        .FMin => @min(l, r),
                         else => RuntimeError.InvalidSpirV,
                     };
                 }

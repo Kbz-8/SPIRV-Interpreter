@@ -75,8 +75,8 @@ geometry_output_count: SpvWord,
 geometry_input: SpvWord,
 geometry_output: SpvWord,
 
-input_locations: [lib.SPIRV_MAX_INPUT_LOCATIONS]SpvWord,
-output_locations: [lib.SPIRV_MAX_OUTPUT_LOCATIONS]SpvWord,
+input_locations: [lib.SPIRV_MAX_INPUT_LOCATIONS][4]SpvWord,
+output_locations: [lib.SPIRV_MAX_OUTPUT_LOCATIONS][4]SpvWord,
 bindings: std.ArrayList(BindingEntry),
 builtins: std.EnumMap(spv.SpvBuiltIn, SpvWord),
 
@@ -203,6 +203,14 @@ fn findAccessChainToMember(self: *const Self, base_id: SpvWord, member_index: Sp
     return null;
 }
 
+fn resultComponent(self: *const Self, id: SpvWord) SpvWord {
+    for (self.results[id].decorations.items) |decoration| {
+        if (decoration.rtype == .Component)
+            return decoration.literal_1;
+    }
+    return 0;
+}
+
 fn applyInterfaceDecoration(self: *Self, storage_class: spv.SpvStorageClass, decoration: Result.Decoration, id: SpvWord) ModuleError!void {
     switch (storage_class) {
         .Input => switch (decoration.rtype) {
@@ -210,7 +218,7 @@ fn applyInterfaceDecoration(self: *Self, storage_class: spv.SpvStorageClass, dec
                 std.enums.fromInt(spv.SpvBuiltIn, decoration.literal_1) orelse return ModuleError.InvalidSpirV,
                 id,
             ),
-            .Location => self.input_locations[decoration.literal_1] = id,
+            .Location => self.input_locations[decoration.literal_1][self.resultComponent(id)] = id,
             else => {},
         },
         .Output => switch (decoration.rtype) {
@@ -218,7 +226,7 @@ fn applyInterfaceDecoration(self: *Self, storage_class: spv.SpvStorageClass, dec
                 std.enums.fromInt(spv.SpvBuiltIn, decoration.literal_1) orelse return ModuleError.InvalidSpirV,
                 id,
             ),
-            .Location => self.output_locations[decoration.literal_1] = id,
+            .Location => self.output_locations[decoration.literal_1][self.resultComponent(id)] = id,
             else => {},
         },
         else => {},

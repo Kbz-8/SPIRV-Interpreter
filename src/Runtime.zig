@@ -177,13 +177,19 @@ pub fn getResultByName(self: *const Self, name: []const u8) RuntimeError!SpvWord
     return RuntimeError.NotFound;
 }
 
-pub fn getResultByLocation(self: *const Self, location: SpvWord, kind: enum { input, output }) RuntimeError!SpvWord {
+pub const LocationKind = enum { input, output };
+
+pub inline fn getResultByLocation(self: *const Self, location: SpvWord, kind: LocationKind) RuntimeError!SpvWord {
+    return self.getResultByLocationComponent(location, 0, kind);
+}
+
+pub fn getResultByLocationComponent(self: *const Self, location: SpvWord, component: SpvWord, kind: LocationKind) RuntimeError!SpvWord {
     switch (kind) {
-        .input => if (location < self.mod.input_locations.len and self.mod.input_locations[location] != 0) {
-            return self.mod.input_locations[location];
+        .input => if (location < self.mod.input_locations.len and component < 4 and self.mod.input_locations[location][component] != 0) {
+            return self.mod.input_locations[location][component];
         },
-        .output => if (location < self.mod.output_locations.len and self.mod.output_locations[location] != 0) {
-            return self.mod.output_locations[location];
+        .output => if (location < self.mod.output_locations.len and component < 4 and self.mod.output_locations[location][component] != 0) {
+            return self.mod.output_locations[location][component];
         },
     }
     return RuntimeError.NotFound;
@@ -371,8 +377,8 @@ const InputLocationTarget = struct {
 };
 
 fn resolveInputLocationTarget(self: *const Self, location: SpvWord) RuntimeError!InputLocationTarget {
-    if (location < self.mod.input_locations.len and self.mod.input_locations[location] != 0) {
-        const result = self.mod.input_locations[location];
+    if (location < self.mod.input_locations.len and self.mod.input_locations[location][0] != 0) {
+        const result = self.mod.input_locations[location][0];
         const value = try self.results[result].getConstValue();
         switch (value.*) {
             .Matrix => return .{ .result = result, .matrix_column = 0 },
@@ -385,7 +391,7 @@ fn resolveInputLocationTarget(self: *const Self, location: SpvWord) RuntimeError
         base_location -= 1;
 
         const result = if (base_location < self.mod.input_locations.len)
-            self.mod.input_locations[base_location]
+            self.mod.input_locations[base_location][0]
         else
             0;
         if (result == 0) continue;
@@ -429,11 +435,13 @@ fn getInputLocationTargetValue(self: *const Self, target: InputLocationTarget) R
 }
 
 pub fn readOutput(self: *const Self, output: []u8, result: SpvWord) RuntimeError!void {
-    if (std.mem.indexOfScalar(SpvWord, &self.mod.output_locations, result)) |_| {
-        try self.readResultValue(output, result);
-    } else {
-        return RuntimeError.NotFound;
+    for (&self.mod.output_locations) |*location| {
+        if (std.mem.indexOfScalar(SpvWord, location, result)) |_| {
+            try self.readResultValue(output, result);
+            return;
+        }
     }
+    return RuntimeError.NotFound;
 }
 
 pub fn readBuiltIn(self: *const Self, output: []u8, builtin: spv.SpvBuiltIn) RuntimeError!void {
@@ -445,16 +453,18 @@ pub fn readBuiltIn(self: *const Self, output: []u8, builtin: spv.SpvBuiltIn) Run
 }
 
 pub fn writeInput(self: *const Self, input: []const u8, result: SpvWord) RuntimeError!void {
-    if (std.mem.indexOfScalar(SpvWord, &self.mod.input_locations, result)) |_| {
-        try self.writeResultValue(input, result);
-        if (self.results[result].variant) |*variant| switch (variant.*) {
-            .Variable => |*v| v.value.clearExternalData(),
-            .AccessChain => |*a| a.value.clearExternalData(),
-            else => {},
-        };
-    } else {
-        return RuntimeError.NotFound;
+    for (&self.mod.input_locations) |*location| {
+        if (std.mem.indexOfScalar(SpvWord, location, result)) |_| {
+            try self.writeResultValue(input, result);
+            if (self.results[result].variant) |*variant| switch (variant.*) {
+                .Variable => |*v| v.value.clearExternalData(),
+                .AccessChain => |*a| a.value.clearExternalData(),
+                else => {},
+            };
+            return;
+        }
     }
+    return RuntimeError.NotFound;
 }
 
 pub fn getInputLocationMemorySize(self: *const Self, location: SpvWord) RuntimeError!usize {
