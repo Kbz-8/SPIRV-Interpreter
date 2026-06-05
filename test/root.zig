@@ -49,7 +49,7 @@ pub const case = struct {
             defer rt.deinit(allocator);
 
             for (config.inputs, 0..) |input, n| {
-                try rt.writeInput(input[0..], module.input_locations[n]);
+                try rt.writeInput(input[0..], module.input_locations[n][0]);
             }
 
             for (config.descriptor_sets, 0..) |descriptor_set, set_index| {
@@ -65,7 +65,7 @@ pub const case = struct {
                 const output = try allocator.alloc(u8, expected.len);
                 defer allocator.free(output);
 
-                try rt.readOutput(output[0..], module.output_locations[n]);
+                try rt.readOutput(output[0..], module.output_locations[n][0]);
                 try std.testing.expectEqualSlices(u8, expected, output);
             }
 
