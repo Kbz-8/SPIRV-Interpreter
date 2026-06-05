@@ -1355,12 +1355,20 @@ fn ImageEngine(comptime Op: ImageOp) type {
                 .Vector4f32,
                 .Vector3f32,
                 .Vector2f32,
-                => try writeFloatTexel(dst, try rt.image_api.sampleImageFloat4(driver_image, driver_sampler, dim, x, y, z)),
+                => try writeFloatTexel(dst, try rt.image_api.sampleImageFloat4(driver_image, driver_sampler, dim, x, y, z, null)),
+                .Vector4i32,
+                .Vector3i32,
+                .Vector2i32,
+                .Vector4u32,
+                .Vector3u32,
+                .Vector2u32,
+                => try writeIntTexel(dst, try rt.image_api.sampleImageInt4(driver_image, driver_sampler, dim, x, y, z, null)),
 
                 .Vector => |lanes| {
                     if (lanes.len == 0) return RuntimeError.InvalidSpirV;
                     switch (lanes[0]) {
-                        .Float => try writeFloatTexel(dst, try rt.image_api.sampleImageFloat4(driver_image, driver_sampler, dim, x, y, z)),
+                        .Float => try writeFloatTexel(dst, try rt.image_api.sampleImageFloat4(driver_image, driver_sampler, dim, x, y, z, null)),
+                        .Int => try writeIntTexel(dst, try rt.image_api.sampleImageInt4(driver_image, driver_sampler, dim, x, y, z, null)),
                         else => return RuntimeError.InvalidValueType,
                     }
                 },
@@ -1369,17 +1377,25 @@ fn ImageEngine(comptime Op: ImageOp) type {
             }
         }
 
-        fn sampleImageExplicitLod(rt: *Runtime, dst: *Value, driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32) RuntimeError!void {
+        fn sampleImageExplicitLod(rt: *Runtime, dst: *Value, driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32, lod: ?f32) RuntimeError!void {
             switch (dst.*) {
                 .Vector4f32,
                 .Vector3f32,
                 .Vector2f32,
-                => try writeFloatTexel(dst, try rt.image_api.sampleImageFloat4(driver_image, driver_sampler, dim, x, y, z)),
+                => try writeFloatTexel(dst, try rt.image_api.sampleImageFloat4(driver_image, driver_sampler, dim, x, y, z, lod)),
+                .Vector4i32,
+                .Vector3i32,
+                .Vector2i32,
+                .Vector4u32,
+                .Vector3u32,
+                .Vector2u32,
+                => try writeIntTexel(dst, try rt.image_api.sampleImageInt4(driver_image, driver_sampler, dim, x, y, z, lod)),
 
                 .Vector => |lanes| {
                     if (lanes.len == 0) return RuntimeError.InvalidSpirV;
                     switch (lanes[0]) {
-                        .Float => try writeFloatTexel(dst, try rt.image_api.sampleImageFloat4(driver_image, driver_sampler, dim, x, y, z)),
+                        .Float => try writeFloatTexel(dst, try rt.image_api.sampleImageFloat4(driver_image, driver_sampler, dim, x, y, z, lod)),
+                        .Int => try writeIntTexel(dst, try rt.image_api.sampleImageInt4(driver_image, driver_sampler, dim, x, y, z, lod)),
                         else => return RuntimeError.InvalidValueType,
                     }
                 },
@@ -1442,7 +1458,7 @@ fn ImageEngine(comptime Op: ImageOp) type {
             }
         }
 
-        fn op(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+        fn op(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
             if (comptime Op == .Resolve) {
                 _ = try rt.it.next(); // result type
                 const dst = try rt.results[try rt.it.next()].getValue();
@@ -1518,6 +1534,11 @@ fn ImageEngine(comptime Op: ImageOp) type {
                     const x = try readSampleCoordLane(coordinate, 0);
                     const y = readSampleCoordLane(coordinate, 1) catch 0;
                     const z = readSampleCoordLane(coordinate, 2) catch 0;
+                    const image_operands = if (word_count > 4) try rt.it.next() else 0;
+                    const lod = if ((image_operands & @intFromEnum(spv.SpvImageOperandsMask.LodMask)) != 0)
+                        try readFloatLane(try rt.results[try rt.it.next()].getValue(), 0)
+                    else
+                        null;
 
                     try sampleImageExplicitLod(
                         rt,
@@ -1528,6 +1549,7 @@ fn ImageEngine(comptime Op: ImageOp) type {
                         x,
                         y,
                         z,
+                        lod,
                     );
                 },
 
