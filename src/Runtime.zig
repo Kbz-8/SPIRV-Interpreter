@@ -12,7 +12,9 @@ const SpvWord = spv.SpvWord;
 const SpvBool = spv.SpvBool;
 
 const Module = @import("Module.zig");
+const PrimitiveType = @import("Value.zig").PrimitiveType;
 const Result = @import("Result.zig");
+const Value = @import("Value.zig").Value;
 const WordIterator = @import("WordIterator.zig");
 
 const Self = @This();
@@ -193,6 +195,19 @@ pub fn getResultByLocationComponent(self: *const Self, location: SpvWord, compon
         },
     }
     return RuntimeError.NotFound;
+}
+
+pub fn getResultPrimitiveType(self: *const Self, result: SpvWord) RuntimeError!PrimitiveType {
+    if (result >= self.results.len)
+        return RuntimeError.OutOfBounds;
+    return (try self.results[result].getConstValue()).resolvePrimitiveType();
+}
+
+pub fn resultIsInteger(self: *const Self, result: SpvWord) bool {
+    return switch (self.getResultPrimitiveType(result) catch return false) {
+        .SInt, .UInt => true,
+        else => false,
+    };
 }
 
 pub fn dumpResultsTable(self: *Self, allocator: std.mem.Allocator, writer: *std.Io.Writer) RuntimeError!void {
@@ -414,7 +429,7 @@ fn resolveInputLocationTarget(self: *const Self, location: SpvWord) RuntimeError
     return RuntimeError.NotFound;
 }
 
-fn getInputLocationTargetValue(self: *const Self, target: InputLocationTarget) RuntimeError!*@import("Value.zig").Value {
+fn getInputLocationTargetValue(self: *const Self, target: InputLocationTarget) RuntimeError!*Value {
     const value = switch ((try self.results[target.result].getVariant()).*) {
         .Variable => |*v| &v.value,
         .AccessChain => |*a| &a.value,

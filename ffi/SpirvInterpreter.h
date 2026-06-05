@@ -452,6 +452,20 @@ typedef enum
 	SPV_LOCATION_OUTPUT = 1
 } SpvLocationType;
 
+typedef enum
+{
+	SPV_ENTRY_POINT_COMPLETED = 0,
+	SPV_ENTRY_POINT_BARRIER = 1
+} SpvEntryPointStatus;
+
+typedef enum
+{
+	SPV_PRIMITIVE_BOOL = 0,
+	SPV_PRIMITIVE_FLOAT = 1,
+	SPV_PRIMITIVE_SINT = 2,
+	SPV_PRIMITIVE_UINT = 3
+} SpvPrimitiveType;
+
 typedef struct
 {
 	float x;
@@ -497,19 +511,29 @@ SPV_API void SpvDeinitRuntime(SpvRuntime runtime);
 SPV_API SpvResult SpvFlushDescriptorSets(SpvRuntime runtime);
 
 SPV_API SpvResult SpvAddSpecializationInfo(SpvRuntime runtime, SpvRuntimeSpecializationEntry entry, const SpvByte* data, SpvSize data_size);
+SPV_API SpvResult SpvPopulatePushConstants(SpvRuntime runtime, const SpvByte* data, SpvSize data_size);
 
 SPV_API SpvResult SpvGetResultByName(SpvRuntime runtime, const char* name, SpvWord* result);
 SPV_API SpvResult SpvGetResultLocation(SpvRuntime runtime, SpvWord location, SpvLocationType type, SpvWord* result);
+SPV_API SpvResult SpvGetResultByLocation(SpvRuntime runtime, SpvWord location, SpvLocationType type, SpvWord* result);
+SPV_API SpvResult SpvGetResultByLocationComponent(SpvRuntime runtime, SpvWord location, SpvWord component, SpvLocationType type, SpvWord* result);
 SPV_API SpvResult SpvGetEntryPointByName(SpvRuntime runtime, const char* name, SpvWord* result);
 SPV_API SpvResult SpvGetResultMemorySize(SpvRuntime runtime, SpvWord result, SpvSize* size);
+SPV_API SpvResult SpvGetInputLocationMemorySize(SpvRuntime runtime, SpvWord location, SpvSize* size);
+SPV_API SpvResult SpvGetResultPrimitiveType(SpvRuntime runtime, SpvWord result, SpvPrimitiveType* primitive_type);
+SPV_API SpvBool SpvResultIsInteger(SpvRuntime runtime, SpvWord result);
 SPV_API SpvBool SpvHasResultDecoration(SpvRuntime runtime, SpvWord result, SpvDecoration decoration);
 
 SPV_API SpvResult SpvCallEntryPoint(SpvRuntime runtime, SpvWord entry_point_index);
+SPV_API SpvResult SpvBeginEntryPoint(SpvRuntime runtime, SpvWord entry_point_index, SpvEntryPointStatus* status);
+SPV_API SpvResult SpvContinueEntryPoint(SpvRuntime runtime, SpvEntryPointStatus* status);
+SPV_API void SpvResetInvocation(SpvRuntime runtime);
 
 SPV_API SpvResult SpvReadOutput(SpvRuntime runtime, SpvByte* output, SpvSize output_size, SpvWord result);
 SPV_API SpvResult SpvReadBuiltIn(SpvRuntime runtime, SpvByte* output, SpvSize output_size, SpvBuiltIn builtin);
 
 SPV_API SpvResult SpvWriteInput(SpvRuntime runtime, const SpvByte* input, SpvSize input_size, SpvWord result);
+SPV_API SpvResult SpvWriteInputLocation(SpvRuntime runtime, const SpvByte* input, SpvSize input_size, SpvWord location);
 SPV_API SpvResult SpvWriteBuiltIn(SpvRuntime runtime, const SpvByte* input, SpvSize input_size, SpvBuiltIn builtin);
 SPV_API SpvResult SpvWriteDescriptorSet(SpvRuntime runtime, const SpvByte* input, SpvSize input_size, SpvWord set, SpvWord binding, SpvWord descriptor_index);
 

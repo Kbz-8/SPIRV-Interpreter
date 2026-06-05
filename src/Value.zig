@@ -169,6 +169,39 @@ pub const Value = union(Type) {
         };
     }
 
+    pub fn resolvePrimitiveType(self: *const Self) RuntimeError!PrimitiveType {
+        return switch (self.*) {
+            .Bool => .Bool,
+            .Float,
+            .Vector2f32,
+            .Vector3f32,
+            .Vector4f32,
+            => .Float,
+            .Int => |int| if (int.is_signed) .SInt else .UInt,
+            .Vector2i32,
+            .Vector3i32,
+            .Vector4i32,
+            => .SInt,
+            .Vector2u32,
+            .Vector3u32,
+            .Vector4u32,
+            => .UInt,
+            .Vector => |lanes| {
+                if (lanes.len == 0)
+                    return RuntimeError.InvalidValueType;
+                return lanes[0].resolvePrimitiveType();
+            },
+            else => RuntimeError.InvalidValueType,
+        };
+    }
+
+    pub fn isInteger(self: *const Self) bool {
+        return switch (self.resolvePrimitiveType() catch return false) {
+            .SInt, .UInt => true,
+            else => false,
+        };
+    }
+
     pub fn init(allocator: std.mem.Allocator, results: []const Result, target_type: SpvWord, is_externally_visible: bool) RuntimeError!Self {
         const resolved = results[target_type].resolveTypeWordOrNull() orelse target_type;
         return initUnresolved(allocator, results, resolved, is_externally_visible);

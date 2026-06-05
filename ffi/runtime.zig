@@ -13,6 +13,18 @@ const LocationType = enum(c_int) {
     output = 1,
 };
 
+const EntryPointStatus = enum(c_int) {
+    completed = 0,
+    barrier = 1,
+};
+
+const PrimitiveType = enum(c_int) {
+    bool = 0,
+    float = 1,
+    sint = 2,
+    uint = 3,
+};
+
 const Vec4f = extern struct {
     x: f32,
     y: f32,
@@ -79,6 +91,13 @@ fn fromCResult(res: ffi.Result) spv.Runtime.RuntimeError!void {
         ffi.Result.UnsupportedExtension => spv.Runtime.RuntimeError.UnsupportedExtension,
         ffi.Result.UnsupportedSpirV => spv.Runtime.RuntimeError.UnsupportedSpirV,
         else => {},
+    };
+}
+
+fn toCEntryPointStatus(status: spv.Runtime.EntryPointStatus) EntryPointStatus {
+    return switch (status) {
+        .completed => .completed,
+        .barrier => .barrier,
     };
 }
 
@@ -206,6 +225,12 @@ export fn SpvDeinitRuntime(rt: *RuntimeWrapper) callconv(.c) void {
     allocator.destroy(rt);
 }
 
+export fn SpvFlushDescriptorSets(rt: *RuntimeWrapper) callconv(.c) ffi.Result {
+    const allocator = std.heap.c_allocator;
+    rt.rt.flushDescriptorSets(allocator) catch |err| return toCResult(err);
+    return .Success;
+}
+
 export fn SpvAddSpecializationInfo(rt: *RuntimeWrapper, entry: CSpecializationEntry, data: [*]const u8, data_size: c_ulong) callconv(.c) ffi.Result {
     const allocator = std.heap.c_allocator;
     rt.rt.addSpecializationInfo(
@@ -217,6 +242,11 @@ export fn SpvAddSpecializationInfo(rt: *RuntimeWrapper, entry: CSpecializationEn
         },
         data[0..data_size],
     ) catch |err| return toCResult(err);
+    return .Success;
+}
+
+export fn SpvPopulatePushConstants(rt: *RuntimeWrapper, data: [*]const u8, data_size: c_ulong) callconv(.c) ffi.Result {
+    rt.rt.populatePushConstants(data[0..data_size]) catch |err| return toCResult(err);
     return .Success;
 }
 
@@ -233,6 +263,18 @@ export fn SpvGetResultByLocation(rt: *RuntimeWrapper, location: spv.SpvWord, kin
     return .Success;
 }
 
+export fn SpvGetResultLocation(rt: *RuntimeWrapper, location: spv.SpvWord, kind: LocationType, result: *spv.SpvWord) callconv(.c) ffi.Result {
+    return SpvGetResultByLocation(rt, location, kind, result);
+}
+
+export fn SpvGetResultByLocationComponent(rt: *RuntimeWrapper, location: spv.SpvWord, component: spv.SpvWord, kind: LocationType, result: *spv.SpvWord) callconv(.c) ffi.Result {
+    result.* = rt.rt.getResultByLocationComponent(location, component, switch (kind) {
+        .input => .input,
+        .output => .output,
+    }) catch |err| return toCResult(err);
+    return .Success;
+}
+
 export fn SpvGetResultByName(rt: *RuntimeWrapper, name: [*:0]const u8, result: *spv.SpvWord) callconv(.c) ffi.Result {
     result.* = rt.rt.getResultByName(std.mem.span(name)) catch |err| return toCResult(err);
     return .Success;
@@ -241,6 +283,25 @@ export fn SpvGetResultByName(rt: *RuntimeWrapper, name: [*:0]const u8, result: *
 export fn SpvGetResultMemorySize(rt: *RuntimeWrapper, result: spv.SpvWord, size: *c_ulong) callconv(.c) ffi.Result {
     size.* = rt.rt.getResultMemorySize(result) catch |err| return toCResult(err);
     return .Success;
+}
+
+export fn SpvGetInputLocationMemorySize(rt: *RuntimeWrapper, location: spv.SpvWord, size: *c_ulong) callconv(.c) ffi.Result {
+    size.* = rt.rt.getInputLocationMemorySize(location) catch |err| return toCResult(err);
+    return .Success;
+}
+
+export fn SpvGetResultPrimitiveType(rt: *RuntimeWrapper, result: spv.SpvWord, primitive_type: *PrimitiveType) callconv(.c) ffi.Result {
+    primitive_type.* = switch (rt.rt.getResultPrimitiveType(result) catch |err| return toCResult(err)) {
+        .Bool => .bool,
+        .Float => .float,
+        .SInt => .sint,
+        .UInt => .uint,
+    };
+    return .Success;
+}
+
+export fn SpvResultIsInteger(rt: *RuntimeWrapper, result: spv.SpvWord) callconv(.c) c_int {
+    return if (rt.rt.resultIsInteger(result)) 1 else 0;
 }
 
 export fn SpvHasResultDecoration(rt: *RuntimeWrapper, result: spv.SpvWord, decoration: spv.spv.SpvDecoration) callconv(.c) c_int {
@@ -259,6 +320,33 @@ export fn SpvCallEntryPoint(rt: *RuntimeWrapper, entry_point: spv.SpvWord) callc
     return .Success;
 }
 
+export fn SpvBeginEntryPoint(rt: *RuntimeWrapper, entry_point: spv.SpvWord, status: *EntryPointStatus) callconv(.c) ffi.Result {
+    const allocator = std.heap.c_allocator;
+
+    const previous_image_api = ImageAPIBridge.current_image_api;
+    ImageAPIBridge.current_image_api = &rt.image_api;
+    defer ImageAPIBridge.current_image_api = previous_image_api;
+
+    status.* = toCEntryPointStatus(rt.rt.beginEntryPoint(allocator, entry_point) catch |err| return toCResult(err));
+    return .Success;
+}
+
+export fn SpvContinueEntryPoint(rt: *RuntimeWrapper, status: *EntryPointStatus) callconv(.c) ffi.Result {
+    const allocator = std.heap.c_allocator;
+
+    const previous_image_api = ImageAPIBridge.current_image_api;
+    ImageAPIBridge.current_image_api = &rt.image_api;
+    defer ImageAPIBridge.current_image_api = previous_image_api;
+
+    status.* = toCEntryPointStatus(rt.rt.continueEntryPoint(allocator) catch |err| return toCResult(err));
+    return .Success;
+}
+
+export fn SpvResetInvocation(rt: *RuntimeWrapper) callconv(.c) void {
+    const allocator = std.heap.c_allocator;
+    rt.rt.resetInvocation(allocator);
+}
+
 export fn SpvReadOutput(rt: *RuntimeWrapper, output: [*]u8, output_size: c_ulong, result: spv.SpvWord) callconv(.c) ffi.Result {
     rt.rt.readOutput(output[0..output_size], result) catch |err| return toCResult(err);
     return .Success;
@@ -271,6 +359,11 @@ export fn SpvReadBuiltIn(rt: *RuntimeWrapper, output: [*]u8, output_size: c_ulon
 
 export fn SpvWriteInput(rt: *RuntimeWrapper, input: [*]const u8, input_size: c_ulong, result: spv.SpvWord) callconv(.c) ffi.Result {
     rt.rt.writeInput(input[0..input_size], result) catch |err| return toCResult(err);
+    return .Success;
+}
+
+export fn SpvWriteInputLocation(rt: *RuntimeWrapper, input: [*]const u8, input_size: c_ulong, location: spv.SpvWord) callconv(.c) ffi.Result {
+    rt.rt.writeInputLocation(input[0..input_size], location) catch |err| return toCResult(err);
     return .Success;
 }
 
