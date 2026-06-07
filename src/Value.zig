@@ -749,8 +749,40 @@ pub const Value = union(Type) {
 
         return switch (v.*) {
             .Int => (try getPrimitiveField(T, bits, @constCast(v))).*,
+            .Float => (try getPrimitiveField(T, bits, @constCast(v))).*,
 
             .Vector => |lanes| (try getPrimitiveField(T, bits, &lanes[lane_index])).*,
+
+            .Vector2f32 => |*vec| switch (lane_index) {
+                inline 0...1 => |i| blk: {
+                    if (comptime T == .Float and bits == 32) {
+                        break :blk @as(TT, vec[i]);
+                    } else {
+                        return RuntimeError.InvalidSpirV;
+                    }
+                },
+                else => return RuntimeError.InvalidSpirV,
+            },
+            .Vector3f32 => |*vec| switch (lane_index) {
+                inline 0...2 => |i| blk: {
+                    if (comptime T == .Float and bits == 32) {
+                        break :blk @as(TT, vec[i]);
+                    } else {
+                        return RuntimeError.InvalidSpirV;
+                    }
+                },
+                else => return RuntimeError.InvalidSpirV,
+            },
+            .Vector4f32 => |*vec| switch (lane_index) {
+                inline 0...3 => |i| blk: {
+                    if (comptime T == .Float and bits == 32) {
+                        break :blk @as(TT, vec[i]);
+                    } else {
+                        return RuntimeError.InvalidSpirV;
+                    }
+                },
+                else => return RuntimeError.InvalidSpirV,
+            },
 
             .Vector2i32 => |*vec| switch (lane_index) {
                 inline 0...1 => |i| blk: {
@@ -821,8 +853,34 @@ pub const Value = union(Type) {
     pub inline fn writeLane(comptime T: PrimitiveType, comptime bits: u32, dst: *Value, lane_index: usize, value: getPrimitiveFieldType(T, bits)) RuntimeError!void {
         switch (dst.*) {
             .Int => (try getPrimitiveField(T, bits, dst)).* = value,
+            .Float => (try getPrimitiveField(T, bits, dst)).* = value,
 
             .Vector => |lanes| try setScalarLaneValue(T, bits, &lanes[lane_index], value),
+
+            .Vector2f32 => |*vec| switch (lane_index) {
+                inline 0...1 => |i| if (comptime T == .Float and bits == 32) {
+                    vec[i] = value;
+                } else {
+                    return RuntimeError.InvalidSpirV;
+                },
+                else => return RuntimeError.InvalidSpirV,
+            },
+            .Vector3f32 => |*vec| switch (lane_index) {
+                inline 0...2 => |i| if (comptime T == .Float and bits == 32) {
+                    vec[i] = value;
+                } else {
+                    return RuntimeError.InvalidSpirV;
+                },
+                else => return RuntimeError.InvalidSpirV,
+            },
+            .Vector4f32 => |*vec| switch (lane_index) {
+                inline 0...3 => |i| if (comptime T == .Float and bits == 32) {
+                    vec[i] = value;
+                } else {
+                    return RuntimeError.InvalidSpirV;
+                },
+                else => return RuntimeError.InvalidSpirV,
+            },
 
             .Vector2i32 => |*vec| switch (lane_index) {
                 inline 0...1 => |i| if (bits == 32) {
@@ -881,27 +939,39 @@ pub const Value = union(Type) {
     fn setScalarLaneValue(comptime value_type: PrimitiveType, comptime bits: u32, dst: *Value, v: getPrimitiveFieldType(value_type, bits)) RuntimeError!void {
         switch (bits) {
             inline 8, 16, 32, 64 => {
-                dst.* = .{ .Int = .{
-                    .bit_count = bits,
-                    .is_signed = if (value_type == .SInt) true else false,
-                    .value = switch (value_type) {
-                        .SInt => switch (bits) {
-                            8 => .{ .sint8 = v },
-                            16 => .{ .sint16 = v },
-                            32 => .{ .sint32 = v },
-                            64 => .{ .sint64 = v },
+                dst.* = switch (value_type) {
+                    .Float => .{ .Float = .{
+                        .bit_count = bits,
+                        .value = switch (bits) {
+                            16 => .{ .float16 = v },
+                            32 => .{ .float32 = v },
+                            64 => .{ .float64 = v },
+                            else => return RuntimeError.InvalidSpirV,
+                        },
+                    } },
+                    .SInt, .UInt => .{ .Int = .{
+                        .bit_count = bits,
+                        .is_signed = if (value_type == .SInt) true else false,
+                        .value = switch (value_type) {
+                            .SInt => switch (bits) {
+                                8 => .{ .sint8 = v },
+                                16 => .{ .sint16 = v },
+                                32 => .{ .sint32 = v },
+                                64 => .{ .sint64 = v },
+                                else => unreachable,
+                            },
+                            .UInt => switch (bits) {
+                                8 => .{ .uint8 = v },
+                                16 => .{ .uint16 = v },
+                                32 => .{ .uint32 = v },
+                                64 => .{ .uint64 = v },
+                                else => unreachable,
+                            },
                             else => unreachable,
                         },
-                        .UInt => switch (bits) {
-                            8 => .{ .uint8 = v },
-                            16 => .{ .uint16 = v },
-                            32 => .{ .uint32 = v },
-                            64 => .{ .uint64 = v },
-                            else => unreachable,
-                        },
-                        else => return RuntimeError.InvalidSpirV,
-                    },
-                } };
+                    } },
+                    else => return RuntimeError.InvalidSpirV,
+                };
             },
             else => return RuntimeError.InvalidSpirV,
         }

@@ -93,6 +93,7 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Log)]       = MathEngine(.Float, .Log).opSingleOperator;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Log2)]      = MathEngine(.Float, .Log2).opSingleOperator;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Normalize)] = opNormalize;
+    runtime_dispatcher[@intFromEnum(ext.GLSLOp.Pow)]       = MathEngine(.Float, .Pow).opDoubleOperators;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Round)]     = MathEngine(.Float, .Round).opSingleOperator;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.SAbs)]      = MathEngine(.SInt,  .SAbs).opSingleOperator;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.SClamp)]    = MathEngine(.SInt, .SClamp).opTripleOperators;
@@ -102,6 +103,7 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Tan)]       = MathEngine(.Float, .Tan).opSingleOperator;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Trunc)]     = MathEngine(.Float, .Trunc).opSingleOperator;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.UClamp)]    = MathEngine(.UInt, .UClamp).opTripleOperators;
+    runtime_dispatcher[@intFromEnum(ext.GLSLOp.Cross)]     = opCross;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.FindILsb)]  = IntBitEngine(.FindILsb).op;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.FindSMsb)]  = IntBitEngine(.FindSMsb).op;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.FindUMsb)]  = IntBitEngine(.FindUMsb).op;
@@ -205,6 +207,7 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp) type {
                     return switch (Op) {
                         .FMax => @max(l, r),
                         .FMin => @min(l, r),
+                        .Pow => if (comptime isFloatOrF32Vector(TT)) @exp(@log(l) * r) else RuntimeError.InvalidSpirV,
                         else => RuntimeError.InvalidSpirV,
                     };
                 }
@@ -395,6 +398,34 @@ fn IntBitEngine(comptime op_kind: IntBitOp) type {
             try apply(dst, src, lane_count, dst_sign == .signed);
         }
     };
+}
+
+fn opCross(_: std.mem.Allocator, target_type_id: SpvWord, id: SpvWord, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const target_type = (try rt.results[target_type_id].getVariant()).Type;
+    const dst = try rt.results[id].getValue();
+    const lhs = try rt.results[try rt.it.next()].getValue();
+    const rhs = try rt.results[try rt.it.next()].getValue();
+
+    const lane_bits = try Result.resolveLaneBitWidth(target_type, rt);
+    if (try Result.resolveLaneCount(target_type) != 3)
+        return RuntimeError.InvalidSpirV;
+
+    switch (lane_bits) {
+        inline 16, 32, 64 => |bits| {
+            const FloatT = Value.getPrimitiveFieldType(.Float, bits);
+            const lx = try Value.readLane(.Float, bits, lhs, 0);
+            const ly = try Value.readLane(.Float, bits, lhs, 1);
+            const lz = try Value.readLane(.Float, bits, lhs, 2);
+            const rx = try Value.readLane(.Float, bits, rhs, 0);
+            const ry = try Value.readLane(.Float, bits, rhs, 1);
+            const rz = try Value.readLane(.Float, bits, rhs, 2);
+
+            try Value.writeLane(.Float, bits, dst, 0, @as(FloatT, ly * rz - lz * ry));
+            try Value.writeLane(.Float, bits, dst, 1, @as(FloatT, lz * rx - lx * rz));
+            try Value.writeLane(.Float, bits, dst, 2, @as(FloatT, lx * ry - ly * rx));
+        },
+        else => return RuntimeError.InvalidSpirV,
+    }
 }
 
 fn opLength(_: std.mem.Allocator, target_type_id: SpvWord, id: SpvWord, _: SpvWord, rt: *Runtime) RuntimeError!void {

@@ -141,6 +141,12 @@ pub const SetupDispatcher = block: {
         .Decorate = opDecorate,
         .DecorationGroup = opDecorationGroup,
         .Dot = autoSetupConstant,
+        .DPdx = autoSetupConstant,
+        .DPdxCoarse = autoSetupConstant,
+        .DPdxFine = autoSetupConstant,
+        .DPdy = autoSetupConstant,
+        .DPdyCoarse = autoSetupConstant,
+        .DPdyFine = autoSetupConstant,
         .EntryPoint = opEntryPoint,
         .ExecutionMode = opExecutionMode,
         .ExtInst = autoSetupConstant,
@@ -303,6 +309,12 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ConvertSToF)]            = ConversionEngine(.SInt, .Float).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ConvertUToF)]            = ConversionEngine(.UInt, .Float).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.CopyMemory)]             = opCopyMemory;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.DPdx)]                   = DerivativeEngine(.x).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.DPdxCoarse)]             = DerivativeEngine(.x).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.DPdxFine)]               = DerivativeEngine(.x).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.DPdy)]                   = DerivativeEngine(.y).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.DPdyCoarse)]             = DerivativeEngine(.y).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.DPdyFine)]               = DerivativeEngine(.y).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Dot)]                    = opDot;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ExtInst)]                = opExtInst;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.FAdd)]                   = MathEngine(.Float, .Add, false).op;
@@ -341,7 +353,6 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageSampleImplicitLod)] = ImageEngine(.SampleImplicitLod).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageTexelPointer)]      = opImageTexelPointer;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageWrite)]             = ImageEngine(.Write).op;
-    runtime_dispatcher[@intFromEnum(spv.SpvOp.SampledImage)]           = opSampledImage;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.InBoundsAccessChain)]    = opAccessChain;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.IsFinite)]               = CondEngine(.Float, .IsNan).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.IsInf)]                  = CondEngine(.Float, .IsInf).op;
@@ -373,6 +384,7 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.SMulExtended)]           = opSMulExtended;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.SNegate)]                = MathEngine(.SInt, .Negate, false).opSingle;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.SRem)]                   = MathEngine(.SInt, .Rem, false).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.SampledImage)]           = opSampledImage;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Select)]                 = opSelect;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ShiftLeftLogical)]       = BitEngine(.UInt, .ShiftLeft).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ShiftRightArithmetic)]   = BitEngine(.SInt, .ShiftRightArithmetic).op;
@@ -384,6 +396,7 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.SpecConstantTrue)]       = opSpecConstantTrue;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Store)]                  = opStore;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Switch)]                 = opSwitch;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.TerminateInvocation)]    = opKill;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.UConvert)]               = ConversionEngine(.UInt, .UInt).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.UDiv)]                   = MathEngine(.UInt, .Div, false).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.UGreaterThan)]           = CondEngine(.UInt, .Greater).op;
@@ -392,6 +405,7 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ULessThanEqual)]         = CondEngine(.UInt, .LessEqual).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.UMod)]                   = MathEngine(.UInt, .Mod, false).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.UMulExtended)]           = opUMulExtended;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.Unreachable)]            = opUnreachable;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorShuffle)]          = opVectorShuffle;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorTimesMatrix)]      = MathEngine(.Float, .VectorTimesMatrix, false).op; // TODO
     runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorTimesScalar)]      = MathEngine(.Float, .VectorTimesScalar, false).op;
@@ -3197,6 +3211,10 @@ fn opSMulExtended(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!v
     try opMulExtended(true, rt);
 }
 
+fn opUnreachable(_: std.mem.Allocator, _: SpvWord, _: *Runtime) RuntimeError!void {
+    return RuntimeError.Unreachable;
+}
+
 fn opSpecConstant(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
     const location = rt.it.emitSourceLocation();
     _ = rt.it.skip();
@@ -3432,6 +3450,24 @@ fn opDot(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     }
 }
 
+fn DerivativeEngine(comptime axis: enum { x, y }) type {
+    return struct {
+        fn op(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+            _ = try rt.it.next(); // result type
+            const id = try rt.it.next();
+            const operand = try rt.it.next();
+
+            const derivative = rt.derivatives.get(operand) orelse return RuntimeError.UnsupportedSpirV;
+            const src = switch (axis) {
+                .x => &derivative.dx,
+                .y => &derivative.dy,
+            };
+            try copyValue(try rt.results[id].getValue(), src);
+            try rt.copyDerivative(allocator, id, operand);
+        }
+    };
+}
+
 fn opEntryPoint(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
     const entry = rt.mod.entry_points.addOne(allocator) catch return RuntimeError.OutOfMemory;
     entry.exec_model = try rt.it.nextAs(spv.SpvExecutionModel);
@@ -3601,11 +3637,12 @@ fn opKill(_: std.mem.Allocator, _: SpvWord, _: *Runtime) RuntimeError!void {
     return RuntimeError.Killed;
 }
 
-fn opLoad(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+fn opLoad(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     _ = rt.it.skip();
     const id = try rt.it.next();
     const ptr_id = try rt.it.next();
     try copyValue(try rt.results[id].getValue(), try rt.results[ptr_id].getValue());
+    try rt.copyDerivative(allocator, id, ptr_id);
 }
 
 fn opMemberName(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {

@@ -47,6 +47,23 @@ pub const SpecializationEntry = struct {
     size: usize,
 };
 
+pub const Derivative = struct {
+    dx: Value,
+    dy: Value,
+
+    pub fn dupe(self: *const @This(), allocator: std.mem.Allocator) RuntimeError!@This() {
+        return .{
+            .dx = try self.dx.dupe(allocator),
+            .dy = try self.dy.dupe(allocator),
+        };
+    }
+
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        self.dx.deinit(allocator);
+        self.dy.deinit(allocator);
+    }
+};
+
 pub const Function = struct {
     source_location: usize,
     result: *Result,
@@ -86,6 +103,7 @@ current_label: ?SpvWord,
 previous_label: ?SpvWord,
 
 specialization_constants: std.AutoHashMapUnmanaged(u32, []const u8),
+derivatives: std.AutoHashMapUnmanaged(SpvWord, Derivative),
 
 image_api: ImageAPI,
 
@@ -116,6 +134,7 @@ pub fn init(allocator: std.mem.Allocator, module: *Module, image_api: ImageAPI) 
         .current_label = null,
         .previous_label = null,
         .specialization_constants = .empty,
+        .derivatives = .empty,
         .image_api = image_api,
     };
 }
@@ -131,6 +150,12 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
         allocator.free(entry.value_ptr.*);
     }
     self.specialization_constants.deinit(allocator);
+
+    var derivatives = self.derivatives.iterator();
+    while (derivatives.next()) |entry| {
+        entry.value_ptr.deinit(allocator);
+    }
+    self.derivatives.deinit(allocator);
 }
 
 pub fn addSpecializationInfo(self: *Self, allocator: std.mem.Allocator, entry: SpecializationEntry, data: []const u8) RuntimeError!void {
@@ -146,6 +171,62 @@ pub fn copySpecializationConstantsFrom(self: *Self, allocator: std.mem.Allocator
             allocator.free(slice);
             return RuntimeError.OutOfMemory;
         };
+    }
+}
+
+pub fn setDerivative(self: *Self, allocator: std.mem.Allocator, result: SpvWord, dx: *const Value, dy: *const Value) RuntimeError!void {
+    const derivative: Derivative = .{
+        .dx = try dx.dupe(allocator),
+        .dy = try dy.dupe(allocator),
+    };
+    errdefer {
+        var tmp = derivative;
+        tmp.deinit(allocator);
+    }
+
+    const gop = self.derivatives.getOrPut(allocator, result) catch return RuntimeError.OutOfMemory;
+    if (gop.found_existing) {
+        gop.value_ptr.deinit(allocator);
+    }
+    gop.value_ptr.* = derivative;
+}
+
+pub fn setDerivativeFromMemory(self: *Self, allocator: std.mem.Allocator, result: SpvWord, dx: []const u8, dy: []const u8) RuntimeError!void {
+    const target_type = try self.getResultTargetTypeWord(result);
+
+    var dx_value = try Value.init(allocator, self.results, target_type, false);
+    defer dx_value.deinit(allocator);
+    _ = try dx_value.write(dx);
+
+    var dy_value = try Value.init(allocator, self.results, target_type, false);
+    defer dy_value.deinit(allocator);
+    _ = try dy_value.write(dy);
+
+    try self.setDerivative(allocator, result, &dx_value, &dy_value);
+}
+
+fn getResultTargetTypeWord(self: *const Self, result: SpvWord) RuntimeError!SpvWord {
+    return switch ((try self.results[result].getConstVariant()).*) {
+        .Variable => |v| v.type_word,
+        .Constant => |c| c.type_word,
+        .FunctionParameter => |p| p.type_word,
+        .AccessChain => |a| a.target,
+        else => return RuntimeError.InvalidSpirV,
+    };
+}
+
+pub fn clearDerivative(self: *Self, allocator: std.mem.Allocator, result: SpvWord) void {
+    if (self.derivatives.fetchRemove(result)) |kv| {
+        var derivative = kv.value;
+        derivative.deinit(allocator);
+    }
+}
+
+pub fn copyDerivative(self: *Self, allocator: std.mem.Allocator, dst: SpvWord, src: SpvWord) RuntimeError!void {
+    if (self.derivatives.get(src)) |derivative| {
+        try self.setDerivative(allocator, dst, &derivative.dx, &derivative.dy);
+    } else {
+        self.clearDerivative(allocator, dst);
     }
 }
 
@@ -523,6 +604,12 @@ pub fn hasResultDecoration(self: *const Self, result: SpvWord, decoration: spv.S
 }
 
 pub fn resetInvocation(self: *Self, allocator: std.mem.Allocator) void {
+    var derivatives = self.derivatives.iterator();
+    while (derivatives.next()) |entry| {
+        entry.value_ptr.deinit(allocator);
+    }
+    self.derivatives.clearRetainingCapacity();
+
     for (self.results) |*result| {
         if (result.variant) |*variant| {
             switch (variant.*) {
