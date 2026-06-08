@@ -149,13 +149,6 @@ fn checkEndiannessFromSpvMagic(magic: SpvWord) bool {
 
 fn pass(self: *Self, allocator: std.mem.Allocator) ModuleError!void {
     var rt = Runtime.init(allocator, self, undefined) catch return ModuleError.OutOfMemory;
-    defer {
-        for (self.results, rt.results) |*result, new_result| {
-            result.deinit(allocator);
-            result.* = new_result.dupe(allocator) catch unreachable; // OutOfMemory if unreachable
-        }
-        rt.deinit(allocator);
-    }
 
     while (rt.it.nextOrNull()) |opcode_data| {
         const word_count = ((opcode_data & (~spv.SpvOpCodeMask)) >> spv.SpvWordCountShift) - 1;
@@ -170,6 +163,12 @@ fn pass(self: *Self, allocator: std.mem.Allocator) ModuleError!void {
         _ = it_tmp.skipN(word_count);
         rt.it = it_tmp;
     }
+
+    for (self.results, rt.results) |*result, new_result| {
+        result.deinit(allocator);
+        result.* = new_result.dupe(allocator) catch return ModuleError.OutOfMemory;
+    }
+    rt.deinit(allocator);
 }
 
 fn resolveConstantWord(self: *const Self, id: SpvWord) ?SpvWord {

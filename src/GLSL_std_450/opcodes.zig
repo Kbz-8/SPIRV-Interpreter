@@ -87,8 +87,10 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.FClamp)]    = MathEngine(.Float, .FClamp).opTripleOperators;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.FMax)]      = MathEngine(.Float, .FMax).opDoubleOperators;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.FMin)]      = MathEngine(.Float, .FMin).opDoubleOperators;
+    runtime_dispatcher[@intFromEnum(ext.GLSLOp.FMix)]      = opFMix;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.FSign)]     = MathEngine(.Float, .FSign).opSingleOperator;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Floor)]     = MathEngine(.Float, .Floor).opSingleOperator;
+    runtime_dispatcher[@intFromEnum(ext.GLSLOp.Fract)]     = MathEngine(.Float, .Fract).opSingleOperator;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Length)]    = opLength;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Log)]       = MathEngine(.Float, .Log).opSingleOperator;
     runtime_dispatcher[@intFromEnum(ext.GLSLOp.Log2)]      = MathEngine(.Float, .Log2).opSingleOperator;
@@ -138,6 +140,7 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp) type {
                             .FAbs => @abs(x),
                             .FSign => std.math.sign(x),
                             .Floor => @floor(x),
+                            .Fract => x - @floor(x),
                             .Log => @log(x),
                             .Log2 => @log2(x),
                             .Round => @round(x),
@@ -308,6 +311,37 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp) type {
             }
         }
     };
+}
+
+
+fn opFMix(
+    _: std.mem.Allocator,
+    target_type_id: SpvWord,
+    id: SpvWord,
+    _: SpvWord,
+    rt: *Runtime,
+) RuntimeError!void {
+    const target_type = (try rt.results[target_type_id].getVariant()).Type;
+    const dst = try rt.results[id].getValue();
+    const x = try rt.results[try rt.it.next()].getValue();
+    const y = try rt.results[try rt.it.next()].getValue();
+    const a = try rt.results[try rt.it.next()].getValue();
+
+    const lane_bits = try Result.resolveLaneBitWidth(target_type, rt);
+    const lane_count = try Result.resolveLaneCount(target_type);
+
+    switch (lane_bits) {
+        inline 16, 32, 64 => |bits| {
+            const FloatT = Value.getPrimitiveFieldType(.Float, bits);
+            for (0..lane_count) |lane_index| {
+                const xv = try Value.readLane(.Float, bits, x, lane_index);
+                const yv = try Value.readLane(.Float, bits, y, lane_index);
+                const av = try Value.readLane(.Float, bits, a, lane_index);
+                try Value.writeLane(.Float, bits, dst, lane_index, @as(FloatT, xv * (1 - av) + yv * av));
+            }
+        },
+        else => return RuntimeError.InvalidSpirV,
+    }
 }
 
 fn IntBitEngine(comptime op_kind: IntBitOp) type {

@@ -301,12 +301,14 @@ pub inline fn getConstValue(self: *Self) RuntimeError!*const Value {
     };
 }
 
-pub inline fn getVariant(self: *Self) RuntimeError!*VariantData {
-    return &(self.variant orelse return RuntimeError.InvalidSpirV);
+pub fn getVariant(self: *Self) RuntimeError!*VariantData {
+    if (self.variant) |*variant| return variant;
+    return RuntimeError.InvalidSpirV;
 }
 
-pub inline fn getConstVariant(self: *const Self) RuntimeError!*const VariantData {
-    return &(self.variant orelse return RuntimeError.InvalidSpirV);
+pub fn getConstVariant(self: *const Self) RuntimeError!*const VariantData {
+    if (self.variant) |variant| return &variant;
+    return RuntimeError.InvalidSpirV;
 }
 
 /// Performs a deep copy

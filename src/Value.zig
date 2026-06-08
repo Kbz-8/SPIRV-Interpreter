@@ -165,6 +165,7 @@ pub const Value = union(Type) {
             .Structure => |*s| s.values,
             .Array => |*a| a.values,
             .Vector => |v| v,
+            .Matrix => |m| m,
             else => null,
         };
     }

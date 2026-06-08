@@ -71,6 +71,7 @@ const BitOp = enum {
 const ImageOp = enum {
     Fetch,
     QuerySize,
+    QuerySizeLod,
     Read,
     Resolve,
     SampleExplicitLod,
@@ -100,6 +101,7 @@ pub const OpCodeExtFunc = *const fn (std.mem.Allocator, SpvWord, SpvWord, SpvWor
 pub const SetupDispatcher = block: {
     @setEvalBranchQuota(65535);
     break :block std.EnumMap(spv.SpvOp, OpCodeFunc).init(.{
+        .AccessChain = setupAccessChain,
         .All = autoSetupConstant,
         .Any = autoSetupConstant,
         .AtomicAnd = autoSetupConstant,
@@ -109,15 +111,14 @@ pub const SetupDispatcher = block: {
         .AtomicIDecrement = autoSetupConstant,
         .AtomicIIncrement = autoSetupConstant,
         .AtomicISub = autoSetupConstant,
-        .AtomicStore = autoSetupConstant,
         .AtomicLoad = autoSetupConstant,
         .AtomicOr = autoSetupConstant,
         .AtomicSMax = autoSetupConstant,
         .AtomicSMin = autoSetupConstant,
+        .AtomicStore = autoSetupConstant,
         .AtomicUMax = autoSetupConstant,
         .AtomicUMin = autoSetupConstant,
         .AtomicXor = autoSetupConstant,
-        .AccessChain = setupAccessChain,
         .BitCount = autoSetupConstant,
         .BitFieldInsert = autoSetupConstant,
         .BitFieldSExtract = autoSetupConstant,
@@ -132,21 +133,26 @@ pub const SetupDispatcher = block: {
         .CompositeInsert = autoSetupConstant,
         .Constant = opConstant,
         .ConstantComposite = opConstantComposite,
+        .ConstantFalse = opConstantFalse,
+        .ConstantTrue = opConstantTrue,
         .ConvertFToS = autoSetupConstant,
         .ConvertFToU = autoSetupConstant,
         .ConvertPtrToU = autoSetupConstant,
         .ConvertSToF = autoSetupConstant,
         .ConvertUToF = autoSetupConstant,
         .ConvertUToPtr = autoSetupConstant,
-        .Decorate = opDecorate,
-        .DecorationGroup = opDecorationGroup,
-        .Dot = autoSetupConstant,
         .DPdx = autoSetupConstant,
         .DPdxCoarse = autoSetupConstant,
         .DPdxFine = autoSetupConstant,
         .DPdy = autoSetupConstant,
         .DPdyCoarse = autoSetupConstant,
         .DPdyFine = autoSetupConstant,
+        .Fwidth = autoSetupConstant,
+        .FwidthCoarse = autoSetupConstant,
+        .FwidthFine = autoSetupConstant,
+        .Decorate = opDecorate,
+        .DecorationGroup = opDecorationGroup,
+        .Dot = autoSetupConstant,
         .EntryPoint = opEntryPoint,
         .ExecutionMode = opExecutionMode,
         .ExtInst = autoSetupConstant,
@@ -187,6 +193,7 @@ pub const SetupDispatcher = block: {
         .Image = autoSetupConstant,
         .ImageFetch = autoSetupConstant,
         .ImageQuerySize = autoSetupConstant,
+        .ImageQuerySizeLod = autoSetupConstant,
         .ImageRead = autoSetupConstant,
         .ImageSampleExplicitLod = autoSetupConstant,
         .ImageSampleImplicitLod = autoSetupConstant,
@@ -230,23 +237,23 @@ pub const SetupDispatcher = block: {
         .ShiftLeftLogical = autoSetupConstant,
         .ShiftRightArithmetic = autoSetupConstant,
         .ShiftRightLogical = autoSetupConstant,
+        .SourceExtension = opSourceExtension,
         .SpecConstant = opSpecConstant,
         .SpecConstantComposite = opConstantComposite,
         .SpecConstantFalse = opSpecConstantFalse,
         .SpecConstantOp = opSpecConstantOp,
         .SpecConstantTrue = opSpecConstantTrue,
-        .SourceExtension = opSourceExtension,
         .TypeArray = opTypeArray,
         .TypeBool = opTypeBool,
         .TypeFloat = opTypeFloat,
         .TypeFunction = opTypeFunction,
         .TypeImage = opTypeImage,
-        .TypeSampler = opTypeSampler,
-        .TypeSampledImage = opTypeSampledImage,
         .TypeInt = opTypeInt,
         .TypeMatrix = opTypeMatrix,
         .TypePointer = opTypePointer,
         .TypeRuntimeArray = opTypeRuntimeArray,
+        .TypeSampledImage = opTypeSampledImage,
+        .TypeSampler = opTypeSampler,
         .TypeStruct = opTypeStruct,
         .TypeVector = opTypeVector,
         .TypeVoid = opTypeVoid,
@@ -260,6 +267,7 @@ pub const SetupDispatcher = block: {
         .UMulExtended = autoSetupConstant,
         .Undef = autoSetupConstant,
         .Variable = opVariable,
+        .VectorExtractDynamic = autoSetupConstant,
         .VectorShuffle = autoSetupConstant,
         .VectorTimesMatrix = autoSetupConstant,
         .VectorTimesScalar = autoSetupConstant,
@@ -315,6 +323,9 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.DPdy)]                   = DerivativeEngine(.y).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.DPdyCoarse)]             = DerivativeEngine(.y).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.DPdyFine)]               = DerivativeEngine(.y).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.Fwidth)]                 = opFwidth;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.FwidthCoarse)]           = opFwidth;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.FwidthFine)]             = opFwidth;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Dot)]                    = opDot;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ExtInst)]                = opExtInst;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.FAdd)]                   = MathEngine(.Float, .Add, false).op;
@@ -348,6 +359,7 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Image)]                  = ImageEngine(.Resolve).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageFetch)]             = ImageEngine(.Fetch).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageQuerySize)]         = ImageEngine(.QuerySize).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageQuerySizeLod)]      = ImageEngine(.QuerySizeLod).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageRead)]              = ImageEngine(.Read).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageSampleExplicitLod)] = ImageEngine(.SampleExplicitLod).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageSampleImplicitLod)] = ImageEngine(.SampleImplicitLod).op;
@@ -406,6 +418,7 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.UMod)]                   = MathEngine(.UInt, .Mod, false).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.UMulExtended)]           = opUMulExtended;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Unreachable)]            = opUnreachable;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorExtractDynamic)]   = opVectorExtractDynamic;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorShuffle)]          = opVectorShuffle;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorTimesMatrix)]      = MathEngine(.Float, .VectorTimesMatrix, false).op; // TODO
     runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorTimesScalar)]      = MathEngine(.Float, .VectorTimesScalar, false).op;
@@ -1117,6 +1130,29 @@ fn ImageEngine(comptime Op: ImageOp) type {
             };
         }
 
+        fn resolveImageForQuery(image: *Result, rt: *Runtime) RuntimeError!ImageOperand {
+            return switch ((try image.getValue()).*) {
+                .Image => try resolveImage(image, rt),
+                .SampledImage => |img| blk: {
+                    const sampled_image_type = switch ((try rt.results[img.type_word].getConstVariant()).*) {
+                        .Type => |t| switch (t) {
+                            .SampledImage => |sampled_image| sampled_image,
+                            else => return RuntimeError.InvalidSpirV,
+                        },
+                        else => return RuntimeError.InvalidSpirV,
+                    };
+
+                    break :blk .{
+                        .type_word = sampled_image_type.image_type,
+                        .driver_image = img.driver_image,
+                        .dim = try resolveImageDim(rt, sampled_image_type.image_type),
+                        .arrayed = try resolveImageArrayed(rt, sampled_image_type.image_type),
+                    };
+                },
+                else => return RuntimeError.InvalidSpirV,
+            };
+        }
+
         fn readStorageCoordLane(coord: *const Value, lane_index: usize) RuntimeError!i32 {
             return switch (coord.*) {
                 .Int => |i| {
@@ -1504,8 +1540,11 @@ fn ImageEngine(comptime Op: ImageOp) type {
             _ = try rt.it.next(); // result type
             const result_id = try rt.it.next();
             const image = &rt.results[try rt.it.next()];
-            if (comptime Op == .QuerySize) {
-                const image_operand = try resolveImage(image, rt);
+            if (comptime Op == .QuerySize or Op == .QuerySizeLod) {
+                const image_operand = try resolveImageForQuery(image, rt);
+                if (comptime Op == .QuerySizeLod) {
+                    _ = try rt.it.next(); // LOD operand; ImageAPI currently exposes base size only.
+                }
                 const dst = try rt.results[result_id].getValue();
                 return try queryImageSize(rt, dst, image_operand);
             }
@@ -2710,22 +2749,6 @@ fn opCompositeConstruct(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime)
     }.routines;
 
     switch (value.*) {
-        .Matrix => |*m| {
-            var index: SpvWord = 0;
-            for (m.*[0..]) |*mat_elem| {
-                if (mat_elem.getCompositeDataOrNull()) |vec| {
-                    for (vec[0..]) |*elem| {
-                        const elem_value = (try rt.results[try rt.it.next()].getVariant()).Constant.value;
-                        elem.* = elem_value;
-                        index += 1;
-                        if (index == index_count)
-                            return;
-                    }
-                } else {
-                    try vectorRoutines(mat_elem, rt);
-                }
-            }
-        },
         .RuntimeArray => |arr| {
             _ = arr;
             return RuntimeError.ToDo;
@@ -2913,6 +2936,22 @@ fn opCompositeInsert(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Run
     for (indices) |*idx| idx.* = try rt.it.next();
 
     try helpers.insertAt(arena.allocator(), rt.results, target, object, indices);
+}
+
+fn opConstantFalse(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const target = try setupConstant(allocator, rt);
+    switch (target.variant.?.Constant.value) {
+        .Bool => |*b| b.* = false,
+        else => return RuntimeError.InvalidSpirV,
+    }
+}
+
+fn opConstantTrue(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const target = try setupConstant(allocator, rt);
+    switch (target.variant.?.Constant.value) {
+        .Bool => |*b| b.* = true,
+        else => return RuntimeError.InvalidSpirV,
+    }
 }
 
 fn opConstant(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
@@ -3320,38 +3359,213 @@ fn opSpecConstantOp(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runt
     if (word_count < 3)
         return RuntimeError.InvalidSpirV;
 
+    const helpers = struct {
+        fn readUInt(value: *const Value) RuntimeError!u64 {
+            return switch (value.*) {
+                .Int => |i| switch (i.bit_count) {
+                    8 => i.value.uint8,
+                    16 => i.value.uint16,
+                    32 => i.value.uint32,
+                    64 => i.value.uint64,
+                    else => return RuntimeError.InvalidSpirV,
+                },
+                else => return RuntimeError.InvalidValueType,
+            };
+        }
+
+        fn readSInt(value: *const Value) RuntimeError!i64 {
+            return switch (value.*) {
+                .Int => |i| switch (i.bit_count) {
+                    8 => i.value.sint8,
+                    16 => i.value.sint16,
+                    32 => i.value.sint32,
+                    64 => i.value.sint64,
+                    else => return RuntimeError.InvalidSpirV,
+                },
+                else => return RuntimeError.InvalidValueType,
+            };
+        }
+
+        fn readBool(value: *const Value) RuntimeError!bool {
+            return switch (value.*) {
+                .Bool => |b| b,
+                else => return RuntimeError.InvalidValueType,
+            };
+        }
+
+        fn writeUInt(dst: *Value, raw: u64) RuntimeError!void {
+            switch (dst.*) {
+                .Int => |*i| switch (i.bit_count) {
+                    8 => i.value.uint8 = @truncate(raw),
+                    16 => i.value.uint16 = @truncate(raw),
+                    32 => i.value.uint32 = @truncate(raw),
+                    64 => i.value.uint64 = raw,
+                    else => return RuntimeError.InvalidSpirV,
+                },
+                else => return RuntimeError.InvalidValueType,
+            }
+        }
+
+        fn shiftLeftLogical(value: u64, amount: u64, bit_count: usize) RuntimeError!u64 {
+            return switch (bit_count) {
+                inline 8, 16, 32, 64 => |bits| blk: {
+                    if (amount >= bits) break :blk 0;
+
+                    const UInt = std.meta.Int(.unsigned, bits);
+                    const shift: std.math.Log2Int(UInt) = @intCast(amount);
+                    const result = @as(UInt, @truncate(value)) << shift;
+                    break :blk @as(u64, result);
+                },
+                else => return RuntimeError.InvalidSpirV,
+            };
+        }
+
+        fn shiftRightLogical(value: u64, amount: u64, bit_count: usize) RuntimeError!u64 {
+            return switch (bit_count) {
+                inline 8, 16, 32, 64 => |bits| blk: {
+                    if (amount >= bits) break :blk 0;
+
+                    const UInt = std.meta.Int(.unsigned, bits);
+                    const shift: std.math.Log2Int(UInt) = @intCast(amount);
+                    const result = @as(UInt, @truncate(value)) >> shift;
+                    break :blk @as(u64, result);
+                },
+                else => return RuntimeError.InvalidSpirV,
+            };
+        }
+
+        fn shiftRightArithmetic(value: *const Value, amount: u64, bit_count: usize) RuntimeError!u64 {
+            return switch (bit_count) {
+                inline 8, 16, 32, 64 => |bits| blk: {
+                    const SInt = std.meta.Int(.signed, bits);
+                    const UInt = std.meta.Int(.unsigned, bits);
+                    const lhs: SInt = @bitCast(@as(UInt, @truncate(try readUInt(value))));
+                    if (amount >= bits) {
+                        break :blk @as(u64, @as(UInt, @bitCast(if (lhs < 0) @as(SInt, -1) else @as(SInt, 0))));
+                    }
+
+                    const shift: std.math.Log2Int(SInt) = @intCast(amount);
+                    break :blk @as(u64, @as(UInt, @bitCast(lhs >> shift)));
+                },
+                else => return RuntimeError.InvalidSpirV,
+            };
+        }
+
+        fn bitNot(value: u64, bit_count: usize) RuntimeError!u64 {
+            return switch (bit_count) {
+                inline 8, 16, 32, 64 => |bits| blk: {
+                    const UInt = std.meta.Int(.unsigned, bits);
+                    break :blk @as(u64, ~@as(UInt, @truncate(value)));
+                },
+                else => return RuntimeError.InvalidSpirV,
+            };
+        }
+    };
+
     const target = try setupConstant(allocator, rt);
     const inner_op = try rt.it.nextAs(spv.SpvOp);
-
     const target_value = try target.getValue();
+
     switch (target_value.*) {
-        .Int => |*dst| {
-            if (word_count != 5)
-                return RuntimeError.UnsupportedSpirV;
+        .Int => |dst| {
+            const bit_count = dst.bit_count;
 
-            const lhs = (try rt.results[try rt.it.next()].getValue()).Int;
-            const rhs = (try rt.results[try rt.it.next()].getValue()).Int;
-            const lhs_u = lhs.value.uint64;
-            const rhs_u = rhs.value.uint64;
+            const result = switch (inner_op) {
+                .Not => blk: {
+                    if (word_count != 4)
+                        return RuntimeError.InvalidSpirV;
 
-            dst.value.uint64 = switch (inner_op) {
-                .IAdd => @addWithOverflow(lhs_u, rhs_u)[0],
-                .ISub => @subWithOverflow(lhs_u, rhs_u)[0],
-                .IMul => @mulWithOverflow(lhs_u, rhs_u)[0],
-                .UDiv => if (rhs_u != 0) @divTrunc(lhs_u, rhs_u) else return RuntimeError.DivisionByZero,
-                .UMod => if (rhs_u != 0) @mod(lhs_u, rhs_u) else return RuntimeError.DivisionByZero,
-                .SDiv => switch (dst.bit_count) {
-                    32 => @as(u32, @bitCast(@divTrunc(lhs.value.sint32, rhs.value.sint32))),
-                    64 => @bitCast(@divTrunc(lhs.value.sint64, rhs.value.sint64)),
-                    else => return RuntimeError.UnsupportedSpirV,
+                    const operand = try rt.results[try rt.it.next()].getValue();
+                    break :blk try helpers.bitNot(try helpers.readUInt(operand), bit_count);
                 },
-                .SMod => switch (dst.bit_count) {
-                    32 => @as(u32, @bitCast(@mod(lhs.value.sint32, rhs.value.sint32))),
-                    64 => @bitCast(@mod(lhs.value.sint64, rhs.value.sint64)),
-                    else => return RuntimeError.UnsupportedSpirV,
+                else => blk: {
+                    if (word_count != 5)
+                        return RuntimeError.InvalidSpirV;
+
+                    const lhs_value = try rt.results[try rt.it.next()].getValue();
+                    const rhs_value = try rt.results[try rt.it.next()].getValue();
+                    const lhs_u = try helpers.readUInt(lhs_value);
+                    const rhs_u = try helpers.readUInt(rhs_value);
+
+                    break :blk switch (inner_op) {
+                        .IAdd => @addWithOverflow(lhs_u, rhs_u)[0],
+                        .ISub => @subWithOverflow(lhs_u, rhs_u)[0],
+                        .IMul => @mulWithOverflow(lhs_u, rhs_u)[0],
+
+                        .UDiv => if (rhs_u != 0) @divTrunc(lhs_u, rhs_u) else return RuntimeError.DivisionByZero,
+                        .UMod => if (rhs_u != 0) @mod(lhs_u, rhs_u) else return RuntimeError.DivisionByZero,
+                        .SDiv => blk_signed: {
+                            if (rhs_u == 0) return RuntimeError.DivisionByZero;
+                            break :blk_signed switch (bit_count) {
+                                8 => @as(u8, @bitCast(@divTrunc(@as(i8, @bitCast(@as(u8, @truncate(lhs_u)))), @as(i8, @bitCast(@as(u8, @truncate(rhs_u))))))),
+                                16 => @as(u16, @bitCast(@divTrunc(@as(i16, @bitCast(@as(u16, @truncate(lhs_u)))), @as(i16, @bitCast(@as(u16, @truncate(rhs_u))))))),
+                                32 => @as(u32, @bitCast(@divTrunc(@as(i32, @bitCast(@as(u32, @truncate(lhs_u)))), @as(i32, @bitCast(@as(u32, @truncate(rhs_u))))))),
+                                64 => @as(u64, @bitCast(@divTrunc(@as(i64, @bitCast(lhs_u)), @as(i64, @bitCast(rhs_u))))),
+                                else => return RuntimeError.InvalidSpirV,
+                            };
+                        },
+                        .SMod => blk_signed: {
+                            if (rhs_u == 0) return RuntimeError.DivisionByZero;
+                            break :blk_signed switch (bit_count) {
+                                8 => @as(u8, @bitCast(@mod(@as(i8, @bitCast(@as(u8, @truncate(lhs_u)))), @as(i8, @bitCast(@as(u8, @truncate(rhs_u))))))),
+                                16 => @as(u16, @bitCast(@mod(@as(i16, @bitCast(@as(u16, @truncate(lhs_u)))), @as(i16, @bitCast(@as(u16, @truncate(rhs_u))))))),
+                                32 => @as(u32, @bitCast(@mod(@as(i32, @bitCast(@as(u32, @truncate(lhs_u)))), @as(i32, @bitCast(@as(u32, @truncate(rhs_u))))))),
+                                64 => @as(u64, @bitCast(@mod(@as(i64, @bitCast(lhs_u)), @as(i64, @bitCast(rhs_u))))),
+                                else => return RuntimeError.InvalidSpirV,
+                            };
+                        },
+
+                        .BitwiseAnd => lhs_u & rhs_u,
+                        .BitwiseOr => lhs_u | rhs_u,
+                        .BitwiseXor => lhs_u ^ rhs_u,
+                        .ShiftLeftLogical => try helpers.shiftLeftLogical(lhs_u, rhs_u, bit_count),
+                        .ShiftRightLogical => try helpers.shiftRightLogical(lhs_u, rhs_u, bit_count),
+                        .ShiftRightArithmetic => try helpers.shiftRightArithmetic(lhs_value, rhs_u, bit_count),
+
+                        else => return RuntimeError.UnsupportedSpirV,
+                    };
                 },
-                else => return RuntimeError.UnsupportedSpirV,
             };
+
+            try helpers.writeUInt(target_value, result);
+        },
+        .Bool => |*dst| {
+            const result = switch (inner_op) {
+                .LogicalNot => blk: {
+                    if (word_count != 4)
+                        return RuntimeError.InvalidSpirV;
+
+                    const operand = try rt.results[try rt.it.next()].getValue();
+                    break :blk !(try helpers.readBool(operand));
+                },
+                else => blk: {
+                    if (word_count != 5)
+                        return RuntimeError.InvalidSpirV;
+
+                    const lhs_value = try rt.results[try rt.it.next()].getValue();
+                    const rhs_value = try rt.results[try rt.it.next()].getValue();
+
+                    break :blk switch (inner_op) {
+                        .IEqual => (try helpers.readUInt(lhs_value)) == (try helpers.readUInt(rhs_value)),
+                        .INotEqual => (try helpers.readUInt(lhs_value)) != (try helpers.readUInt(rhs_value)),
+                        .UGreaterThan => (try helpers.readUInt(lhs_value)) > (try helpers.readUInt(rhs_value)),
+                        .UGreaterThanEqual => (try helpers.readUInt(lhs_value)) >= (try helpers.readUInt(rhs_value)),
+                        .ULessThan => (try helpers.readUInt(lhs_value)) < (try helpers.readUInt(rhs_value)),
+                        .ULessThanEqual => (try helpers.readUInt(lhs_value)) <= (try helpers.readUInt(rhs_value)),
+                        .SGreaterThan => (try helpers.readSInt(lhs_value)) > (try helpers.readSInt(rhs_value)),
+                        .SGreaterThanEqual => (try helpers.readSInt(lhs_value)) >= (try helpers.readSInt(rhs_value)),
+                        .SLessThan => (try helpers.readSInt(lhs_value)) < (try helpers.readSInt(rhs_value)),
+                        .SLessThanEqual => (try helpers.readSInt(lhs_value)) <= (try helpers.readSInt(rhs_value)),
+                        .LogicalAnd => (try helpers.readBool(lhs_value)) and (try helpers.readBool(rhs_value)),
+                        .LogicalOr => (try helpers.readBool(lhs_value)) or (try helpers.readBool(rhs_value)),
+                        .LogicalEqual => (try helpers.readBool(lhs_value)) == (try helpers.readBool(rhs_value)),
+                        .LogicalNotEqual => (try helpers.readBool(lhs_value)) != (try helpers.readBool(rhs_value)),
+                        else => return RuntimeError.UnsupportedSpirV,
+                    };
+                },
+            };
+
+            dst.* = result;
         },
         else => return RuntimeError.UnsupportedSpirV,
     }
@@ -3450,6 +3664,31 @@ fn opDot(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     }
 }
 
+fn opFwidth(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const target_type = (try rt.results[try rt.it.next()].getVariant()).Type;
+    const id = try rt.it.next();
+    const operand = try rt.it.next();
+
+    const derivative = rt.derivatives.get(operand) orelse return RuntimeError.UnsupportedSpirV;
+    const dst = try rt.results[id].getValue();
+    const lane_bits = try Result.resolveLaneBitWidth(target_type, rt);
+    const lane_count = try Result.resolveLaneCount(target_type);
+
+    switch (lane_bits) {
+        inline 16, 32, 64 => |bits| {
+            const FloatT = Value.getPrimitiveFieldType(.Float, bits);
+            for (0..lane_count) |lane_index| {
+                const dx = try Value.readLane(.Float, bits, &derivative.dx, lane_index);
+                const dy = try Value.readLane(.Float, bits, &derivative.dy, lane_index);
+                try Value.writeLane(.Float, bits, dst, lane_index, @as(FloatT, @abs(dx) + @abs(dy)));
+            }
+        },
+        else => return RuntimeError.InvalidSpirV,
+    }
+
+    rt.clearDerivative(allocator, id);
+}
+
 fn DerivativeEngine(comptime axis: enum { x, y }) type {
     return struct {
         fn op(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
@@ -3519,7 +3758,9 @@ fn opExtInst(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) Ru
     const inst = try rt.it.next();
 
     switch ((try rt.results[set].getVariant()).*) {
-        .Extension => |ext| if (ext.dispatcher[inst]) |pfn| {
+        .Extension => |ext| {
+            if (inst >= ext.dispatcher.len) return RuntimeError.UnsupportedSpirV;
+            const pfn = ext.dispatcher[inst] orelse return RuntimeError.UnsupportedSpirV;
             try pfn(allocator, target_type, id, word_count, rt);
         },
         else => return RuntimeError.InvalidSpirV,
@@ -3603,10 +3844,6 @@ fn opFunctionParameter(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeEr
     const target = &rt.results[id];
 
     const resolved = rt.results[var_type].resolveType(rt.results);
-    const member_count = resolved.getMemberCounts();
-    if (member_count == 0) {
-        return RuntimeError.InvalidSpirV;
-    }
     target.variant = .{
         .FunctionParameter = .{
             .type_word = var_type,
@@ -4188,6 +4425,88 @@ fn opVariable(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) R
     };
 
     _ = initializer;
+}
+
+fn readDynamicVectorIndex(index_value: *const Value) RuntimeError!usize {
+    return switch (index_value.*) {
+        .Int => |i| switch (i.bit_count) {
+            8 => if (i.is_signed) std.math.cast(usize, i.value.sint8) orelse RuntimeError.OutOfBounds else @as(usize, i.value.uint8),
+            16 => if (i.is_signed) std.math.cast(usize, i.value.sint16) orelse RuntimeError.OutOfBounds else @as(usize, i.value.uint16),
+            32 => if (i.is_signed) std.math.cast(usize, i.value.sint32) orelse RuntimeError.OutOfBounds else @as(usize, i.value.uint32),
+            64 => if (i.is_signed) std.math.cast(usize, i.value.sint64) orelse RuntimeError.OutOfBounds else std.math.cast(usize, i.value.uint64) orelse RuntimeError.OutOfBounds,
+            else => return RuntimeError.InvalidSpirV,
+        },
+        else => return RuntimeError.InvalidSpirV,
+    };
+}
+
+fn readVectorLaneAsValue(src: *const Value, lane_index: usize) RuntimeError!Value {
+    return switch (src.*) {
+        .Vector => |lanes| blk: {
+            if (lane_index >= lanes.len) return RuntimeError.OutOfBounds;
+            break :blk lanes[lane_index];
+        },
+
+        .Vector2f32 => |lanes| .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = switch (lane_index) {
+            inline 0...1 => |idx| lanes[idx],
+            else => return RuntimeError.OutOfBounds,
+        } } } },
+        .Vector3f32 => |lanes| .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = switch (lane_index) {
+            inline 0...2 => |idx| lanes[idx],
+            else => return RuntimeError.OutOfBounds,
+        } } } },
+        .Vector4f32 => |lanes| .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = switch (lane_index) {
+            inline 0...3 => |idx| lanes[idx],
+            else => return RuntimeError.OutOfBounds,
+        } } } },
+
+        .Vector2i32 => |lanes| .{ .Int = .{ .bit_count = 32, .is_signed = true, .value = .{ .sint32 = switch (lane_index) {
+            inline 0...1 => |idx| lanes[idx],
+            else => return RuntimeError.OutOfBounds,
+        } } } },
+        .Vector3i32 => |lanes| .{ .Int = .{ .bit_count = 32, .is_signed = true, .value = .{ .sint32 = switch (lane_index) {
+            inline 0...2 => |idx| lanes[idx],
+            else => return RuntimeError.OutOfBounds,
+        } } } },
+        .Vector4i32 => |lanes| .{ .Int = .{ .bit_count = 32, .is_signed = true, .value = .{ .sint32 = switch (lane_index) {
+            inline 0...3 => |idx| lanes[idx],
+            else => return RuntimeError.OutOfBounds,
+        } } } },
+
+        .Vector2u32 => |lanes| .{ .Int = .{ .bit_count = 32, .is_signed = false, .value = .{ .uint32 = switch (lane_index) {
+            inline 0...1 => |idx| lanes[idx],
+            else => return RuntimeError.OutOfBounds,
+        } } } },
+        .Vector3u32 => |lanes| .{ .Int = .{ .bit_count = 32, .is_signed = false, .value = .{ .uint32 = switch (lane_index) {
+            inline 0...2 => |idx| lanes[idx],
+            else => return RuntimeError.OutOfBounds,
+        } } } },
+        .Vector4u32 => |lanes| .{ .Int = .{ .bit_count = 32, .is_signed = false, .value = .{ .uint32 = switch (lane_index) {
+            inline 0...3 => |idx| lanes[idx],
+            else => return RuntimeError.OutOfBounds,
+        } } } },
+
+        else => return RuntimeError.InvalidSpirV,
+    };
+}
+
+fn opVectorExtractDynamic(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    _ = try rt.it.next(); // result type
+    const result_id = try rt.it.next();
+    const vector_id = try rt.it.next();
+    const vector = try rt.results[vector_id].getValue();
+    const index = try readDynamicVectorIndex(try rt.results[try rt.it.next()].getValue());
+
+    const lane_value = try readVectorLaneAsValue(vector, index);
+    try copyValue(try rt.results[result_id].getValue(), &lane_value);
+
+    if (rt.derivatives.get(vector_id)) |derivative| {
+        const dx_lane = try readVectorLaneAsValue(&derivative.dx, index);
+        const dy_lane = try readVectorLaneAsValue(&derivative.dy, index);
+        try rt.setDerivative(allocator, result_id, &dx_lane, &dy_lane);
+    } else {
+        rt.clearDerivative(allocator, result_id);
+    }
 }
 
 fn opVectorShuffle(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
