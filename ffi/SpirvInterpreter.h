@@ -441,6 +441,21 @@ typedef struct
 
 typedef struct
 {
+    SpvWord local_size_x;
+    SpvWord local_size_y;
+    SpvWord local_size_z;
+
+    SpvWord geometry_invocations;
+    SpvWord geometry_output_count;
+    SpvWord geometry_input;
+    SpvWord geometry_output;
+
+    SpvBool needs_derivatives;
+    SpvBool has_control_barriers;
+} SpvModuleReflectionInfos;
+
+typedef struct
+{
 	SpvWord id;
 	SpvSize offset;
 	SpvSize size;
@@ -506,6 +521,8 @@ typedef void* SpvRuntime;
 
 SPV_API SpvResult SpvInitModule(SpvModule* module, const SpvWord* source, SpvSize source_len, SpvModuleOptions options);
 SPV_API void SpvDeinitModule(SpvModule module);
+
+SPV_API SpvModuleReflectionInfos SpvModuleGetReflectionInfos(SpvModule module);
 
 SPV_API SpvResult SpvInitRuntime(SpvRuntime* runtime, SpvModule module, SpvImageAPI image_api);
 SPV_API void SpvDeinitRuntime(SpvRuntime runtime);

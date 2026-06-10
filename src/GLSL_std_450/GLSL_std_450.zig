@@ -4,7 +4,7 @@ pub const GLSLstd450Version: u32 = 100;
 pub const GLSLstd450Revision: u32 = 3;
 
 pub const GLSLOp = enum(u32) {
-    Bad = 0,
+    Bad = 0, // Don't use
     Round = 1,
     RoundEven = 2,
     Trunc = 3,

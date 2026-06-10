@@ -42,6 +42,20 @@ pub const ModuleError = error{
     OutOfMemory,
 };
 
+pub const ReflectionInfos = struct {
+    local_size_x: SpvWord,
+    local_size_y: SpvWord,
+    local_size_z: SpvWord,
+
+    geometry_invocations: SpvWord,
+    geometry_output_count: SpvWord,
+    geometry_input: SpvWord,
+    geometry_output: SpvWord,
+
+    needs_derivatives: bool,
+    has_control_barriers: bool,
+};
+
 options: ModuleOptions,
 
 it: WordIterator,
@@ -66,19 +80,12 @@ results: []Result,
 entry_points: std.ArrayList(SpvEntryPoint),
 capabilities: std.EnumSet(spv.SpvCapability),
 
-local_size_x: SpvWord,
-local_size_y: SpvWord,
-local_size_z: SpvWord,
-
-geometry_invocations: SpvWord,
-geometry_output_count: SpvWord,
-geometry_input: SpvWord,
-geometry_output: SpvWord,
-
 input_locations: [lib.SPIRV_MAX_INPUT_LOCATIONS][4]SpvWord,
 output_locations: [lib.SPIRV_MAX_OUTPUT_LOCATIONS][4]SpvWord,
 bindings: std.ArrayList(BindingEntry),
 builtins: std.EnumMap(spv.SpvBuiltIn, SpvWord),
+
+reflection_infos: ReflectionInfos,
 
 pub fn init(allocator: std.mem.Allocator, source: []const SpvWord, options: ModuleOptions) ModuleError!Self {
     var self: Self = std.mem.zeroInit(Self, .{
@@ -88,9 +95,6 @@ pub fn init(allocator: std.mem.Allocator, source: []const SpvWord, options: Modu
         .entry_points = std.ArrayList(SpvEntryPoint).empty,
         .bindings = std.ArrayList(BindingEntry).empty,
         .capabilities = std.EnumSet(spv.SpvCapability).initEmpty(),
-        .local_size_x = 1,
-        .local_size_y = 1,
-        .local_size_z = 1,
     });
     errdefer allocator.free(self.code);
     errdefer self.bindings.deinit(allocator);

@@ -135,18 +135,19 @@ pub const SetupDispatcher = block: {
         .ConstantComposite = opConstantComposite,
         .ConstantFalse = opConstantFalse,
         .ConstantTrue = opConstantTrue,
+        .ControlBarrier = opControlBarrier,
         .ConvertFToS = autoSetupConstant,
         .ConvertFToU = autoSetupConstant,
         .ConvertPtrToU = autoSetupConstant,
         .ConvertSToF = autoSetupConstant,
         .ConvertUToF = autoSetupConstant,
         .ConvertUToPtr = autoSetupConstant,
-        .DPdx = autoSetupConstant,
-        .DPdxCoarse = autoSetupConstant,
-        .DPdxFine = autoSetupConstant,
-        .DPdy = autoSetupConstant,
-        .DPdyCoarse = autoSetupConstant,
-        .DPdyFine = autoSetupConstant,
+        .DPdx = opDerivativeSetup,
+        .DPdxCoarse = opDerivativeSetup,
+        .DPdxFine = opDerivativeSetup,
+        .DPdy = opDerivativeSetup,
+        .DPdyCoarse = opDerivativeSetup,
+        .DPdyFine = opDerivativeSetup,
         .Fwidth = autoSetupConstant,
         .FwidthCoarse = autoSetupConstant,
         .FwidthFine = autoSetupConstant,
@@ -275,7 +276,7 @@ pub const SetupDispatcher = block: {
 };
 
 /// Not an EnumMap as it is way too slow for this purpose
-pub var runtime_dispatcher = [_]?OpCodeFunc{null} ** spv.SpvOpMaxValue;
+pub var runtime_dispatcher: [spv.SpvOpMaxValue]?OpCodeFunc = @splat(null);
 
 pub fn initRuntimeDispatcher() void {
     // zig fmt: off
@@ -691,7 +692,7 @@ fn BitEngine(comptime T: PrimitiveType, comptime Op: BitOp) type {
             const target_type = (try rt.results[try rt.it.next()].getVariant()).Type;
             const dst = try rt.results[try rt.it.next()].getValue();
 
-            var ops = [_]?*Value{null} ** max_operator_count;
+            var ops: [max_operator_count]?*Value = @splat(null);
             ops[0] = try rt.results[try rt.it.next()].getValue();
 
             if (comptime getOperatorsCount() >= 2) ops[1] = try rt.results[try rt.it.next()].getValue();
@@ -2620,6 +2621,10 @@ fn opCapability(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!voi
     rt.mod.capabilities.insert(try rt.it.nextAs(spv.SpvCapability));
 }
 
+fn opControlBarrierSetup(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    rt.mod.reflection_infos.has_control_barriers = true;
+}
+
 fn opControlBarrier(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     _ = rt.it.skip(); // execution scope
     _ = rt.it.skip(); // memory scope
@@ -3594,6 +3599,11 @@ fn opDecorationGroup(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeErro
     _ = rt.it.skip();
 }
 
+fn opDerivativeSetup(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
+    try autoSetupConstant(allocator, word_count, rt);
+    rt.mod.reflection_infos.needs_derivatives = true;
+}
+
 fn opGroupDecorate(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
     const decoration_group = try rt.it.next();
 
@@ -3731,22 +3741,22 @@ fn opExecutionMode(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!
 
     switch (mode) {
         .LocalSize => {
-            rt.mod.local_size_x = try rt.it.next();
-            rt.mod.local_size_y = try rt.it.next();
-            rt.mod.local_size_z = try rt.it.next();
+            rt.mod.reflection_infos.local_size_x = try rt.it.next();
+            rt.mod.reflection_infos.local_size_y = try rt.it.next();
+            rt.mod.reflection_infos.local_size_z = try rt.it.next();
         },
-        .Invocations => rt.mod.geometry_invocations = try rt.it.next(),
-        .OutputVertices => rt.mod.geometry_output_count = try rt.it.next(),
+        .Invocations => rt.mod.reflection_infos.geometry_invocations = try rt.it.next(),
+        .OutputVertices => rt.mod.reflection_infos.geometry_output_count = try rt.it.next(),
         .InputPoints,
         .InputLines,
         .Triangles,
         .InputLinesAdjacency,
         .InputTrianglesAdjacency,
-        => rt.mod.geometry_input = @intFromEnum(mode),
+        => rt.mod.reflection_infos.geometry_input = @intFromEnum(mode),
         .OutputPoints,
         .OutputLineStrip,
         .OutputTriangleStrip,
-        => rt.mod.geometry_output = @intFromEnum(mode),
+        => rt.mod.reflection_infos.geometry_output = @intFromEnum(mode),
         else => {},
     }
 }
