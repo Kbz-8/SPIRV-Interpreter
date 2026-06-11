@@ -68,6 +68,8 @@ pub const Function = struct {
     source_location: usize,
     result: *Result,
     ret: *Result,
+    current_label: ?SpvWord,
+    previous_label: ?SpvWord,
 };
 
 pub fn Vec4(comptime T: type) type {
@@ -335,6 +337,8 @@ pub fn beginEntryPoint(self: *Self, allocator: std.mem.Allocator, entry_point_in
                         .source_location = f.source_location,
                         .result = entry_point_result,
                         .ret = &self.results[f.return_type],
+                        .current_label = null,
+                        .previous_label = null,
                     }) catch return RuntimeError.OutOfMemory;
                 },
                 else => return RuntimeError.InvalidEntryPoint,

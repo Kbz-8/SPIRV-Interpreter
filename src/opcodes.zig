@@ -148,9 +148,9 @@ pub const SetupDispatcher = block: {
         .DPdy = opDerivativeSetup,
         .DPdyCoarse = opDerivativeSetup,
         .DPdyFine = opDerivativeSetup,
-        .Fwidth = autoSetupConstant,
-        .FwidthCoarse = autoSetupConstant,
-        .FwidthFine = autoSetupConstant,
+        .Fwidth = opDerivativeSetup,
+        .FwidthCoarse = opDerivativeSetup,
+        .FwidthFine = opDerivativeSetup,
         .Decorate = opDecorate,
         .DecorationGroup = opDecorationGroup,
         .Dot = autoSetupConstant,
@@ -219,6 +219,7 @@ pub const SetupDispatcher = block: {
         .MemoryModel = opMemoryModel,
         .Name = opName,
         .Not = autoSetupConstant,
+        .OuterProduct = autoSetupConstant,
         .Phi = autoSetupConstant,
         .QuantizeToF16 = autoSetupConstant,
         .SConvert = autoSetupConstant,
@@ -244,6 +245,7 @@ pub const SetupDispatcher = block: {
         .SpecConstantFalse = opSpecConstantFalse,
         .SpecConstantOp = opSpecConstantOp,
         .SpecConstantTrue = opSpecConstantTrue,
+        .Transpose = autoSetupConstant,
         .TypeArray = opTypeArray,
         .TypeBool = opTypeBool,
         .TypeFloat = opTypeFloat,
@@ -384,6 +386,7 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.MatrixTimesVector)]      = MathEngine(.Float, .MatrixTimesVector, false).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.MemoryBarrier)]          = opMemoryBarrier;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Not)]                    = BitEngine(.UInt, .Not).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.OuterProduct)]           = opOuterProduct;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Phi)]                    = opPhi;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Return)]                 = opReturn;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ReturnValue)]            = opReturnValue;
@@ -410,6 +413,7 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Store)]                  = opStore;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Switch)]                 = opSwitch;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.TerminateInvocation)]    = opKill;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.Transpose)]              = opTranspose;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.UConvert)]               = ConversionEngine(.UInt, .UInt).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.UDiv)]                   = MathEngine(.UInt, .Div, false).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.UGreaterThan)]           = CondEngine(.UInt, .Greater).op;
@@ -1428,6 +1432,65 @@ fn ImageEngine(comptime Op: ImageOp) type {
             }
         }
 
+        fn setImplicitSampleDerivative(
+            allocator: std.mem.Allocator,
+            rt: *Runtime,
+            result_type_word: SpvWord,
+            result_id: SpvWord,
+            coordinate_id: SpvWord,
+            dst: *const Value,
+            driver_image: *anyopaque,
+            driver_sampler: *anyopaque,
+            dim: spv.SpvDim,
+            x: f32,
+            y: f32,
+            z: f32,
+        ) RuntimeError!void {
+            const coord_derivative = rt.derivatives.get(coordinate_id) orelse {
+                rt.clearDerivative(allocator, result_id);
+                return;
+            };
+
+            var dx_sample = try Value.init(allocator, rt.results, result_type_word, false);
+            defer dx_sample.deinit(allocator);
+            var dy_sample = try Value.init(allocator, rt.results, result_type_word, false);
+            defer dy_sample.deinit(allocator);
+
+            const coord_dx_x = try readSampleCoordLane(&coord_derivative.dx, 0);
+            const coord_dx_y = readSampleCoordLane(&coord_derivative.dx, 1) catch 0.0;
+            const coord_dx_z = readSampleCoordLane(&coord_derivative.dx, 2) catch 0.0;
+            const coord_dy_x = try readSampleCoordLane(&coord_derivative.dy, 0);
+            const coord_dy_y = readSampleCoordLane(&coord_derivative.dy, 1) catch 0.0;
+            const coord_dy_z = readSampleCoordLane(&coord_derivative.dy, 2) catch 0.0;
+
+            try sampleImageImplicitLod(rt, &dx_sample, driver_image, driver_sampler, dim, x + coord_dx_x, y + coord_dx_y, z + coord_dx_z);
+            try sampleImageImplicitLod(rt, &dy_sample, driver_image, driver_sampler, dim, x + coord_dy_x, y + coord_dy_y, z + coord_dy_z);
+
+            var dx = try Value.init(allocator, rt.results, result_type_word, false);
+            defer dx.deinit(allocator);
+            var dy = try Value.init(allocator, rt.results, result_type_word, false);
+            defer dy.deinit(allocator);
+
+            const result_type = (try rt.results[result_type_word].getVariant()).Type;
+            const lane_bits = try Result.resolveLaneBitWidth(result_type, rt);
+            const lane_count = try Result.resolveLaneCount(result_type);
+
+            switch (lane_bits) {
+                inline 16, 32, 64 => |bits| {
+                    for (0..lane_count) |lane_index| {
+                        const center = try Value.readLane(.Float, bits, dst, lane_index);
+                        const dx_lane = try Value.readLane(.Float, bits, &dx_sample, lane_index);
+                        const dy_lane = try Value.readLane(.Float, bits, &dy_sample, lane_index);
+                        try Value.writeLane(.Float, bits, &dx, lane_index, dx_lane - center);
+                        try Value.writeLane(.Float, bits, &dy, lane_index, dy_lane - center);
+                    }
+                },
+                else => return RuntimeError.UnsupportedSpirV,
+            }
+
+            try rt.setDerivative(allocator, result_id, &dx, &dy);
+        }
+
         fn sampleImageExplicitLod(rt: *Runtime, dst: *Value, driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32, lod: ?f32) RuntimeError!void {
             switch (dst.*) {
                 .Vector4f32,
@@ -1509,7 +1572,7 @@ fn ImageEngine(comptime Op: ImageOp) type {
             }
         }
 
-        fn op(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
+        fn op(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
             if (comptime Op == .Resolve) {
                 _ = try rt.it.next(); // result type
                 const dst = try rt.results[try rt.it.next()].getValue();
@@ -1538,7 +1601,7 @@ fn ImageEngine(comptime Op: ImageOp) type {
                 return try writeImage(rt, texel, image_operand.driver_image, image_operand.dim, x, y, z);
             }
 
-            _ = try rt.it.next(); // result type
+            const result_type_word = try rt.it.next();
             const result_id = try rt.it.next();
             const image = &rt.results[try rt.it.next()];
             if (comptime Op == .QuerySize or Op == .QuerySizeLod) {
@@ -1550,7 +1613,8 @@ fn ImageEngine(comptime Op: ImageOp) type {
                 return try queryImageSize(rt, dst, image_operand);
             }
 
-            const coordinate = try rt.results[try rt.it.next()].getValue();
+            const coordinate_id = try rt.it.next();
+            const coordinate = try rt.results[coordinate_id].getValue();
             const dst = try rt.results[result_id].getValue();
 
             switch (Op) {
@@ -1573,6 +1637,20 @@ fn ImageEngine(comptime Op: ImageOp) type {
 
                     try sampleImageImplicitLod(
                         rt,
+                        dst,
+                        sampled_image_operand.driver_image,
+                        sampled_image_operand.driver_sampler,
+                        sampled_image_operand.dim,
+                        x,
+                        y,
+                        z,
+                    );
+                    try setImplicitSampleDerivative(
+                        allocator,
+                        rt,
+                        result_type_word,
+                        result_id,
+                        coordinate_id,
                         dst,
                         sampled_image_operand.driver_image,
                         sampled_image_operand.driver_sampler,
@@ -1841,6 +1919,79 @@ fn AtomicEngine(comptime Op: AtomicOp) type {
     };
 }
 
+fn readMatrixLane(comptime bits: u32, matrix: *const Value, column_index: usize, row_index: usize) RuntimeError!Value.getPrimitiveFieldType(.Float, bits) {
+    const columns = switch (matrix.*) {
+        .Matrix => |columns| columns,
+        else => return RuntimeError.InvalidSpirV,
+    };
+    if (column_index >= columns.len) return RuntimeError.OutOfBounds;
+    return Value.readLane(.Float, bits, &columns[column_index], row_index);
+}
+
+fn opOuterProduct(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const target_type = (try rt.results[try rt.it.next()].getVariant()).Type;
+    const dst = try rt.results[try rt.it.next()].getValue();
+    const lhs = try rt.results[try rt.it.next()].getValue();
+    const rhs = try rt.results[try rt.it.next()].getValue();
+
+    const dst_columns = switch (dst.*) {
+        .Matrix => |columns| columns,
+        else => return RuntimeError.InvalidSpirV,
+    };
+    const lhs_lanes = try lhs.resolveLaneCount();
+    const rhs_lanes = try rhs.resolveLaneCount();
+    if (dst_columns.len != rhs_lanes) return RuntimeError.InvalidSpirV;
+
+    const lane_bits = try Result.resolveLaneBitWidth(target_type, rt);
+    switch (lane_bits) {
+        inline 16, 32, 64 => |bits| {
+            for (dst_columns, 0..) |*dst_column, column_index| {
+                if (try dst_column.resolveLaneCount() != lhs_lanes) return RuntimeError.InvalidSpirV;
+                const rhs_lane = try Value.readLane(.Float, bits, rhs, column_index);
+                for (0..lhs_lanes) |row_index| {
+                    const lhs_lane = try Value.readLane(.Float, bits, lhs, row_index);
+                    try Value.writeLane(.Float, bits, dst_column, row_index, lhs_lane * rhs_lane);
+                }
+            }
+        },
+        else => return RuntimeError.UnsupportedSpirV,
+    }
+}
+
+fn opTranspose(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const target_type = (try rt.results[try rt.it.next()].getVariant()).Type;
+    const dst = try rt.results[try rt.it.next()].getValue();
+    const src = try rt.results[try rt.it.next()].getValue();
+
+    const dst_columns = switch (dst.*) {
+        .Matrix => |columns| columns,
+        else => return RuntimeError.InvalidSpirV,
+    };
+    const src_columns = switch (src.*) {
+        .Matrix => |columns| columns,
+        else => return RuntimeError.InvalidSpirV,
+    };
+    if (dst_columns.len == 0 or src_columns.len == 0) return RuntimeError.InvalidSpirV;
+
+    const dst_rows = try dst_columns[0].resolveLaneCount();
+    if (dst_rows != src_columns.len) return RuntimeError.InvalidSpirV;
+
+    const lane_bits = try Result.resolveLaneBitWidth(target_type, rt);
+    switch (lane_bits) {
+        inline 16, 32, 64 => |bits| {
+            for (dst_columns, 0..) |*dst_column, dst_column_index| {
+                const src_row_index = dst_column_index;
+                for (0..dst_rows) |dst_row_index| {
+                    const src_column_index = dst_row_index;
+                    const value = try readMatrixLane(bits, src, src_column_index, src_row_index);
+                    try Value.writeLane(.Float, bits, dst_column, dst_row_index, value);
+                }
+            }
+        },
+        else => return RuntimeError.UnsupportedSpirV,
+    }
+}
+
 fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic: bool) type {
     return struct {
         fn operation(comptime TT: type, op1: TT, op2: TT) RuntimeError!TT {
@@ -1913,7 +2064,9 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
 
         fn applyDirectSIMDVectorf32(comptime N: usize, d: *@Vector(N, f32), l: @Vector(N, f32), r: *const Value) RuntimeError!void {
             switch (Op) {
-                .VectorTimesScalar => d.* = l * @as(@Vector(N, f32), @splat(r.Float.value.float32)),
+                .VectorTimesScalar,
+                .MatrixTimesScalar,
+                => d.* = l * @as(@Vector(N, f32), @splat(r.Float.value.float32)),
                 else => try applySIMDVector(f32, N, d, l, r.getVectorSpecialization(N, f32)),
             }
         }
@@ -1945,10 +2098,101 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
             }
         }
 
+        fn propagateDerivative(
+            allocator: std.mem.Allocator,
+            rt: *Runtime,
+            target_type_word: SpvWord,
+            target_type: Result.TypeData,
+            dst_id: SpvWord,
+            lhs_id: SpvWord,
+            rhs_id: SpvWord,
+            lhs: *const Value,
+            rhs: *const Value,
+        ) RuntimeError!void {
+            if (comptime T != .Float) {
+                rt.clearDerivative(allocator, dst_id);
+                return;
+            }
+
+            switch (comptime Op) {
+                .Add, .Sub, .Mul, .Div, .VectorTimesScalar => {},
+                else => {
+                    rt.clearDerivative(allocator, dst_id);
+                    return;
+                },
+            }
+
+            const lhs_derivative = rt.derivatives.get(lhs_id);
+            const rhs_derivative = rt.derivatives.get(rhs_id);
+            if (lhs_derivative == null and rhs_derivative == null) {
+                rt.clearDerivative(allocator, dst_id);
+                return;
+            }
+
+            var dx = try Value.init(allocator, rt.results, target_type_word, false);
+            defer dx.deinit(allocator);
+            var dy = try Value.init(allocator, rt.results, target_type_word, false);
+            defer dy.deinit(allocator);
+
+            const lane_bits = try Result.resolveLaneBitWidth(target_type, rt);
+            const lane_count = try Result.resolveLaneCount(target_type);
+
+            switch (lane_bits) {
+                inline 16, 32, 64 => |bits| {
+                    const FloatT = Value.getPrimitiveFieldType(.Float, bits);
+                    for (0..lane_count) |lane_index| {
+                        const l = try Value.readLane(.Float, bits, lhs, lane_index);
+                        const r = try Value.readLane(.Float, bits, rhs, lane_index);
+
+                        const ldx: FloatT = if (lhs_derivative) |derivative|
+                            try Value.readLane(.Float, bits, &derivative.dx, lane_index)
+                        else
+                            @as(FloatT, 0);
+                        const ldy: FloatT = if (lhs_derivative) |derivative|
+                            try Value.readLane(.Float, bits, &derivative.dy, lane_index)
+                        else
+                            @as(FloatT, 0);
+                        const rdx: FloatT = if (rhs_derivative) |derivative|
+                            try Value.readLane(.Float, bits, &derivative.dx, lane_index)
+                        else
+                            @as(FloatT, 0);
+                        const rdy: FloatT = if (rhs_derivative) |derivative|
+                            try Value.readLane(.Float, bits, &derivative.dy, lane_index)
+                        else
+                            @as(FloatT, 0);
+
+                        const dx_lane = switch (comptime Op) {
+                            .Add => ldx + rdx,
+                            .Sub => ldx - rdx,
+                            .Mul, .VectorTimesScalar => (ldx * r) + (l * rdx),
+                            .Div => ((ldx * r) - (l * rdx)) / (r * r),
+                            else => unreachable,
+                        };
+                        const dy_lane = switch (comptime Op) {
+                            .Add => ldy + rdy,
+                            .Sub => ldy - rdy,
+                            .Mul, .VectorTimesScalar => (ldy * r) + (l * rdy),
+                            .Div => ((ldy * r) - (l * rdy)) / (r * r),
+                            else => unreachable,
+                        };
+
+                        try Value.writeLane(.Float, bits, &dx, lane_index, dx_lane);
+                        try Value.writeLane(.Float, bits, &dy, lane_index, dy_lane);
+                    }
+                },
+                else => return RuntimeError.UnsupportedSpirV,
+            }
+
+            try rt.setDerivative(allocator, dst_id, &dx, &dy);
+        }
+
         fn op(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
-            const target_type = (try rt.results[try rt.it.next()].getVariant()).Type;
-            const dst = try rt.results[try rt.it.next()].getValue();
-            const lhs = try rt.results[try rt.it.next()].getValue();
+            const target_type_word = try rt.it.next();
+            const target_type = (try rt.results[target_type_word].getVariant()).Type;
+            const dst_id = try rt.it.next();
+            const dst = try rt.results[dst_id].getValue();
+            const lhs_id = try rt.it.next();
+            const lhs = try rt.results[lhs_id].getValue();
 
             var arena = std.heap.ArenaAllocator.init(allocator);
             defer arena.deinit();
@@ -1961,7 +2205,8 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
                 lhs_save = try lhs.dupe(arena.allocator());
             }
 
-            const rhs = try rt.results[try rt.it.next()].getValue();
+            const rhs_id = try rt.it.next();
+            const rhs = try rt.results[rhs_id].getValue();
 
             const lane_bits = try Result.resolveLaneBitWidth(target_type, rt);
 
@@ -2019,7 +2264,11 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
                             try vectorRoutines(dst_vec, lhs_vec, rhs_vec, lane_bits);
                         }
                     },
-                    // TODO : matrix times scalar
+                    .MatrixTimesScalar => {
+                        for (dst_m, lhs.Matrix) |*dst_vec, *lhs_vec| {
+                            try vectorRoutines(dst_vec, lhs_vec, rhs, lane_bits);
+                        }
+                    },
                     else => return RuntimeError.ToDo,
                 },
 
@@ -2031,6 +2280,8 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
                 try copyValue(dst, &lhs_save.?);
                 try lhs.flushPtr(allocator);
             }
+
+            try propagateDerivative(allocator, rt, target_type_word, target_type, dst_id, lhs_id, rhs_id, lhs, rhs);
         }
 
         fn opSingle(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
@@ -2257,7 +2508,10 @@ fn copyValue(dst: *Value, src: *const Value) RuntimeError!void {
                     else => try copyValue(dst_val_ptr, src),
                 }
                 if (dst_ptr.uniform_slice_window) |window| {
-                    _ = try dst_val_ptr.read(window);
+                    _ = if (dst_ptr.matrix_stride) |matrix_stride|
+                        try dst_val_ptr.readMatrixWithStride(window, matrix_stride)
+                    else
+                        try dst_val_ptr.read(window);
                 }
                 return;
             },
@@ -2376,12 +2630,14 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                 var uniform_slice_window: ?[]u8 = null;
                 var uniform_backing_value: ?*Value = null;
                 var owns_uniform_backing_value = false;
+                var matrix_stride: ?SpvWord = null;
 
                 if (std.meta.activeTag(value_ptr.*) == .Pointer) {
                     const ptr = value_ptr.Pointer;
                     uniform_slice_window = ptr.uniform_slice_window;
                     uniform_backing_value = ptr.uniform_backing_value;
                     owns_uniform_backing_value = false;
+                    matrix_stride = ptr.matrix_stride;
                     switch (ptr.ptr) {
                         .common => |common| value_ptr = common,
                         else => return RuntimeError.InvalidSpirV,
@@ -2405,6 +2661,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                 uniform_slice_window = ptr.uniform_slice_window;
                                 uniform_backing_value = ptr.uniform_backing_value;
                                 owns_uniform_backing_value = false;
+                                matrix_stride = ptr.matrix_stride;
                                 switch (ptr.ptr) {
                                     .common => |common| value_ptr = common,
                                     else => return RuntimeError.InvalidSpirV,
@@ -2416,12 +2673,18 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                             switch (value_ptr.*) {
                                 .Vector, .Matrix => |v| {
                                     if (component_index >= v.len) return RuntimeError.OutOfBounds;
-                                    var offset: usize = 0;
-                                    for (v[0..component_index]) |*element| {
-                                        offset += try element.getPlainMemorySize();
-                                    }
+                                    const offset = if (std.meta.activeTag(value_ptr.*) == .Matrix and matrix_stride != null)
+                                        component_index * @as(usize, @intCast(matrix_stride.?))
+                                    else plain_offset_blk: {
+                                        var plain_offset: usize = 0;
+                                        for (v[0..component_index]) |*element| {
+                                            plain_offset += try element.getPlainMemorySize();
+                                        }
+                                        break :plain_offset_blk plain_offset;
+                                    };
                                     uniform_slice_window = try helpers.advanceWindow(uniform_slice_window, offset);
                                     value_ptr = &v[component_index];
+                                    if (std.meta.activeTag(value_ptr.*) != .Matrix) matrix_stride = null;
                                 },
                                 .Array => |a| {
                                     if (component_index >= a.values.len) return RuntimeError.OutOfBounds;
@@ -2444,6 +2707,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                     }
 
                                     value_ptr = &s.values[component_index];
+                                    matrix_stride = s.matrix_strides[component_index];
                                 },
                                 .RuntimeArray => |*arr| {
                                     if (component_index >= arr.getLen()) return RuntimeError.OutOfBounds;
@@ -2474,6 +2738,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                         .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(f32), @sizeOf(f32)),
                                         .uniform_backing_value = uniform_backing_value,
                                         .owns_uniform_backing_value = owns_uniform_backing_value,
+                                        .matrix_stride = null,
                                     } },
                                     else => return RuntimeError.InvalidSpirV,
                                 },
@@ -2483,6 +2748,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                         .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(f32), @sizeOf(f32)),
                                         .uniform_backing_value = uniform_backing_value,
                                         .owns_uniform_backing_value = owns_uniform_backing_value,
+                                        .matrix_stride = null,
                                     } },
                                     else => return RuntimeError.InvalidSpirV,
                                 },
@@ -2492,6 +2758,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                         .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(f32), @sizeOf(f32)),
                                         .uniform_backing_value = uniform_backing_value,
                                         .owns_uniform_backing_value = owns_uniform_backing_value,
+                                        .matrix_stride = null,
                                     } },
                                     else => return RuntimeError.InvalidSpirV,
                                 },
@@ -2501,6 +2768,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                         .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(i32), @sizeOf(i32)),
                                         .uniform_backing_value = uniform_backing_value,
                                         .owns_uniform_backing_value = owns_uniform_backing_value,
+                                        .matrix_stride = null,
                                     } },
                                     else => return RuntimeError.InvalidSpirV,
                                 },
@@ -2510,6 +2778,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                         .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(i32), @sizeOf(i32)),
                                         .uniform_backing_value = uniform_backing_value,
                                         .owns_uniform_backing_value = owns_uniform_backing_value,
+                                        .matrix_stride = null,
                                     } },
                                     else => return RuntimeError.InvalidSpirV,
                                 },
@@ -2519,6 +2788,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                         .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(i32), @sizeOf(i32)),
                                         .uniform_backing_value = uniform_backing_value,
                                         .owns_uniform_backing_value = owns_uniform_backing_value,
+                                        .matrix_stride = null,
                                     } },
                                     else => return RuntimeError.InvalidSpirV,
                                 },
@@ -2528,6 +2798,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                         .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(u32), @sizeOf(u32)),
                                         .uniform_backing_value = uniform_backing_value,
                                         .owns_uniform_backing_value = owns_uniform_backing_value,
+                                        .matrix_stride = null,
                                     } },
                                     else => return RuntimeError.InvalidSpirV,
                                 },
@@ -2537,6 +2808,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                         .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(u32), @sizeOf(u32)),
                                         .uniform_backing_value = uniform_backing_value,
                                         .owns_uniform_backing_value = owns_uniform_backing_value,
+                                        .matrix_stride = null,
                                     } },
                                     else => return RuntimeError.InvalidSpirV,
                                 },
@@ -2546,6 +2818,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                         .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(u32), @sizeOf(u32)),
                                         .uniform_backing_value = uniform_backing_value,
                                         .owns_uniform_backing_value = owns_uniform_backing_value,
+                                        .matrix_stride = null,
                                     } },
                                     else => return RuntimeError.InvalidSpirV,
                                 },
@@ -2561,11 +2834,53 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                         .uniform_slice_window = uniform_slice_window,
                         .uniform_backing_value = uniform_backing_value,
                         .owns_uniform_backing_value = owns_uniform_backing_value,
+                        .matrix_stride = matrix_stride,
                     },
                 };
             },
         },
     };
+
+    if (index_count == 1) {
+        const base_derivative = rt.derivatives.get(base_id) orelse {
+            rt.clearDerivative(allocator, id);
+            return;
+        };
+        const index_value = switch ((try rt.results[indexes[0]].getVariant()).*) {
+            .Constant => |c| c.value,
+            else => return RuntimeError.InvalidSpirV,
+        };
+        const lane_index: usize = switch (index_value) {
+            .Int => |int| @intCast(int.value.uint32),
+            else => return RuntimeError.InvalidSpirV,
+        };
+        const target_type_word = switch ((try rt.results[var_type].getVariant()).*) {
+            .Type => |t| switch (t) {
+                .Pointer => |p| p.target,
+                else => return RuntimeError.InvalidSpirV,
+            },
+            else => return RuntimeError.InvalidSpirV,
+        };
+        const target_type = (try rt.results[target_type_word].getVariant()).Type;
+        const lane_bits = try Result.resolveLaneBitWidth(target_type, rt);
+
+        var dx = try Value.init(allocator, rt.results, target_type_word, false);
+        defer dx.deinit(allocator);
+        var dy = try Value.init(allocator, rt.results, target_type_word, false);
+        defer dy.deinit(allocator);
+
+        switch (lane_bits) {
+            inline 16, 32, 64 => |bits| {
+                try Value.writeLane(.Float, bits, &dx, 0, try Value.readLane(.Float, bits, &base_derivative.dx, lane_index));
+                try Value.writeLane(.Float, bits, &dy, 0, try Value.readLane(.Float, bits, &base_derivative.dy, lane_index));
+            },
+            else => return RuntimeError.UnsupportedSpirV,
+        }
+
+        try rt.setDerivative(allocator, id, &dx, &dy);
+    } else {
+        rt.clearDerivative(allocator, id);
+    }
 }
 fn opAtomicStore(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     const ptr_id = try rt.it.next();
@@ -3833,11 +4148,15 @@ fn opFunctionCall(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) Runtim
         ((try rt.results[param].getVariant()).*).FunctionParameter.value_ptr = try arg.getValue();
     }
     rt.function_stack.items[rt.function_stack.items.len - 1].source_location = rt.it.emitSourceLocation();
+    rt.function_stack.items[rt.function_stack.items.len - 1].current_label = rt.current_label;
+    rt.function_stack.items[rt.function_stack.items.len - 1].previous_label = rt.previous_label;
     const source_location = (try func.getVariant()).Function.source_location;
     rt.function_stack.append(allocator, .{
         .source_location = source_location,
         .result = func,
         .ret = ret,
+        .current_label = null,
+        .previous_label = null,
     }) catch return RuntimeError.OutOfMemory;
     if (!rt.it.jumpToSourceLocation(source_location)) return RuntimeError.InvalidSpirV;
     rt.current_parameter_index = 0;
@@ -3871,6 +4190,9 @@ fn opFunctionParameter(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeEr
 fn opLabel(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     const id = try rt.it.next();
     rt.current_label = id;
+    if (rt.function_stack.items.len != 0) {
+        rt.function_stack.items[rt.function_stack.items.len - 1].current_label = id;
+    }
     if (rt.results[id].variant == null) {
         rt.results[id].variant = .{
             .Label = .{
@@ -3904,6 +4226,7 @@ fn opMemberName(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime)
                 .Structure = .{
                     .members_type_word = undefined,
                     .members_offsets = undefined,
+                    .members_matrix_strides = undefined,
                     .member_names = .empty,
                 },
             },
@@ -3941,7 +4264,7 @@ fn opName(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) Runti
     result.name = try readStringN(allocator, &rt.it, word_count - 1);
 }
 
-fn opPhi(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
+fn opPhi(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
     _ = try rt.it.next(); // result type
     const id = try rt.it.next();
 
@@ -3954,6 +4277,7 @@ fn opPhi(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!v
 
         if (parent_label_id == predecessor) {
             try copyValue(try rt.results[id].getValue(), try rt.results[value_id].getValue());
+            try rt.copyDerivative(allocator, id, value_id);
             return;
         }
     }
@@ -3965,8 +4289,12 @@ fn opReturn(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     if (rt.function_stack.getLastOrNull()) |function| {
         _ = rt.it.jumpToSourceLocation(function.source_location);
         rt.current_function = function.result;
+        rt.current_label = function.current_label;
+        rt.previous_label = function.previous_label;
     } else {
         rt.current_function = null;
+        rt.current_label = null;
+        rt.previous_label = null;
         rt.it.skipToEnd();
     }
 }
@@ -3983,8 +4311,12 @@ fn opReturnValue(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!vo
     if (rt.function_stack.getLastOrNull()) |function| {
         _ = rt.it.jumpToSourceLocation(function.source_location);
         rt.current_function = function.result;
+        rt.current_label = function.current_label;
+        rt.previous_label = function.previous_label;
     } else {
         rt.current_function = null;
+        rt.current_label = null;
+        rt.previous_label = null;
         rt.it.skipToEnd();
     }
 }
@@ -4098,10 +4430,11 @@ fn opSourceExtension(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Run
     rt.mod.extensions.append(allocator, try readStringN(allocator, &rt.it, word_count)) catch return RuntimeError.OutOfMemory;
 }
 
-fn opStore(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+fn opStore(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     const ptr_id = try rt.it.next();
     const val_id = try rt.it.next();
     try copyValue(try rt.results[ptr_id].getValue(), try rt.results[val_id].getValue());
+    try rt.copyDerivative(allocator, ptr_id, val_id);
 }
 
 fn opTypeArray(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
@@ -4317,6 +4650,8 @@ fn opTypeStruct(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime)
     };
     const members_offsets = allocator.alloc(?SpvWord, word_count - 1) catch return RuntimeError.OutOfMemory;
     @memset(members_offsets, null);
+    const members_matrix_strides = allocator.alloc(?SpvWord, word_count - 1) catch return RuntimeError.OutOfMemory;
+    @memset(members_matrix_strides, null);
 
     if (rt.results[id].variant) |*variant| {
         switch (variant.*) {
@@ -4324,6 +4659,7 @@ fn opTypeStruct(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime)
                 .Structure => |*s| {
                     s.members_type_word = members_type_word;
                     s.members_offsets = members_offsets;
+                    s.members_matrix_strides = members_matrix_strides;
                 },
                 else => unreachable,
             },
@@ -4335,6 +4671,7 @@ fn opTypeStruct(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime)
                 .Structure = .{
                     .members_type_word = members_type_word,
                     .members_offsets = members_offsets,
+                    .members_matrix_strides = members_matrix_strides,
                     .member_names = .empty,
                 },
             },
@@ -4519,8 +4856,8 @@ fn opVectorExtractDynamic(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime
     }
 }
 
-fn opVectorShuffle(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
-    _ = try rt.it.next();
+fn opVectorShuffle(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const result_type_word = try rt.it.next();
 
     const result_id = try rt.it.next();
     const vector_1_id = try rt.it.next();
@@ -4722,6 +5059,14 @@ fn opVectorShuffle(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!
     const dst_lane_count = try dst.resolveLaneCount();
     const vector_1_lane_count = try vector_1.resolveLaneCount();
     const vector_2_lane_count = try vector_2.resolveLaneCount();
+    const vector_1_derivative = rt.derivatives.get(vector_1_id);
+    const vector_2_derivative = rt.derivatives.get(vector_2_id);
+    var has_derivative = false;
+
+    var dx = try Value.init(allocator, rt.results, result_type_word, false);
+    defer dx.deinit(allocator);
+    var dy = try Value.init(allocator, rt.results, result_type_word, false);
+    defer dy.deinit(allocator);
 
     for (0..dst_lane_count) |lane_index| {
         const selector = try rt.it.next();
@@ -4739,6 +5084,27 @@ fn opVectorShuffle(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!
         };
 
         try Impl.writeLane(dst, lane_index, lane_value);
+
+        const derivative = if (selector < vector_1_lane_count)
+            vector_1_derivative
+        else
+            vector_2_derivative;
+
+        if (derivative) |d| {
+            const src_lane_index = if (selector < vector_1_lane_count)
+                selector
+            else
+                selector - vector_1_lane_count;
+            try Impl.writeLane(&dx, lane_index, try Impl.readLane(&d.dx, src_lane_index));
+            try Impl.writeLane(&dy, lane_index, try Impl.readLane(&d.dy, src_lane_index));
+            has_derivative = true;
+        }
+    }
+
+    if (has_derivative) {
+        try rt.setDerivative(allocator, result_id, &dx, &dy);
+    } else {
+        rt.clearDerivative(allocator, result_id);
     }
 }
 

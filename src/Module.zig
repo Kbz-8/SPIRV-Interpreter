@@ -303,8 +303,10 @@ fn applyDecorations(self: *Self, allocator: std.mem.Allocator) ModuleError!void 
                 .Type => |t| {
                     switch (t) {
                         .Structure => |*s| {
-                            if (decoration.rtype == .Offset) {
-                                s.members_offsets[decoration.index] = decoration.literal_1;
+                            switch (decoration.rtype) {
+                                .Offset => s.members_offsets[decoration.index] = decoration.literal_1,
+                                .MatrixStride => s.members_matrix_strides[decoration.index] = decoration.literal_1,
+                                else => {},
                             }
                         },
                         else => {},
@@ -324,7 +326,10 @@ fn applyDecorations(self: *Self, allocator: std.mem.Allocator) ModuleError!void 
                     => if (v.value == .Structure) {
                         if (self.results[v.type_word].variant) |type_variant| switch (type_variant) {
                             .Type => |type_data| switch (type_data) {
-                                .Structure => |s| @memcpy(@constCast(v.value.Structure.offsets), s.members_offsets),
+                                .Structure => |s| {
+                                    @memcpy(@constCast(v.value.Structure.offsets), s.members_offsets);
+                                    @memcpy(@constCast(v.value.Structure.matrix_strides), s.members_matrix_strides);
+                                },
                                 else => {},
                             },
                             else => {},

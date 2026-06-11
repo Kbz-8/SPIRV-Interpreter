@@ -122,6 +122,7 @@ pub const TypeData = union(Type) {
     Structure: struct {
         members_type_word: []const SpvWord,
         members_offsets: []?SpvWord,
+        members_matrix_strides: []?SpvWord,
         member_names: std.ArrayList([]const u8),
     },
     Function: struct {
@@ -152,9 +153,9 @@ pub const TypeData = union(Type) {
             .Bool => 1,
             .Int => |i| @divExact(i.bit_length, 8),
             .Float => |f| @divExact(f.bit_length, 8),
-            .Vector => |v| results[v.components_type_word].variant.?.Type.getSize(results),
+            .Vector => |v| results[v.components_type_word].variant.?.Type.getSize(results) * v.member_count,
             .Array => |a| a.stride,
-            .Matrix => |m| results[m.column_type_word].variant.?.Type.getSize(results),
+            .Matrix => |m| results[m.column_type_word].variant.?.Type.getSize(results) * m.member_count,
             .RuntimeArray => |a| a.stride,
             .Structure => |s| blk: {
                 var total: usize = 0;
@@ -245,6 +246,7 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
                         allocator.free(name);
                     }
                     allocator.free(data.members_offsets);
+                    allocator.free(data.members_matrix_strides);
                     data.member_names.deinit(allocator);
                 },
                 else => {},
@@ -328,6 +330,7 @@ pub fn dupe(self: *const Self, allocator: std.mem.Allocator) RuntimeError!Self {
                                 .Structure = .{
                                     .members_type_word = allocator.dupe(SpvWord, s.members_type_word) catch return RuntimeError.OutOfMemory,
                                     .members_offsets = allocator.dupe(?SpvWord, s.members_offsets) catch return RuntimeError.OutOfMemory,
+                                    .members_matrix_strides = allocator.dupe(?SpvWord, s.members_matrix_strides) catch return RuntimeError.OutOfMemory,
                                     .member_names = blk2: {
                                         const member_names = s.member_names.clone(allocator) catch return RuntimeError.OutOfMemory;
                                         for (member_names.items, s.member_names.items) |*new_name, name| {

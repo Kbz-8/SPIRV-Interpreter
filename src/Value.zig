@@ -118,6 +118,7 @@ pub const Value = union(Type) {
     Structure: struct {
         external_data: ?[]u8,
         offsets: []const ?SpvWord,
+        matrix_strides: []const ?SpvWord,
         values: []Self,
     },
     Function: noreturn,
@@ -158,6 +159,7 @@ pub const Value = union(Type) {
         /// to a child/member of that materialized value.
         uniform_backing_value: ?*Self = null,
         owns_uniform_backing_value: bool = false,
+        matrix_stride: ?SpvWord = null,
     },
 
     pub inline fn getCompositeDataOrNull(self: *const Self) ?[]Self {
@@ -281,6 +283,7 @@ pub const Value = union(Type) {
                         .Structure = .{
                             .external_data = null,
                             .offsets = allocator.dupe(?SpvWord, s.members_offsets) catch return RuntimeError.OutOfMemory,
+                            .matrix_strides = allocator.dupe(?SpvWord, s.members_matrix_strides) catch return RuntimeError.OutOfMemory,
                             .values = allocator.alloc(Self, member_count) catch return RuntimeError.OutOfMemory,
                         },
                     };
@@ -365,6 +368,7 @@ pub const Value = union(Type) {
                     break :blk .{
                         .external_data = s.external_data,
                         .offsets = allocator.dupe(?SpvWord, s.offsets) catch return RuntimeError.OutOfMemory,
+                        .matrix_strides = allocator.dupe(?SpvWord, s.matrix_strides) catch return RuntimeError.OutOfMemory,
                         .values = values,
                     };
                 },
@@ -376,9 +380,15 @@ pub const Value = union(Type) {
     pub fn read(self: *const Self, output: []u8) RuntimeError!usize {
         const vecRoutine = struct {
             inline fn routine(comptime T: type, vec: T, out: []u8) RuntimeError!usize {
-                const size = @typeInfo(T).vector.len * 4;
+                const info = @typeInfo(T).vector;
+                const Lane = info.child;
+                const size = info.len * @sizeOf(Lane);
                 if (out.len < size) return RuntimeError.OutOfBounds;
-                std.mem.bytesAsValue(T, out[0..size]).* = vec;
+                inline for (0..info.len) |i| {
+                    const offset = i * @sizeOf(Lane);
+                    var lane = vec[i];
+                    @memcpy(out[offset..][0..@sizeOf(Lane)], std.mem.asBytes(&lane));
+                }
                 return size;
             }
         }.routine;
@@ -473,12 +483,35 @@ pub const Value = union(Type) {
         return 0;
     }
 
+    pub fn readMatrixWithStride(self: *const Self, output: []u8, matrix_stride: SpvWord) RuntimeError!usize {
+        const columns = switch (self.*) {
+            .Matrix => |columns| columns,
+            else => return RuntimeError.InvalidValueType,
+        };
+        if (columns.len == 0) return 0;
+
+        const matrix_stride_usize: usize = @intCast(matrix_stride);
+        const column_size = try columns[0].getPlainMemorySize();
+        const matrix_size = (columns.len - 1) * matrix_stride_usize + column_size;
+        if (output.len < matrix_size) return RuntimeError.OutOfBounds;
+
+        for (columns, 0..) |column, column_index| {
+            _ = try column.read(output[column_index * matrix_stride_usize ..]);
+        }
+        return matrix_size;
+    }
+
     pub fn write(self: *Self, input: []const u8) RuntimeError!usize {
         const vecRoutine = struct {
             inline fn routine(comptime T: type, vec: *T, in: []const u8) RuntimeError!usize {
-                const size = @typeInfo(T).vector.len * 4;
+                const info = @typeInfo(T).vector;
+                const Lane = info.child;
+                const size = info.len * @sizeOf(Lane);
                 if (in.len < size) return RuntimeError.OutOfBounds;
-                vec.* = std.mem.bytesToValue(T, in[0..size]);
+                inline for (0..info.len) |i| {
+                    const offset = i * @sizeOf(Lane);
+                    vec[i] = std.mem.bytesToValue(Lane, in[offset..][0..@sizeOf(Lane)]);
+                }
                 return size;
             }
         }.routine;
@@ -550,17 +583,6 @@ pub const Value = union(Type) {
                 return offset;
             },
             .Matrix => |*values| {
-                const matrix_stride = 16;
-                if (values.len != 0) {
-                    const column_size = try values.*[0].getPlainMemorySize();
-                    if (column_size < matrix_stride and input.len >= (values.len - 1) * matrix_stride + column_size) {
-                        for (values.*, 0..) |*v, column| {
-                            _ = try v.write(input[column * matrix_stride ..]);
-                        }
-                        return (values.len - 1) * matrix_stride + column_size;
-                    }
-                }
-
                 var offset: usize = 0;
                 for (values.*) |*v| {
                     offset += try v.write(input[offset..]);
@@ -580,7 +602,24 @@ pub const Value = union(Type) {
                 for (s.values, 0..) |*v, i| {
                     const member_offset: usize = @intCast(s.offsets[i] orelse end_offset);
                     if (member_offset > input.len) return RuntimeError.OutOfBounds;
-                    const write_size = try v.write(input[member_offset..]);
+                    const write_size = switch (v.*) {
+                        .Matrix => |*columns| blk: {
+                            const matrix_stride = s.matrix_strides[i] orelse break :blk try v.write(input[member_offset..]);
+                            if (columns.len == 0) break :blk @as(usize, 0);
+                            const matrix_stride_usize: usize = @intCast(matrix_stride);
+
+                            const column_size = try columns.*[0].getPlainMemorySize();
+                            const matrix_size = (columns.len - 1) * matrix_stride_usize + column_size;
+                            if (input.len - member_offset < matrix_size)
+                                return RuntimeError.OutOfBounds;
+
+                            for (columns.*, 0..) |*column, column_index| {
+                                _ = try column.write(input[member_offset + (column_index * matrix_stride_usize) ..]);
+                            }
+                            break :blk matrix_size;
+                        },
+                        else => try v.write(input[member_offset..]),
+                    };
                     end_offset = @max(end_offset, member_offset + write_size);
                 }
                 if (end_offset > input.len) return RuntimeError.OutOfBounds;
@@ -693,7 +732,10 @@ pub const Value = union(Type) {
                 if (p.uniform_slice_window) |window| {
                     switch (p.ptr) {
                         .common => |ptr| {
-                            _ = try ptr.read(window);
+                            _ = if (p.matrix_stride) |matrix_stride|
+                                try ptr.readMatrixWithStride(window, matrix_stride)
+                            else
+                                try ptr.read(window);
                         },
                         .f32_ptr => |ptr| {
                             if (window.len < @sizeOf(f32)) return RuntimeError.OutOfBounds;
@@ -730,6 +772,7 @@ pub const Value = union(Type) {
                 for (s.values) |*value| value.deinit(allocator);
                 allocator.free(s.values);
                 allocator.free(s.offsets);
+                allocator.free(s.matrix_strides);
             },
             .Pointer => |*p| {
                 if (p.owns_uniform_backing_value) {
