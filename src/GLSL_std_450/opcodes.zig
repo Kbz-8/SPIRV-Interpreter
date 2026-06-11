@@ -298,7 +298,7 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp) type {
                     .Atanh => if (TT == f16) RuntimeError.UnsupportedSpirV else std.math.atanh(x),
                     .Ceil => @ceil(x),
                     .Cos => @cos(x),
-                    .Cosh => if (TT == f16) RuntimeError.UnsupportedSpirV else std.math.cosh(x),
+                    .Cosh => if (TT == f16) RuntimeError.UnsupportedSpirV else (@exp(x) + @exp(-x)) / 2, // std.math.cosh is not precise enough for Vulkan CTS
                     .Degrees => std.math.radiansToDegrees(x),
                     .Exp => @exp(x),
                     .Exp2 => @exp2(x),
@@ -313,7 +313,7 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp) type {
                     .Round => @round(x),
                     .RoundEven => roundEven(TT, x),
                     .Sin => @sin(x),
-                    .Sinh => if (TT == f16) RuntimeError.UnsupportedSpirV else std.math.sinh(x),
+                    .Sinh => if (TT == f16) RuntimeError.UnsupportedSpirV else (@exp(x) - @exp(-x)) / 2, // std.math.sinh is not precise enough for Vulkan CTS
                     .Sqrt => @sqrt(x),
                     .Tan => @tan(x),
                     .Tanh => if (TT == f16) RuntimeError.UnsupportedSpirV else std.math.tanh(x),

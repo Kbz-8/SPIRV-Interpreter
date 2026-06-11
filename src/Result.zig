@@ -474,13 +474,7 @@ pub fn getMemberCounts(self: *const Self) usize {
     return 0;
 }
 
-pub fn flushPtr(self: *Self, allocator: std.mem.Allocator) RuntimeError!void {
-    if (self.variant) |*variant| {
-        switch (variant.*) {
-            .Constant => |*c| try c.value.flushPtr(allocator),
-            .Variable => |*v| try v.value.flushPtr(allocator),
-            .AccessChain => |*a| try a.value.flushPtr(allocator),
-            else => {},
-        }
-    }
+pub inline fn flushPtr(self: *Self, allocator: std.mem.Allocator) RuntimeError!void {
+    const value = self.getValue() catch return;
+    try value.flushPtr(allocator);
 }
