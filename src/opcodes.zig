@@ -74,8 +74,14 @@ const ImageOp = enum {
     QuerySizeLod,
     Read,
     Resolve,
+    SampleDrefExplicitLod,
+    SampleDrefImplicitLod,
     SampleExplicitLod,
     SampleImplicitLod,
+    SampleProjDrefExplicitLod,
+    SampleProjDrefImplicitLod,
+    SampleProjExplicitLod,
+    SampleProjImplicitLod,
     Write,
 };
 
@@ -198,6 +204,12 @@ pub const SetupDispatcher = block: {
         .ImageRead = autoSetupConstant,
         .ImageSampleExplicitLod = autoSetupConstant,
         .ImageSampleImplicitLod = autoSetupConstant,
+        .ImageSampleDrefExplicitLod = autoSetupConstant,
+        .ImageSampleDrefImplicitLod = autoSetupConstant,
+        .ImageSampleProjDrefExplicitLod = autoSetupConstant,
+        .ImageSampleProjDrefImplicitLod = autoSetupConstant,
+        .ImageSampleProjExplicitLod = autoSetupConstant,
+        .ImageSampleProjImplicitLod = autoSetupConstant,
         .ImageTexelPointer = autoSetupConstant,
         .InBoundsAccessChain = setupAccessChain,
         .IsFinite = autoSetupConstant,
@@ -366,6 +378,12 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageRead)]              = ImageEngine(.Read).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageSampleExplicitLod)] = ImageEngine(.SampleExplicitLod).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageSampleImplicitLod)] = ImageEngine(.SampleImplicitLod).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageSampleDrefExplicitLod)] = ImageEngine(.SampleDrefExplicitLod).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageSampleDrefImplicitLod)] = ImageEngine(.SampleDrefImplicitLod).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageSampleProjDrefExplicitLod)] = ImageEngine(.SampleProjDrefExplicitLod).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageSampleProjDrefImplicitLod)] = ImageEngine(.SampleProjDrefImplicitLod).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageSampleProjExplicitLod)] = ImageEngine(.SampleProjExplicitLod).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageSampleProjImplicitLod)] = ImageEngine(.SampleProjImplicitLod).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageTexelPointer)]      = opImageTexelPointer;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageWrite)]             = ImageEngine(.Write).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.InBoundsAccessChain)]    = opAccessChain;
@@ -1332,6 +1350,94 @@ fn ImageEngine(comptime Op: ImageOp) type {
             };
         }
 
+        fn imageOperandPresent(image_operands: SpvWord, mask: spv.SpvImageOperandsMask) bool {
+            return (image_operands & @intFromEnum(mask)) != 0;
+        }
+
+        fn readImageOffset(rt: *Runtime, offset_id: SpvWord) RuntimeError!Runtime.ImageOffset {
+            const offset = try rt.results[offset_id].getValue();
+            return .{
+                .x = try readStorageCoordLane(offset, 0),
+                .y = readStorageCoordLane(offset, 1) catch 0,
+                .z = readStorageCoordLane(offset, 2) catch 0,
+            };
+        }
+
+        fn valueLaneCount(value: *const Value) RuntimeError!usize {
+            return switch (value.*) {
+                .Vector => |lanes| lanes.len,
+                .Vector2f32, .Vector2i32, .Vector2u32 => 2,
+                .Vector3f32, .Vector3i32, .Vector3u32 => 3,
+                .Vector4f32, .Vector4i32, .Vector4u32 => 4,
+                .Float, .Int => 1,
+                else => RuntimeError.InvalidValueType,
+            };
+        }
+
+        fn readProjectedSampleCoords(coordinate: *const Value) RuntimeError!struct { x: f32, y: f32, z: f32 } {
+            const lane_count = try valueLaneCount(coordinate);
+            if (lane_count < 2)
+                return RuntimeError.InvalidSpirV;
+
+            const q_lane = lane_count - 1;
+            const q = try readProjectionDivisor(coordinate);
+            return .{
+                .x = try readSampleCoordLane(coordinate, 0) / q,
+                .y = if (q_lane > 1) (readSampleCoordLane(coordinate, 1) catch 0.0) / q else 0.0,
+                .z = if (q_lane > 2) (readSampleCoordLane(coordinate, 2) catch 0.0) / q else 0.0,
+            };
+        }
+
+        fn readProjectionDivisor(coordinate: *const Value) RuntimeError!f32 {
+            const lane_count = try valueLaneCount(coordinate);
+            if (lane_count < 2)
+                return RuntimeError.InvalidSpirV;
+            return readSampleCoordLane(coordinate, lane_count - 1);
+        }
+
+        const ParsedImageOperands = struct {
+            lod: ?f32 = null,
+            offset: Runtime.ImageOffset = .{},
+        };
+
+        fn parseImageOperands(rt: *Runtime, image_operands: SpvWord) RuntimeError!ParsedImageOperands {
+            var parsed: ParsedImageOperands = .{};
+
+            if (imageOperandPresent(image_operands, .BiasMask)) {
+                _ = try rt.it.next();
+            }
+            if (imageOperandPresent(image_operands, .LodMask)) {
+                parsed.lod = try readFloatLane(try rt.results[try rt.it.next()].getValue(), 0);
+            }
+            if (imageOperandPresent(image_operands, .GradMask)) {
+                _ = try rt.it.next();
+                _ = try rt.it.next();
+            }
+            if (imageOperandPresent(image_operands, .ConstOffsetMask) or imageOperandPresent(image_operands, .OffsetMask)) {
+                parsed.offset = try readImageOffset(rt, try rt.it.next());
+            }
+            if (imageOperandPresent(image_operands, .ConstOffsetsMask)) {
+                _ = try rt.it.next();
+            }
+            if (imageOperandPresent(image_operands, .SampleMask)) {
+                _ = try rt.it.next();
+            }
+            if (imageOperandPresent(image_operands, .MinLodMask)) {
+                _ = try rt.it.next();
+            }
+            if (imageOperandPresent(image_operands, .MakeTexelAvailableMask)) {
+                _ = try rt.it.next();
+            }
+            if (imageOperandPresent(image_operands, .MakeTexelVisibleMask)) {
+                _ = try rt.it.next();
+            }
+            if (imageOperandPresent(image_operands, .OffsetsMask)) {
+                _ = try rt.it.next();
+            }
+
+            return parsed;
+        }
+
         fn writeFloatTexel(dst: *Value, texel: Runtime.Vec4(f32)) RuntimeError!void {
             switch (dst.*) {
                 .Vector4f32 => |*v| v.* = .{ texel.x, texel.y, texel.z, texel.w },
@@ -1377,6 +1483,20 @@ fn ImageEngine(comptime Op: ImageOp) type {
             }
         }
 
+        fn writeFloatScalar(dst: *Value, value: f32) RuntimeError!void {
+            switch (dst.*) {
+                .Float => |*f| f.value.float32 = value,
+                .Vector => |lanes| {
+                    if (lanes.len != 1) return RuntimeError.InvalidValueType;
+                    switch (lanes[0]) {
+                        .Float => |*f| f.value.float32 = value,
+                        else => return RuntimeError.InvalidValueType,
+                    }
+                },
+                else => return RuntimeError.InvalidValueType,
+            }
+        }
+
         fn readImage(rt: *Runtime, dst: *Value, driver_image: *anyopaque, dim: spv.SpvDim, x: i32, y: i32, z: i32) RuntimeError!void {
             switch (dst.*) {
                 .Vector4f32,
@@ -1405,25 +1525,25 @@ fn ImageEngine(comptime Op: ImageOp) type {
             }
         }
 
-        fn sampleImageImplicitLod(rt: *Runtime, dst: *Value, driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32) RuntimeError!void {
+        fn sampleImageImplicitLod(rt: *Runtime, dst: *Value, driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32, offset: Runtime.ImageOffset) RuntimeError!void {
             switch (dst.*) {
                 .Vector4f32,
                 .Vector3f32,
                 .Vector2f32,
-                => try writeFloatTexel(dst, try rt.image_api.sampleImageFloat4(driver_image, driver_sampler, dim, x, y, z, null)),
+                => try writeFloatTexel(dst, try rt.image_api.sampleImageFloat4(driver_image, driver_sampler, dim, x, y, z, null, offset)),
                 .Vector4i32,
                 .Vector3i32,
                 .Vector2i32,
                 .Vector4u32,
                 .Vector3u32,
                 .Vector2u32,
-                => try writeIntTexel(dst, try rt.image_api.sampleImageInt4(driver_image, driver_sampler, dim, x, y, z, null)),
+                => try writeIntTexel(dst, try rt.image_api.sampleImageInt4(driver_image, driver_sampler, dim, x, y, z, null, offset)),
 
                 .Vector => |lanes| {
                     if (lanes.len == 0) return RuntimeError.InvalidSpirV;
                     switch (lanes[0]) {
-                        .Float => try writeFloatTexel(dst, try rt.image_api.sampleImageFloat4(driver_image, driver_sampler, dim, x, y, z, null)),
-                        .Int => try writeIntTexel(dst, try rt.image_api.sampleImageInt4(driver_image, driver_sampler, dim, x, y, z, null)),
+                        .Float => try writeFloatTexel(dst, try rt.image_api.sampleImageFloat4(driver_image, driver_sampler, dim, x, y, z, null, offset)),
+                        .Int => try writeIntTexel(dst, try rt.image_api.sampleImageInt4(driver_image, driver_sampler, dim, x, y, z, null, offset)),
                         else => return RuntimeError.InvalidValueType,
                     }
                 },
@@ -1445,6 +1565,7 @@ fn ImageEngine(comptime Op: ImageOp) type {
             x: f32,
             y: f32,
             z: f32,
+            offset: Runtime.ImageOffset,
         ) RuntimeError!void {
             const coord_derivative = rt.derivatives.get(coordinate_id) orelse {
                 rt.clearDerivative(allocator, result_id);
@@ -1463,8 +1584,8 @@ fn ImageEngine(comptime Op: ImageOp) type {
             const coord_dy_y = readSampleCoordLane(&coord_derivative.dy, 1) catch 0.0;
             const coord_dy_z = readSampleCoordLane(&coord_derivative.dy, 2) catch 0.0;
 
-            try sampleImageImplicitLod(rt, &dx_sample, driver_image, driver_sampler, dim, x + coord_dx_x, y + coord_dx_y, z + coord_dx_z);
-            try sampleImageImplicitLod(rt, &dy_sample, driver_image, driver_sampler, dim, x + coord_dy_x, y + coord_dy_y, z + coord_dy_z);
+            try sampleImageImplicitLod(rt, &dx_sample, driver_image, driver_sampler, dim, x + coord_dx_x, y + coord_dx_y, z + coord_dx_z, offset);
+            try sampleImageImplicitLod(rt, &dy_sample, driver_image, driver_sampler, dim, x + coord_dy_x, y + coord_dy_y, z + coord_dy_z, offset);
 
             var dx = try Value.init(allocator, rt.results, result_type_word, false);
             defer dx.deinit(allocator);
@@ -1491,31 +1612,35 @@ fn ImageEngine(comptime Op: ImageOp) type {
             try rt.setDerivative(allocator, result_id, &dx, &dy);
         }
 
-        fn sampleImageExplicitLod(rt: *Runtime, dst: *Value, driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32, lod: ?f32) RuntimeError!void {
+        fn sampleImageExplicitLod(rt: *Runtime, dst: *Value, driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32, lod: ?f32, offset: Runtime.ImageOffset) RuntimeError!void {
             switch (dst.*) {
                 .Vector4f32,
                 .Vector3f32,
                 .Vector2f32,
-                => try writeFloatTexel(dst, try rt.image_api.sampleImageFloat4(driver_image, driver_sampler, dim, x, y, z, lod)),
+                => try writeFloatTexel(dst, try rt.image_api.sampleImageFloat4(driver_image, driver_sampler, dim, x, y, z, lod, offset)),
                 .Vector4i32,
                 .Vector3i32,
                 .Vector2i32,
                 .Vector4u32,
                 .Vector3u32,
                 .Vector2u32,
-                => try writeIntTexel(dst, try rt.image_api.sampleImageInt4(driver_image, driver_sampler, dim, x, y, z, lod)),
+                => try writeIntTexel(dst, try rt.image_api.sampleImageInt4(driver_image, driver_sampler, dim, x, y, z, lod, offset)),
 
                 .Vector => |lanes| {
                     if (lanes.len == 0) return RuntimeError.InvalidSpirV;
                     switch (lanes[0]) {
-                        .Float => try writeFloatTexel(dst, try rt.image_api.sampleImageFloat4(driver_image, driver_sampler, dim, x, y, z, lod)),
-                        .Int => try writeIntTexel(dst, try rt.image_api.sampleImageInt4(driver_image, driver_sampler, dim, x, y, z, lod)),
+                        .Float => try writeFloatTexel(dst, try rt.image_api.sampleImageFloat4(driver_image, driver_sampler, dim, x, y, z, lod, offset)),
+                        .Int => try writeIntTexel(dst, try rt.image_api.sampleImageInt4(driver_image, driver_sampler, dim, x, y, z, lod, offset)),
                         else => return RuntimeError.InvalidValueType,
                     }
                 },
 
                 else => return RuntimeError.InvalidValueType,
             }
+        }
+
+        fn sampleImageDref(rt: *Runtime, dst: *Value, driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32, dref: f32, lod: ?f32, offset: Runtime.ImageOffset) RuntimeError!void {
+            try writeFloatScalar(dst, try rt.image_api.sampleImageDref(driver_image, driver_sampler, dim, x, y, z, dref, lod, offset));
         }
 
         fn writeImage(rt: *Runtime, texel: *const Value, driver_image: *anyopaque, dim: spv.SpvDim, x: i32, y: i32, z: i32) RuntimeError!void {
@@ -1629,11 +1754,20 @@ fn ImageEngine(comptime Op: ImageOp) type {
                     try readImage(rt, dst, image_operand.driver_image, image_operand.dim, x, y, z);
                 },
 
-                .SampleImplicitLod => {
+                .SampleImplicitLod,
+                .SampleProjImplicitLod,
+                => {
                     const sampled_image_operand = try resolveSampledImage(image, rt);
-                    const x = try readSampleCoordLane(coordinate, 0);
-                    const y = readSampleCoordLane(coordinate, 1) catch 0;
-                    const z = readSampleCoordLane(coordinate, 2) catch 0;
+                    const coords = if (comptime Op == .SampleProjImplicitLod)
+                        try readProjectedSampleCoords(coordinate)
+                    else
+                        .{
+                            .x = try readSampleCoordLane(coordinate, 0),
+                            .y = readSampleCoordLane(coordinate, 1) catch 0,
+                            .z = readSampleCoordLane(coordinate, 2) catch 0,
+                        };
+                    const image_operands = if (word_count > 4) try rt.it.next() else 0;
+                    const parsed_operands = try parseImageOperands(rt, image_operands);
 
                     try sampleImageImplicitLod(
                         rt,
@@ -1641,9 +1775,10 @@ fn ImageEngine(comptime Op: ImageOp) type {
                         sampled_image_operand.driver_image,
                         sampled_image_operand.driver_sampler,
                         sampled_image_operand.dim,
-                        x,
-                        y,
-                        z,
+                        coords.x,
+                        coords.y,
+                        coords.z,
+                        parsed_operands.offset,
                     );
                     try setImplicitSampleDerivative(
                         allocator,
@@ -1655,22 +1790,62 @@ fn ImageEngine(comptime Op: ImageOp) type {
                         sampled_image_operand.driver_image,
                         sampled_image_operand.driver_sampler,
                         sampled_image_operand.dim,
-                        x,
-                        y,
-                        z,
+                        coords.x,
+                        coords.y,
+                        coords.z,
+                        parsed_operands.offset,
                     );
                 },
 
-                .SampleExplicitLod => {
+                .SampleDrefImplicitLod,
+                .SampleProjDrefImplicitLod,
+                => {
                     const sampled_image_operand = try resolveSampledImage(image, rt);
-                    const x = try readSampleCoordLane(coordinate, 0);
-                    const y = readSampleCoordLane(coordinate, 1) catch 0;
-                    const z = readSampleCoordLane(coordinate, 2) catch 0;
-                    const image_operands = if (word_count > 4) try rt.it.next() else 0;
-                    const lod = if ((image_operands & @intFromEnum(spv.SpvImageOperandsMask.LodMask)) != 0)
-                        try readFloatLane(try rt.results[try rt.it.next()].getValue(), 0)
+                    const coords = if (comptime Op == .SampleProjDrefImplicitLod)
+                        try readProjectedSampleCoords(coordinate)
                     else
-                        null;
+                        .{
+                            .x = try readSampleCoordLane(coordinate, 0),
+                            .y = readSampleCoordLane(coordinate, 1) catch 0,
+                            .z = readSampleCoordLane(coordinate, 2) catch 0,
+                        };
+                    const raw_dref = try readFloatLane(try rt.results[try rt.it.next()].getValue(), 0);
+                    const dref = if (comptime Op == .SampleProjDrefImplicitLod)
+                        raw_dref / try readProjectionDivisor(coordinate)
+                    else
+                        raw_dref;
+                    const image_operands = if (word_count > 5) try rt.it.next() else 0;
+                    const parsed_operands = try parseImageOperands(rt, image_operands);
+
+                    try sampleImageDref(
+                        rt,
+                        dst,
+                        sampled_image_operand.driver_image,
+                        sampled_image_operand.driver_sampler,
+                        sampled_image_operand.dim,
+                        coords.x,
+                        coords.y,
+                        coords.z,
+                        dref,
+                        null,
+                        parsed_operands.offset,
+                    );
+                },
+
+                .SampleExplicitLod,
+                .SampleProjExplicitLod,
+                => {
+                    const sampled_image_operand = try resolveSampledImage(image, rt);
+                    const coords = if (comptime Op == .SampleProjExplicitLod)
+                        try readProjectedSampleCoords(coordinate)
+                    else
+                        .{
+                            .x = try readSampleCoordLane(coordinate, 0),
+                            .y = readSampleCoordLane(coordinate, 1) catch 0,
+                            .z = readSampleCoordLane(coordinate, 2) catch 0,
+                        };
+                    const image_operands = if (word_count > 4) try rt.it.next() else 0;
+                    const parsed_operands = try parseImageOperands(rt, image_operands);
 
                     try sampleImageExplicitLod(
                         rt,
@@ -1678,10 +1853,46 @@ fn ImageEngine(comptime Op: ImageOp) type {
                         sampled_image_operand.driver_image,
                         sampled_image_operand.driver_sampler,
                         sampled_image_operand.dim,
-                        x,
-                        y,
-                        z,
-                        lod,
+                        coords.x,
+                        coords.y,
+                        coords.z,
+                        parsed_operands.lod,
+                        parsed_operands.offset,
+                    );
+                },
+
+                .SampleDrefExplicitLod,
+                .SampleProjDrefExplicitLod,
+                => {
+                    const sampled_image_operand = try resolveSampledImage(image, rt);
+                    const coords = if (comptime Op == .SampleProjDrefExplicitLod)
+                        try readProjectedSampleCoords(coordinate)
+                    else
+                        .{
+                            .x = try readSampleCoordLane(coordinate, 0),
+                            .y = readSampleCoordLane(coordinate, 1) catch 0,
+                            .z = readSampleCoordLane(coordinate, 2) catch 0,
+                        };
+                    const raw_dref = try readFloatLane(try rt.results[try rt.it.next()].getValue(), 0);
+                    const dref = if (comptime Op == .SampleProjDrefExplicitLod)
+                        raw_dref / try readProjectionDivisor(coordinate)
+                    else
+                        raw_dref;
+                    const image_operands = if (word_count > 5) try rt.it.next() else 0;
+                    const parsed_operands = try parseImageOperands(rt, image_operands);
+
+                    try sampleImageDref(
+                        rt,
+                        dst,
+                        sampled_image_operand.driver_image,
+                        sampled_image_operand.driver_sampler,
+                        sampled_image_operand.dim,
+                        coords.x,
+                        coords.y,
+                        coords.z,
+                        dref,
+                        parsed_operands.lod,
+                        parsed_operands.offset,
                     );
                 },
 
@@ -1782,8 +1993,26 @@ fn opImageTexelPointer(allocator: std.mem.Allocator, word_count: SpvWord, rt: *R
     };
     errdefer backing.deinit(allocator);
 
-    if (rt.results[result_id].variant) |*variant| {
-        switch (variant.*) {
+    const indexes = allocator.alloc(SpvWord, 0) catch return RuntimeError.OutOfMemory;
+    errdefer allocator.free(indexes);
+
+    const new_value: Value = .{ .Pointer = .{
+        .ptr = .{ .common = backing },
+        .image_texel = .{
+            .driver_image = image.driver_image,
+            .dim = dim,
+            .x = x,
+            .y = y,
+            .z = z,
+        },
+        .uniform_backing_value = backing,
+        .owns_uniform_backing_value = true,
+    } };
+
+    if (rt.results[result_id].variant) |variant| {
+        rt.results[result_id].variant = null;
+        var old_variant = variant;
+        switch (old_variant) {
             .AccessChain => |*a| {
                 try a.value.flushPtr(allocator);
                 allocator.free(a.indexes);
@@ -1793,24 +2022,12 @@ fn opImageTexelPointer(allocator: std.mem.Allocator, word_count: SpvWord, rt: *R
         }
     }
 
-    const indexes = allocator.alloc(SpvWord, 0) catch return RuntimeError.OutOfMemory;
     rt.results[result_id].variant = .{
         .AccessChain = .{
             .target = result_type,
             .base = image_id,
             .indexes = indexes,
-            .value = .{ .Pointer = .{
-                .ptr = .{ .common = backing },
-                .image_texel = .{
-                    .driver_image = image.driver_image,
-                    .dim = dim,
-                    .x = x,
-                    .y = y,
-                    .z = z,
-                },
-                .uniform_backing_value = backing,
-                .owns_uniform_backing_value = true,
-            } },
+            .value = new_value,
         },
     };
 }
@@ -2003,7 +2220,9 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
                 .Sub => if (comptime is_int) @subWithOverflow(op1, op2)[0] else op1 - op2,
                 .Mul,
                 .MatrixTimesMatrix,
+                .MatrixTimesScalar,
                 .MatrixTimesVector,
+                .VectorTimesMatrix,
                 => if (comptime is_int) @mulWithOverflow(op1, op2)[0] else op1 * op2,
                 .Div => blk: {
                     if (op2_is_zero) return RuntimeError.DivisionByZero;
@@ -2044,18 +2263,123 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
             }
         }
 
+        inline fn matrixRows(matrix: *const Value) RuntimeError!usize {
+            const columns = switch (matrix.*) {
+                .Matrix => |columns| columns,
+                else => return RuntimeError.InvalidSpirV,
+            };
+            if (columns.len == 0) return RuntimeError.InvalidSpirV;
+            return try columns[0].resolveLaneCount();
+        }
+
+        fn applyMatrixTimesVectorFloat(comptime bits: SpvWord, dst_vec: []Value, matrix: *const Value, vector: *const Value) RuntimeError!void {
+            const columns = switch (matrix.*) {
+                .Matrix => |columns| columns,
+                else => return RuntimeError.InvalidSpirV,
+            };
+            const rows = try matrixRows(matrix);
+            if (dst_vec.len != rows or try vector.resolveLaneCount() != columns.len) return RuntimeError.InvalidSpirV;
+
+            const FloatT = Value.getPrimitiveFieldType(.Float, bits);
+            for (dst_vec, 0..) |*dst_lane, row_index| {
+                var sum: FloatT = 0;
+                for (columns, 0..) |*column, column_index| {
+                    const l = try Value.readLane(.Float, bits, column, row_index);
+                    const r = try Value.readLane(.Float, bits, vector, column_index);
+                    sum += l * r;
+                }
+                try Value.writeLane(.Float, bits, dst_lane, 0, sum);
+            }
+        }
+
+        fn applyVectorTimesMatrixFloat(comptime bits: SpvWord, dst_vec: []Value, vector: *const Value, matrix: *const Value) RuntimeError!void {
+            const columns = switch (matrix.*) {
+                .Matrix => |columns| columns,
+                else => return RuntimeError.InvalidSpirV,
+            };
+            if (dst_vec.len != columns.len) return RuntimeError.InvalidSpirV;
+            const rows = try matrixRows(matrix);
+            if (try vector.resolveLaneCount() != rows) return RuntimeError.InvalidSpirV;
+
+            const FloatT = Value.getPrimitiveFieldType(.Float, bits);
+            for (dst_vec, columns, 0..) |*dst_lane, *column, column_index| {
+                _ = column_index;
+                var sum: FloatT = 0;
+                for (0..rows) |row_index| {
+                    const l = try Value.readLane(.Float, bits, vector, row_index);
+                    const r = try Value.readLane(.Float, bits, column, row_index);
+                    sum += l * r;
+                }
+                try Value.writeLane(.Float, bits, dst_lane, 0, sum);
+            }
+        }
+
+        fn applyMatrixTimesMatrixFloat(comptime bits: SpvWord, dst_matrix: []Value, lhs_matrix: *const Value, rhs_matrix: *const Value) RuntimeError!void {
+            const lhs_columns = switch (lhs_matrix.*) {
+                .Matrix => |columns| columns,
+                else => return RuntimeError.InvalidSpirV,
+            };
+            const rhs_columns = switch (rhs_matrix.*) {
+                .Matrix => |columns| columns,
+                else => return RuntimeError.InvalidSpirV,
+            };
+            if (dst_matrix.len != rhs_columns.len) return RuntimeError.InvalidSpirV;
+
+            const rows = try matrixRows(lhs_matrix);
+            if (lhs_columns.len != try matrixRows(rhs_matrix)) return RuntimeError.InvalidSpirV;
+
+            const FloatT = Value.getPrimitiveFieldType(.Float, bits);
+            for (dst_matrix, rhs_columns) |*dst_column, *rhs_column| {
+                if (try dst_column.resolveLaneCount() != rows) return RuntimeError.InvalidSpirV;
+
+                for (0..rows) |row_index| {
+                    var sum: FloatT = 0;
+                    for (lhs_columns, 0..) |*lhs_column, inner_index| {
+                        const l = try Value.readLane(.Float, bits, lhs_column, row_index);
+                        const r = try Value.readLane(.Float, bits, rhs_column, inner_index);
+                        sum += l * r;
+                    }
+                    try Value.writeLane(.Float, bits, dst_column, row_index, sum);
+                }
+            }
+        }
+
         inline fn applySIMDVector(comptime ElemT: type, comptime N: usize, d: *@Vector(N, ElemT), l: @Vector(N, ElemT), r: @Vector(N, ElemT)) RuntimeError!void {
             d.* = try operation(@Vector(N, ElemT), l, r);
         }
 
         fn applySIMDVectorf32(comptime N: usize, d: *@Vector(N, f32), l: *const Value, r: *const Value) RuntimeError!void {
             switch (Op) {
-                .MatrixTimesVector => inline for (0..N) |i| {
-                    const l_vec = l.Matrix[i].getVectorSpecialization(N, f32);
-                    const r_vec = r.getVectorSpecialization(N, f32);
-                    d[i] = 0;
-                    inline for (0..N) |j| {
-                        d[i] += l_vec[j] * r_vec[j];
+                .MatrixTimesVector => {
+                    const columns = switch (l.*) {
+                        .Matrix => |columns| columns,
+                        else => return RuntimeError.InvalidSpirV,
+                    };
+                    if (try r.resolveLaneCount() != columns.len) return RuntimeError.InvalidSpirV;
+
+                    inline for (0..N) |row_index| {
+                        d[row_index] = 0;
+                        for (columns, 0..) |*column, column_index| {
+                            d[row_index] += try Value.readLane(.Float, 32, column, row_index) *
+                                try Value.readLane(.Float, 32, r, column_index);
+                        }
+                    }
+                },
+                .VectorTimesMatrix => {
+                    const columns = switch (r.*) {
+                        .Matrix => |columns| columns,
+                        else => return RuntimeError.InvalidSpirV,
+                    };
+                    if (columns.len != N) return RuntimeError.InvalidSpirV;
+                    const rows = try matrixRows(r);
+                    if (try l.resolveLaneCount() != rows) return RuntimeError.InvalidSpirV;
+
+                    inline for (0..N) |column_index| {
+                        d[column_index] = 0;
+                        for (0..rows) |row_index| {
+                            d[column_index] += try Value.readLane(.Float, 32, l, row_index) *
+                                try Value.readLane(.Float, 32, &columns[column_index], row_index);
+                        }
                     }
                 },
                 else => try applyDirectSIMDVectorf32(N, d, l.getVectorSpecialization(N, f32), r),
@@ -2214,24 +2538,17 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
                 fn routines(dst2: *Value, lhs2: *const Value, rhs2: *const Value, lane_bits2: SpvWord) RuntimeError!void {
                     switch (dst2.*) {
                         .Vector => |dst_vec| switch (Op) {
-                            .VectorTimesScalar => switch (lane_bits2) {
+                            .VectorTimesScalar, .MatrixTimesScalar => switch (lane_bits2) {
                                 inline 16, 32, 64 => |bits_count| try applyVectorTimesScalarFloat(bits_count, dst_vec, lhs2.Vector, rhs2),
                                 else => return RuntimeError.UnsupportedSpirV,
                             },
-                            .MatrixTimesVector => for (dst_vec, lhs2.Matrix) |*d_lane, *l_mat| {
-                                switch (lane_bits2) {
-                                    inline 8, 16, 32, 64 => |bits| {
-                                        if (comptime bits == 8 and T == .Float) return RuntimeError.UnsupportedSpirV;
-                                        const d_field = try Value.getPrimitiveField(T, bits, d_lane);
-
-                                        d_field.* = 0;
-
-                                        for (l_mat.Vector[0..], rhs2.Vector) |*l_lane, *r_lane| {
-                                            d_field.* += try applyScalarRaw(bits, l_lane, r_lane);
-                                        }
-                                    },
-                                    else => return RuntimeError.UnsupportedSpirV,
-                                }
+                            .MatrixTimesVector => switch (lane_bits2) {
+                                inline 16, 32, 64 => |bits_count| try applyMatrixTimesVectorFloat(bits_count, dst_vec, lhs2, rhs2),
+                                else => return RuntimeError.UnsupportedSpirV,
+                            },
+                            .VectorTimesMatrix => switch (lane_bits2) {
+                                inline 16, 32, 64 => |bits_count| try applyVectorTimesMatrixFloat(bits_count, dst_vec, lhs2, rhs2),
+                                else => return RuntimeError.UnsupportedSpirV,
                             },
                             else => for (dst_vec, lhs2.Vector, rhs2.Vector) |*d_lane, *l_lane, *r_lane| {
                                 try applyScalar(lane_bits2, d_lane, l_lane, r_lane);
@@ -2259,10 +2576,9 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
                 .Int, .Float => try applyScalar(lane_bits, dst, lhs, rhs),
 
                 .Matrix => |dst_m| switch (Op) {
-                    .MatrixTimesMatrix => {
-                        for (dst_m, lhs.Matrix, rhs.Matrix) |*dst_vec, *lhs_vec, *rhs_vec| {
-                            try vectorRoutines(dst_vec, lhs_vec, rhs_vec, lane_bits);
-                        }
+                    .MatrixTimesMatrix => switch (lane_bits) {
+                        inline 16, 32, 64 => |bits_count| try applyMatrixTimesMatrixFloat(bits_count, dst_m, lhs, rhs),
+                        else => return RuntimeError.UnsupportedSpirV,
                     },
                     .MatrixTimesScalar => {
                         for (dst_m, lhs.Matrix) |*dst_vec, *lhs_vec| {
@@ -2385,8 +2701,13 @@ fn setupAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runt
         index.* = try rt.it.next();
     }
 
-    if (rt.results[id].variant) |*variant| {
-        switch (variant.*) {
+    var new_value = try Value.initUnresolved(allocator, rt.results, var_type, false);
+    errdefer new_value.deinit(allocator);
+
+    if (rt.results[id].variant) |variant| {
+        rt.results[id].variant = null;
+        var old_variant = variant;
+        switch (old_variant) {
             .AccessChain => |*a| {
                 try a.value.flushPtr(allocator);
                 allocator.free(a.indexes);
@@ -2401,7 +2722,7 @@ fn setupAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runt
             .target = var_type,
             .base = base_id,
             .indexes = indexes,
-            .value = try Value.initUnresolved(allocator, rt.results, var_type, false),
+            .value = new_value,
         },
     };
 }
@@ -2587,8 +2908,10 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
     const index_count: usize = @intCast(word_count - 3);
 
     const indexes, const free_responsability = blk: {
-        if (rt.results[id].variant) |*variant| {
-            switch (variant.*) {
+        if (rt.results[id].variant) |variant| {
+            rt.results[id].variant = null;
+            var old_variant = variant;
+            switch (old_variant) {
                 .AccessChain => |*a| {
                     if (a.indexes.len != index_count)
                         return RuntimeError.InvalidSpirV;

@@ -68,3 +68,8 @@ export fn SpvModuleGetReflectionInfos(module: *spv.Module) callconv(.c) Reflecti
         .has_control_barriers = if (module.reflection_infos.has_control_barriers) 1 else 0,
     };
 }
+
+export fn SpvModuleGetBindingResult(module: *const spv.Module, set: ffi.SpvCWord, binding: ffi.SpvCWord, result: *ffi.SpvCWord) callconv(.c) ffi.Result {
+    result.* = module.getBindingResult(@intCast(set), @intCast(binding)) orelse return .NotFound;
+    return .Success;
+}

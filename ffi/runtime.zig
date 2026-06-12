@@ -39,12 +39,19 @@ const Vec4u = extern struct {
     w: c_uint,
 };
 
+const ImageOffset = extern struct {
+    x: c_int,
+    y: c_int,
+    z: c_int,
+};
+
 const readImageFloat4_PFN = *const fn (driver_image: ?*anyopaque, dim: spv.spv.SpvDim, x: c_int, y: c_int, z: c_int, dst: *Vec4f) callconv(.c) ffi.Result;
 const readImageInt4_PFN = *const fn (driver_image: ?*anyopaque, dim: spv.spv.SpvDim, x: c_int, y: c_int, z: c_int, dst: *Vec4u) callconv(.c) ffi.Result;
 const writeImageFloat4_PFN = *const fn (driver_image: ?*anyopaque, dim: spv.spv.SpvDim, x: c_int, y: c_int, z: c_int, src: Vec4f) callconv(.c) ffi.Result;
 const writeImageInt4_PFN = *const fn (driver_image: ?*anyopaque, dim: spv.spv.SpvDim, x: c_int, y: c_int, z: c_int, src: Vec4u) callconv(.c) ffi.Result;
-const sampleImageFloat4_PFN = *const fn (driver_image: ?*anyopaque, driver_sampler: ?*anyopaque, dim: spv.spv.SpvDim, x: f32, y: f32, z: f32, lod: f32, dst: *Vec4f) callconv(.c) ffi.Result;
-const sampleImageInt4_PFN = *const fn (driver_image: ?*anyopaque, driver_sampler: ?*anyopaque, dim: spv.spv.SpvDim, x: f32, y: f32, z: f32, lod: f32, dst: *Vec4u) callconv(.c) ffi.Result;
+const sampleImageFloat4_PFN = *const fn (driver_image: ?*anyopaque, driver_sampler: ?*anyopaque, dim: spv.spv.SpvDim, x: f32, y: f32, z: f32, has_lod: ffi.SpvCBool, lod: f32, offset: ImageOffset, dst: *Vec4f) callconv(.c) ffi.Result;
+const sampleImageInt4_PFN = *const fn (driver_image: ?*anyopaque, driver_sampler: ?*anyopaque, dim: spv.spv.SpvDim, x: f32, y: f32, z: f32, has_lod: ffi.SpvCBool, lod: f32, offset: ImageOffset, dst: *Vec4u) callconv(.c) ffi.Result;
+const sampleImageDref_PFN = *const fn (driver_image: ?*anyopaque, driver_sampler: ?*anyopaque, dim: spv.spv.SpvDim, x: f32, y: f32, z: f32, dref: f32, has_lod: ffi.SpvCBool, lod: f32, offset: ImageOffset, dst: *f32) callconv(.c) ffi.Result;
 const queryImageSize_PFN = *const fn (driver_image: ?*anyopaque, dim: spv.spv.SpvDim, arrayed: ffi.SpvCBool, dst: *Vec4u) callconv(.c) ffi.Result;
 
 const ImageAPI = extern struct {
@@ -54,6 +61,7 @@ const ImageAPI = extern struct {
     writeImageInt4: writeImageInt4_PFN,
     sampleImageFloat4: sampleImageFloat4_PFN,
     sampleImageInt4: sampleImageInt4_PFN,
+    sampleImageDref: sampleImageDref_PFN,
     queryImageSize: queryImageSize_PFN,
 };
 
@@ -159,11 +167,19 @@ const ImageAPIBridge = struct {
         try fromCResult(result);
     }
 
-    fn sampleImageFloat4(driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.spv.SpvDim, x: f32, y: f32, z: f32, lod: ?f32) spv.Runtime.RuntimeError!spv.Runtime.Vec4(f32) {
+    fn toCImageOffset(offset: spv.Runtime.ImageOffset) ImageOffset {
+        return .{
+            .x = @intCast(offset.x),
+            .y = @intCast(offset.y),
+            .z = @intCast(offset.z),
+        };
+    }
+
+    fn sampleImageFloat4(driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.spv.SpvDim, x: f32, y: f32, z: f32, lod: ?f32, offset: spv.Runtime.ImageOffset) spv.Runtime.RuntimeError!spv.Runtime.Vec4(f32) {
         const image_api = try getImageAPI();
 
         var dst: Vec4f = undefined;
-        const result = image_api.sampleImageFloat4(driver_image, driver_sampler, dim, x, y, z, lod orelse 0.0, &dst);
+        const result = image_api.sampleImageFloat4(driver_image, driver_sampler, dim, x, y, z, if (lod == null) 0 else 1, lod orelse 0.0, toCImageOffset(offset), &dst);
 
         try fromCResult(result);
 
@@ -175,11 +191,11 @@ const ImageAPIBridge = struct {
         };
     }
 
-    fn sampleImageInt4(driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.spv.SpvDim, x: f32, y: f32, z: f32, lod: ?f32) spv.Runtime.RuntimeError!spv.Runtime.Vec4(u32) {
+    fn sampleImageInt4(driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.spv.SpvDim, x: f32, y: f32, z: f32, lod: ?f32, offset: spv.Runtime.ImageOffset) spv.Runtime.RuntimeError!spv.Runtime.Vec4(u32) {
         const image_api = try getImageAPI();
 
         var dst: Vec4u = undefined;
-        const result = image_api.sampleImageInt4(driver_image, driver_sampler, dim, x, y, z, lod orelse 0.0, &dst);
+        const result = image_api.sampleImageInt4(driver_image, driver_sampler, dim, x, y, z, if (lod == null) 0 else 1, lod orelse 0.0, toCImageOffset(offset), &dst);
 
         try fromCResult(result);
 
@@ -189,6 +205,17 @@ const ImageAPIBridge = struct {
             .z = dst.z,
             .w = dst.w,
         };
+    }
+
+    fn sampleImageDref(driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.spv.SpvDim, x: f32, y: f32, z: f32, dref: f32, lod: ?f32, offset: spv.Runtime.ImageOffset) spv.Runtime.RuntimeError!f32 {
+        const image_api = try getImageAPI();
+
+        var dst: f32 = undefined;
+        const result = image_api.sampleImageDref(driver_image, driver_sampler, dim, x, y, z, dref, if (lod == null) 0 else 1, lod orelse 0.0, toCImageOffset(offset), &dst);
+
+        try fromCResult(result);
+
+        return dst;
     }
 
     fn queryImageSize(driver_image: *anyopaque, dim: spv.spv.SpvDim, arrayed: bool) spv.Runtime.RuntimeError!spv.Runtime.Vec4(u32) {
@@ -229,6 +256,7 @@ export fn SpvInitRuntime(rt: **RuntimeWrapper, module: *spv.Module, image_api: I
             .writeImageInt4 = ImageAPIBridge.writeImageInt4,
             .sampleImageFloat4 = ImageAPIBridge.sampleImageFloat4,
             .sampleImageInt4 = ImageAPIBridge.sampleImageInt4,
+            .sampleImageDref = ImageAPIBridge.sampleImageDref,
             .queryImageSize = ImageAPIBridge.queryImageSize,
         },
     ) catch |err| {
@@ -261,6 +289,29 @@ export fn SpvAddSpecializationInfo(rt: *RuntimeWrapper, entry: CSpecializationEn
         },
         data[0..data_size],
     ) catch |err| return toCResult(err);
+    return .Success;
+}
+
+export fn SpvCopySpecializationConstantsFrom(rt: *RuntimeWrapper, other: *const RuntimeWrapper) callconv(.c) ffi.Result {
+    const allocator = std.heap.c_allocator;
+    rt.rt.copySpecializationConstantsFrom(allocator, &other.rt) catch |err| return toCResult(err);
+    return .Success;
+}
+
+export fn SpvSetDerivativeFromMemory(rt: *RuntimeWrapper, result: spv.SpvWord, dx: [*]const u8, dx_size: c_ulong, dy: [*]const u8, dy_size: c_ulong) callconv(.c) ffi.Result {
+    const allocator = std.heap.c_allocator;
+    rt.rt.setDerivativeFromMemory(allocator, result, dx[0..dx_size], dy[0..dy_size]) catch |err| return toCResult(err);
+    return .Success;
+}
+
+export fn SpvClearDerivative(rt: *RuntimeWrapper, result: spv.SpvWord) callconv(.c) void {
+    const allocator = std.heap.c_allocator;
+    rt.rt.clearDerivative(allocator, result);
+}
+
+export fn SpvCopyDerivative(rt: *RuntimeWrapper, dst: spv.SpvWord, src: spv.SpvWord) callconv(.c) ffi.Result {
+    const allocator = std.heap.c_allocator;
+    rt.rt.copyDerivative(allocator, dst, src) catch |err| return toCResult(err);
     return .Success;
 }
 
@@ -317,10 +368,6 @@ export fn SpvGetResultPrimitiveType(rt: *RuntimeWrapper, result: spv.SpvWord, pr
         .UInt => .uint,
     };
     return .Success;
-}
-
-export fn SpvResultIsInteger(rt: *RuntimeWrapper, result: spv.SpvWord) callconv(.c) c_int {
-    return if (rt.rt.resultIsInteger(result)) 1 else 0;
 }
 
 export fn SpvHasResultDecoration(rt: *RuntimeWrapper, result: spv.SpvWord, decoration: spv.spv.SpvDecoration) callconv(.c) c_int {

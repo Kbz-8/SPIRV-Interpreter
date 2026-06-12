@@ -497,12 +497,20 @@ typedef struct
 	unsigned int w;
 } SpvVec4u;
 
+typedef struct
+{
+	int x;
+	int y;
+	int z;
+} SpvImageOffset;
+
 typedef SpvResult (*SpvReadImageFloat4_PFN)(void* driver_image, SpvDim dim, int x, int y, int z, SpvVec4f* dst);
 typedef SpvResult (*SpvReadImageInt4_PFN)(void* driver_image, SpvDim dim, int x, int y, int z, SpvVec4u* dst);
 typedef SpvResult (*SpvWriteImageFloat4_PFN)(void* driver_image, SpvDim dim, int x, int y, int z, SpvVec4f src);
 typedef SpvResult (*SpvWriteImageInt4_PFN)(void* driver_image, SpvDim dim, int x, int y, int z, SpvVec4u src);
-typedef SpvResult (*SpvSampleImageFloat4_PFN)(void* driver_image, void* driver_sampler, SpvDim dim, float x, float y, float z, float lod, SpvVec4f* dst);
-typedef SpvResult (*SpvSampleImageInt4_PFN)(void* driver_image, void* driver_sampler, SpvDim dim, float x, float y, float z, float lod, SpvVec4u* dst);
+typedef SpvResult (*SpvSampleImageFloat4_PFN)(void* driver_image, void* driver_sampler, SpvDim dim, float x, float y, float z, SpvBool has_lod, float lod, SpvImageOffset offset, SpvVec4f* dst);
+typedef SpvResult (*SpvSampleImageInt4_PFN)(void* driver_image, void* driver_sampler, SpvDim dim, float x, float y, float z, SpvBool has_lod, float lod, SpvImageOffset offset, SpvVec4u* dst);
+typedef SpvResult (*SpvSampleImageDref_PFN)(void* driver_image, void* driver_sampler, SpvDim dim, float x, float y, float z, float dref, SpvBool has_lod, float lod, SpvImageOffset offset, float* dst);
 typedef SpvResult (*SpvQueryImageSize_PFN)(void* driver_image, SpvDim dim, SpvBool arrayed, SpvVec4u* dst);
 
 typedef struct
@@ -513,6 +521,7 @@ typedef struct
 	SpvWriteImageInt4_PFN SpvWriteImageInt4;
 	SpvSampleImageFloat4_PFN SpvSampleImageFloat4;
 	SpvSampleImageInt4_PFN SpvSampleImageInt4;
+	SpvSampleImageDref_PFN SpvSampleImageDref;
 	SpvQueryImageSize_PFN SpvQueryImageSize;
 } SpvImageAPI;
 
@@ -523,6 +532,7 @@ SPV_API SpvResult SpvInitModule(SpvModule* module, const SpvWord* source, SpvSiz
 SPV_API void SpvDeinitModule(SpvModule module);
 
 SPV_API SpvModuleReflectionInfos SpvModuleGetReflectionInfos(SpvModule module);
+SPV_API SpvResult SpvModuleGetBindingResult(SpvModule module, SpvWord set, SpvWord binding, SpvWord* result);
 
 SPV_API SpvResult SpvInitRuntime(SpvRuntime* runtime, SpvModule module, SpvImageAPI image_api);
 SPV_API void SpvDeinitRuntime(SpvRuntime runtime);
@@ -530,6 +540,10 @@ SPV_API void SpvDeinitRuntime(SpvRuntime runtime);
 SPV_API SpvResult SpvFlushDescriptorSets(SpvRuntime runtime);
 
 SPV_API SpvResult SpvAddSpecializationInfo(SpvRuntime runtime, SpvRuntimeSpecializationEntry entry, const SpvByte* data, SpvSize data_size);
+SPV_API SpvResult SpvCopySpecializationConstantsFrom(SpvRuntime runtime, SpvRuntime other);
+SPV_API SpvResult SpvSetDerivativeFromMemory(SpvRuntime runtime, SpvWord result, const SpvByte* dx, SpvSize dx_size, const SpvByte* dy, SpvSize dy_size);
+SPV_API void SpvClearDerivative(SpvRuntime runtime, SpvWord result);
+SPV_API SpvResult SpvCopyDerivative(SpvRuntime runtime, SpvWord dst, SpvWord src);
 SPV_API SpvResult SpvPopulatePushConstants(SpvRuntime runtime, const SpvByte* data, SpvSize data_size);
 
 SPV_API SpvResult SpvGetResultByName(SpvRuntime runtime, const char* name, SpvWord* result);
@@ -540,7 +554,6 @@ SPV_API SpvResult SpvGetEntryPointByName(SpvRuntime runtime, const char* name, S
 SPV_API SpvResult SpvGetResultMemorySize(SpvRuntime runtime, SpvWord result, SpvSize* size);
 SPV_API SpvResult SpvGetInputLocationMemorySize(SpvRuntime runtime, SpvWord location, SpvSize* size);
 SPV_API SpvResult SpvGetResultPrimitiveType(SpvRuntime runtime, SpvWord result, SpvPrimitiveType* primitive_type);
-SPV_API SpvBool SpvResultIsInteger(SpvRuntime runtime, SpvWord result);
 SPV_API SpvBool SpvHasResultDecoration(SpvRuntime runtime, SpvWord result, SpvDecoration decoration);
 
 SPV_API SpvResult SpvCallEntryPoint(SpvRuntime runtime, SpvWord entry_point_index);

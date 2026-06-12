@@ -54,3 +54,47 @@ test "Simple while loop" {
         },
     });
 }
+
+test "For filter" {
+    const allocator = std.testing.allocator;
+    const shader =
+        \\ [nzsl_version("1.1")]
+        \\ module;
+        \\
+        \\ struct FragOut
+        \\ {
+        \\     [location(0)] color: vec4[u32]
+        \\ }
+        \\
+        \\ [entry(frag)]
+        \\ fn main() -> FragOut
+        \\ {
+        \\     let even_sum: u32 = 0;
+        \\     let odd_sum: u32 = 0;
+        \\     let product: u32 = 1;
+        \\     for i in u32(1) -> u32(8)
+        \\     {
+        \\         if ((i % u32(2)) == u32(0))
+        \\         {
+        \\             even_sum += i;
+        \\             product *= i;
+        \\         }
+        \\         else
+        \\             odd_sum += i;
+        \\     }
+        \\
+        \\     let output: FragOut;
+        \\     output.color = vec4[u32](even_sum, odd_sum, product, even_sum + odd_sum);
+        \\     return output;
+        \\ }
+    ;
+    const code = try compileNzsl(allocator, shader);
+    defer allocator.free(code);
+
+    try case.expect(.{
+        .source = code,
+        .expected_outputs = &.{
+            std.mem.asBytes(&[_]u32{ 12, 16, 48, 28 }),
+        },
+    });
+}

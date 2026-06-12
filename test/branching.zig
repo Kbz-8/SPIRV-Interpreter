@@ -103,3 +103,53 @@ test "Simple branching" {
         }
     }
 }
+
+test "Nested if" {
+    const allocator = std.testing.allocator;
+    const shader =
+        \\ [nzsl_version("1.1")]
+        \\ module;
+        \\
+        \\ struct FragOut
+        \\ {
+        \\     [location(0)] color: vec4[i32]
+        \\ }
+        \\
+        \\ fn classify(value: i32) -> i32
+        \\ {
+        \\     if (value < 0)
+        \\     {
+        \\         if ((value % 2) == 0)
+        \\             return -2;
+        \\         else
+        \\             return -1;
+        \\     }
+        \\     else if (value == 0)
+        \\         return 0;
+        \\     else
+        \\     {
+        \\         if ((value % 2) == 0)
+        \\             return 2;
+        \\         else
+        \\             return 1;
+        \\     }
+        \\ }
+        \\
+        \\ [entry(frag)]
+        \\ fn main() -> FragOut
+        \\ {
+        \\     let output: FragOut;
+        \\     output.color = vec4[i32](classify(-4), classify(-3), classify(0), classify(5));
+        \\     return output;
+        \\ }
+    ;
+    const code = try compileNzsl(allocator, shader);
+    defer allocator.free(code);
+
+    try case.expect(.{
+        .source = code,
+        .expected_outputs = &.{
+            std.mem.asBytes(&[_]i32{ -2, -1, 0, 1 }),
+        },
+    });
+}

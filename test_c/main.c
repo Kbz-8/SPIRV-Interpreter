@@ -1,6 +1,114 @@
 #include <stdio.h>
 #include <SpirvInterpreter.h>
 
+#define CHECK_RESULT(expr) do { \
+	SpvResult check_result = (expr); \
+	if (check_result != SPV_RESULT_SUCCESS) \
+	{ \
+		fprintf(stderr, "%s failed with %d\n", #expr, check_result); \
+		return -1; \
+	} \
+} while (0)
+
+static SpvResult ReadImageFloat4(void* driver_image, SpvDim dim, int x, int y, int z, SpvVec4f* dst)
+{
+	(void)driver_image;
+	(void)dim;
+	(void)x;
+	(void)y;
+	(void)z;
+	(void)dst;
+	return SPV_RESULT_UNSUPPORTED_SPIRV;
+}
+
+static SpvResult ReadImageInt4(void* driver_image, SpvDim dim, int x, int y, int z, SpvVec4u* dst)
+{
+	(void)driver_image;
+	(void)dim;
+	(void)x;
+	(void)y;
+	(void)z;
+	(void)dst;
+	return SPV_RESULT_UNSUPPORTED_SPIRV;
+}
+
+static SpvResult WriteImageFloat4(void* driver_image, SpvDim dim, int x, int y, int z, SpvVec4f src)
+{
+	(void)driver_image;
+	(void)dim;
+	(void)x;
+	(void)y;
+	(void)z;
+	(void)src;
+	return SPV_RESULT_UNSUPPORTED_SPIRV;
+}
+
+static SpvResult WriteImageInt4(void* driver_image, SpvDim dim, int x, int y, int z, SpvVec4u src)
+{
+	(void)driver_image;
+	(void)dim;
+	(void)x;
+	(void)y;
+	(void)z;
+	(void)src;
+	return SPV_RESULT_UNSUPPORTED_SPIRV;
+}
+
+static SpvResult SampleImageFloat4(void* driver_image, void* driver_sampler, SpvDim dim, float x, float y, float z, SpvBool has_lod, float lod, SpvImageOffset offset, SpvVec4f* dst)
+{
+	(void)driver_image;
+	(void)driver_sampler;
+	(void)dim;
+	(void)x;
+	(void)y;
+	(void)z;
+	(void)has_lod;
+	(void)lod;
+	(void)offset;
+	(void)dst;
+	return SPV_RESULT_UNSUPPORTED_SPIRV;
+}
+
+static SpvResult SampleImageInt4(void* driver_image, void* driver_sampler, SpvDim dim, float x, float y, float z, SpvBool has_lod, float lod, SpvImageOffset offset, SpvVec4u* dst)
+{
+	(void)driver_image;
+	(void)driver_sampler;
+	(void)dim;
+	(void)x;
+	(void)y;
+	(void)z;
+	(void)has_lod;
+	(void)lod;
+	(void)offset;
+	(void)dst;
+	return SPV_RESULT_UNSUPPORTED_SPIRV;
+}
+
+static SpvResult SampleImageDref(void* driver_image, void* driver_sampler, SpvDim dim, float x, float y, float z, float dref, SpvBool has_lod, float lod, SpvImageOffset offset, float* dst)
+{
+	(void)driver_image;
+	(void)driver_sampler;
+	(void)dim;
+	(void)x;
+	(void)y;
+	(void)z;
+	(void)dref;
+	(void)has_lod;
+	(void)lod;
+	(void)offset;
+	(void)dst;
+	return SPV_RESULT_UNSUPPORTED_SPIRV;
+}
+
+static SpvResult QueryImageSize(void* driver_image, SpvDim dim, SpvBool arrayed, SpvVec4u* dst)
+{
+	(void)driver_image;
+	(void)dim;
+	(void)arrayed;
+	(void)dst;
+	return SPV_RESULT_UNSUPPORTED_SPIRV;
+}
+
 static const unsigned char shader_source[]  = {
 	0x03, 0x02, 0x23, 0x07, 0x00, 0x00, 0x01, 0x00, 0x82, 0x10, 0x27, 0x00, 0x17, 0x00, 0x00, 0x00,
 	0x00, 0x00, 0x00, 0x00, 0x11, 0x00, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x0e, 0x00, 0x03, 0x00,
@@ -53,24 +161,79 @@ int main(void)
 		return -1;
 	}
 
+	SpvWord binding_result = 0;
+	if (SpvModuleGetBindingResult(module, 0, 0, &binding_result) != SPV_RESULT_NOT_FOUND)
+	{
+		fprintf(stderr, "Unexpected binding lookup result\n");
+		return -1;
+	}
+
+	SpvImageAPI image_api = {
+		.SpvReadImageFloat4 = ReadImageFloat4,
+		.SpvReadImageInt4 = ReadImageInt4,
+		.SpvWriteImageFloat4 = WriteImageFloat4,
+		.SpvWriteImageInt4 = WriteImageInt4,
+		.SpvSampleImageFloat4 = SampleImageFloat4,
+		.SpvSampleImageInt4 = SampleImageInt4,
+		.SpvSampleImageDref = SampleImageDref,
+		.SpvQueryImageSize = QueryImageSize
+	};
+
 	SpvRuntime runtime;
-	if(SpvInitRuntime(&runtime, module, (SpvImageAPI){0}) != SPV_RESULT_SUCCESS)
+	if(SpvInitRuntime(&runtime, module, image_api) != SPV_RESULT_SUCCESS)
 	{
 		fprintf(stderr, "Runtime init failed\n");
 		return -1;
 	}
 
+	SpvRuntime second_runtime;
+	if(SpvInitRuntime(&second_runtime, module, image_api) != SPV_RESULT_SUCCESS)
+	{
+		fprintf(stderr, "Second runtime init failed\n");
+		SpvDeinitRuntime(runtime);
+		return -1;
+	}
+
+	unsigned int spec_value = 64;
+	SpvRuntimeSpecializationEntry spec_entry = {
+		.id = 0,
+		.offset = 0,
+		.size = sizeof(spec_value)
+	};
+	CHECK_RESULT(SpvAddSpecializationInfo(runtime, spec_entry, (const SpvByte*)&spec_value, sizeof(spec_value)));
+	CHECK_RESULT(SpvCopySpecializationConstantsFrom(second_runtime, runtime));
+
 	SpvWord main_entry_index;
-	SpvGetEntryPointByName(runtime, "main", &main_entry_index);
-	SpvCallEntryPoint(runtime, main_entry_index);
+	CHECK_RESULT(SpvGetEntryPointByName(runtime, "main", &main_entry_index));
+	CHECK_RESULT(SpvCallEntryPoint(runtime, main_entry_index));
 
 	float output[4];
 	SpvWord output_result;
-	SpvGetResultByName(runtime, "color", &output_result);
-	SpvReadOutput(runtime, (SpvByte*)output, sizeof(output), output_result);
+	CHECK_RESULT(SpvGetResultByName(runtime, "color", &output_result));
+	CHECK_RESULT(SpvReadOutput(runtime, (SpvByte*)output, sizeof(output), output_result));
+
+	SpvSize output_size = 0;
+	SpvPrimitiveType primitive_type;
+	CHECK_RESULT(SpvGetResultMemorySize(runtime, output_result, &output_size));
+	CHECK_RESULT(SpvGetResultPrimitiveType(runtime, output_result, &primitive_type));
+	if (output_size != sizeof(output) || primitive_type != SPV_PRIMITIVE_FLOAT || primitive_type == SPV_PRIMITIVE_SINT || primitive_type == SPV_PRIMITIVE_UINT)
+	{
+		fprintf(stderr, "Unexpected output metadata\n");
+		SpvDeinitRuntime(second_runtime);
+		SpvDeinitRuntime(runtime);
+		SpvDeinitModule(module);
+		return -1;
+	}
+
+	float dx[4] = { 1.0f, 2.0f, 3.0f, 4.0f };
+	float dy[4] = { 5.0f, 6.0f, 7.0f, 8.0f };
+	CHECK_RESULT(SpvSetDerivativeFromMemory(runtime, output_result, (const SpvByte*)dx, sizeof(dx), (const SpvByte*)dy, sizeof(dy)));
+	CHECK_RESULT(SpvCopyDerivative(runtime, output_result, output_result));
+	SpvClearDerivative(runtime, output_result);
 
 	printf("Output: Vec4[%f, %f, %f, %f]\n", output[0], output[1], output[2], output[3]);
 
+	SpvDeinitRuntime(second_runtime);
 	SpvDeinitRuntime(runtime);
 	SpvDeinitModule(module);
 	return 0;

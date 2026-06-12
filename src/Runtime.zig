@@ -81,13 +81,20 @@ pub fn Vec4(comptime T: type) type {
     };
 }
 
+pub const ImageOffset = struct {
+    x: i32 = 0,
+    y: i32 = 0,
+    z: i32 = 0,
+};
+
 pub const ImageAPI = struct {
     readImageFloat4: *const fn (driver_image: *anyopaque, dim: spv.SpvDim, x: i32, y: i32, z: i32) RuntimeError!Vec4(f32),
     readImageInt4: *const fn (driver_image: *anyopaque, dim: spv.SpvDim, x: i32, y: i32, z: i32) RuntimeError!Vec4(u32),
     writeImageFloat4: *const fn (driver_image: *anyopaque, dim: spv.SpvDim, x: i32, y: i32, z: i32, pixel: Vec4(f32)) RuntimeError!void,
     writeImageInt4: *const fn (driver_image: *anyopaque, dim: spv.SpvDim, x: i32, y: i32, z: i32, pixel: Vec4(u32)) RuntimeError!void,
-    sampleImageFloat4: *const fn (driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32, lod: ?f32) RuntimeError!Vec4(f32),
-    sampleImageInt4: *const fn (driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32, lod: ?f32) RuntimeError!Vec4(u32),
+    sampleImageFloat4: *const fn (driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32, lod: ?f32, offset: ImageOffset) RuntimeError!Vec4(f32),
+    sampleImageInt4: *const fn (driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32, lod: ?f32, offset: ImageOffset) RuntimeError!Vec4(u32),
+    sampleImageDref: *const fn (driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32, dref: f32, lod: ?f32, offset: ImageOffset) RuntimeError!f32,
     queryImageSize: *const fn (driver_image: *anyopaque, dim: spv.SpvDim, arrayed: bool) RuntimeError!Vec4(u32),
 };
 
@@ -285,13 +292,6 @@ pub fn getResultPrimitiveType(self: *const Self, result: SpvWord) RuntimeError!P
     if (result >= self.results.len)
         return RuntimeError.OutOfBounds;
     return (try self.results[result].getConstValue()).resolvePrimitiveType();
-}
-
-pub fn resultIsInteger(self: *const Self, result: SpvWord) bool {
-    return switch (self.getResultPrimitiveType(result) catch return false) {
-        .SInt, .UInt => true,
-        else => false,
-    };
 }
 
 pub fn dumpResultsTable(self: *Self, allocator: std.mem.Allocator, writer: *std.Io.Writer) RuntimeError!void {
@@ -618,17 +618,10 @@ pub fn resetInvocation(self: *Self, allocator: std.mem.Allocator) void {
         if (result.variant) |*variant| {
             switch (variant.*) {
                 .AccessChain => |*access_chain| {
-                    access_chain.value.flushPtr(allocator) catch {};
-                },
-                else => {},
-            }
-        }
-    }
-
-    for (self.results) |*result| {
-        if (result.variant) |*variant| {
-            switch (variant.*) {
-                .AccessChain => |*access_chain| {
+                    if (std.mem.allEqual(u8, std.mem.asBytes(&access_chain.value), 0xaa)) {
+                        result.variant = null;
+                        continue;
+                    }
                     access_chain.value.deinit(allocator);
                     allocator.free(access_chain.indexes);
                     result.variant = null;
@@ -645,6 +638,7 @@ pub fn resetInvocation(self: *Self, allocator: std.mem.Allocator) void {
 }
 
 fn reset(self: *Self) void {
+    self.it = self.mod.it;
     self.function_stack.clearRetainingCapacity();
     self.current_parameter_index = 0;
     self.current_function = null;

@@ -190,6 +190,12 @@ try rt.addSpecializationInfo(
 
 Add specialization constants before calling the entry point.
 
+To copy specialization constants between runtimes:
+
+```zig
+try rt.copySpecializationConstantsFrom(allocator, &source_rt);
+```
+
 ## Entry points and barriers
 
 For most shaders, `callEntryPoint` is enough:
@@ -235,13 +241,50 @@ const image_api = spv.Runtime.ImageAPI{
     .writeImageInt4 = writeImageInt4,
     .sampleImageFloat4 = sampleImageFloat4,
     .sampleImageInt4 = sampleImageInt4,
+    .sampleImageDref = sampleImageDref,
     .queryImageSize = queryImageSize,
 };
 
 var rt = try spv.Runtime.init(allocator, &module, image_api);
 ```
 
-Each callback receives your driver-side image or sampler pointer and returns either a `Vec4` value or an error.
+Sample callbacks receive optional explicit LOD and an integer texel offset:
+
+```zig
+fn sampleImageFloat4(
+    driver_image: *anyopaque,
+    driver_sampler: *anyopaque,
+    dim: spv.SpvDim,
+    x: f32,
+    y: f32,
+    z: f32,
+    lod: ?f32,
+    offset: spv.Runtime.ImageOffset,
+) spv.Runtime.RuntimeError!spv.Runtime.Vec4(f32) {
+    _ = .{ driver_image, driver_sampler, dim, x, y, z, lod, offset };
+    return .{ .x = 0, .y = 0, .z = 0, .w = 1 };
+}
+```
+
+Depth-comparison samplers call `sampleImageDref` and return a scalar `f32`.
+
+## Derivatives
+
+Fragment shaders using derivative operations need derivative data on the source result:
+
+```zig
+try rt.setDerivativeFromMemory(
+    allocator,
+    input_result,
+    std.mem.asBytes(&dx),
+    std.mem.asBytes(&dy),
+);
+
+try rt.copyDerivative(allocator, dst_result, input_result);
+rt.clearDerivative(allocator, dst_result);
+```
+
+For low-level integrations, `setDerivative` accepts interpreter `Value` objects directly.
 
 ---
 
@@ -294,7 +337,7 @@ ffi/SpirvInterpreter.h
 
 static const unsigned char shader_source[]  = {
     /* Shader bytecode */
-}
+};
 
 int main(void)
 {
@@ -310,7 +353,7 @@ int main(void)
      * A zeroed image API is only safe when the shader does not execute image
      * load/store/sample/query operations.
      */
-    if(SpvInitRuntime(&runtime, module) != SPV_RESULT_SUCCESS)
+    if(SpvInitRuntime(&runtime, module, (SpvImageAPI){0}) != SPV_RESULT_SUCCESS)
         return -1;
 
     SpvWord main_entry_index;
@@ -337,25 +380,13 @@ Write by result id:
 ```c
 SpvWord pos_result = 0;
 
-if (!CheckSpv(
-        SpvGetResultByName(runtime, "pos", &pos_result),
-        "SpvGetResultByName"))
-{
+if (SpvGetResultByName(runtime, "pos", &pos_result) != SPV_RESULT_SUCCESS)
     return 1;
-}
 
 float pos[2] = {10.0f, 20.0f};
 
-if (!CheckSpv(
-        SpvWriteInput(
-            runtime,
-            (const SpvByte*)pos,
-            sizeof(pos),
-            pos_result),
-        "SpvWriteInput"))
-{
+if (SpvWriteInput(runtime, (const SpvByte*)pos, sizeof(pos), pos_result) != SPV_RESULT_SUCCESS)
     return 1;
-}
 ```
 
 Write by input location:
@@ -363,10 +394,8 @@ Write by input location:
 ```c
 float uv[2] = {0.25f, 0.75f};
 
-if (!SpvWriteInputLocation(runtime, (const SpvByte*)uv, sizeof(uv), 0))
-{
+if (SpvWriteInputLocation(runtime, (const SpvByte*)uv, sizeof(uv), 0) != SPV_RESULT_SUCCESS)
     return 1;
-}
 ```
 
 ## Reading outputs from C
@@ -411,7 +440,7 @@ PushConstants push_constants = {
     .scale = 2.0f,
 };
 
-SpvPopulatePushConstants(runtime, (const SpvByte*)&push_constants, sizeof(push_constants);
+SpvPopulatePushConstants(runtime, (const SpvByte*)&push_constants, sizeof(push_constants));
 ```
 
 ## Descriptor sets from C
@@ -425,6 +454,13 @@ SpvWriteDescriptorSet(runtime, (const SpvByte*)buffer, buffer_size,
 ```
 
 For non-array descriptors, use descriptor index `0`.
+
+You can query a descriptor binding from a module:
+
+```c
+SpvWord result = 0;
+SpvResult status = SpvModuleGetBindingResult(module, 0, 1, &result);
+```
 
 After a shader writes through descriptor-backed memory, flush descriptor sets before reading the backing data:
 
@@ -448,6 +484,30 @@ SpvAddSpecializationInfo(runtime, entry, (const SpvByte*)&value, sizeof(value));
 ```
 
 Add specialization constants before calling the entry point.
+
+To duplicate specialization constants from another runtime:
+
+```c
+SpvCopySpecializationConstantsFrom(runtime, source_runtime);
+```
+
+## Derivatives from C
+
+```c
+float dx[4] = {1.0f, 0.0f, 0.0f, 0.0f};
+float dy[4] = {0.0f, 1.0f, 0.0f, 0.0f};
+
+SpvSetDerivativeFromMemory(
+    runtime,
+    result,
+    (const SpvByte*)dx,
+    sizeof(dx),
+    (const SpvByte*)dy,
+    sizeof(dy));
+
+SpvCopyDerivative(runtime, dst_result, result);
+SpvClearDerivative(runtime, dst_result);
+```
 
 ## Barriers from C
 
@@ -499,6 +559,67 @@ static SpvResult ReadImageFloat4(
 }
 ```
 
+Sampling callbacks include an explicit-LOD flag/value and an offset:
+
+```c
+static SpvResult SampleImageFloat4(
+    void* driver_image,
+    void* driver_sampler,
+    SpvDim dim,
+    float x,
+    float y,
+    float z,
+    SpvBool has_lod,
+    float lod,
+    SpvImageOffset offset,
+    SpvVec4f* dst)
+{
+    (void)driver_image;
+    (void)driver_sampler;
+    (void)dim;
+    (void)has_lod;
+    (void)lod;
+    (void)offset;
+
+    dst->x = x;
+    dst->y = y;
+    dst->z = z;
+    dst->w = 1.0f;
+    return SPV_RESULT_SUCCESS;
+}
+```
+
+Depth-comparison samplers add `dref` and write one `float`:
+
+```c
+static SpvResult SampleImageDref(
+    void* driver_image,
+    void* driver_sampler,
+    SpvDim dim,
+    float x,
+    float y,
+    float z,
+    float dref,
+    SpvBool has_lod,
+    float lod,
+    SpvImageOffset offset,
+    float* dst)
+{
+    (void)driver_image;
+    (void)driver_sampler;
+    (void)dim;
+    (void)x;
+    (void)y;
+    (void)z;
+    (void)has_lod;
+    (void)lod;
+    (void)offset;
+
+    *dst = dref;
+    return SPV_RESULT_SUCCESS;
+}
+```
+
 The image API table contains these callbacks:
 
 ```c
@@ -509,6 +630,7 @@ SpvImageAPI image_api = {
     .SpvWriteImageInt4 = WriteImageInt4,
     .SpvSampleImageFloat4 = SampleImageFloat4,
     .SpvSampleImageInt4 = SampleImageInt4,
+    .SpvSampleImageDref = SampleImageDref,
     .SpvQueryImageSize = QueryImageSize,
 };
 ```

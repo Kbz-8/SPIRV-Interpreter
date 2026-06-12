@@ -245,9 +245,19 @@ test "Maths matrices" {
                         e.* = switch (op.key) {
                             .Add => b + r,
                             .Sub => b - r,
-                            .Mul => b * r,
+                            .Mul => 0,
                             else => unreachable,
                         };
+                    }
+                }
+
+                if (op.key == .Mul) {
+                    for (0..L) |column_index| {
+                        for (0..L) |row_index| {
+                            for (0..L) |inner_index| {
+                                expected.val[column_index][row_index] += base.val[inner_index][row_index] * ratio.val[column_index][inner_index];
+                            }
+                        }
                     }
                 }
 
@@ -307,11 +317,12 @@ test "Maths matrices with vectors" {
             const ratio: case.Vec(L, T) = .{ .val = case.random(@Vector(L, T)) };
             var expected: @Vector(L, T) = undefined;
 
-            expected[0] = (base.val[0][0] * ratio.val[0]) + (base.val[0][1] * ratio.val[1]) + (base.val[0][2] * ratio.val[2]) + if (L == 4) (base.val[0][3] * ratio.val[3]) else 0.0;
-            expected[1] = (base.val[1][0] * ratio.val[0]) + (base.val[1][1] * ratio.val[1]) + (base.val[1][2] * ratio.val[2]) + if (L == 4) (base.val[1][3] * ratio.val[3]) else 0.0;
-            expected[2] = (base.val[2][0] * ratio.val[0]) + (base.val[2][1] * ratio.val[1]) + (base.val[2][2] * ratio.val[2]) + if (L == 4) (base.val[2][3] * ratio.val[3]) else 0.0;
-            if (L == 4)
-                expected[3] = (base.val[3][0] * ratio.val[0]) + (base.val[3][1] * ratio.val[1]) + (base.val[3][2] * ratio.val[2]) + (base.val[3][3] * ratio.val[3]);
+            expected = @splat(0);
+            inline for (0..L) |row_index| {
+                inline for (0..L) |column_index| {
+                    expected[row_index] += base.val[column_index][row_index] * ratio.val[column_index];
+                }
+            }
 
             const shader = try std.fmt.allocPrint(
                 allocator,
@@ -354,4 +365,37 @@ test "Maths matrices with vectors" {
             });
         }
     }
+}
+
+test "Swizzle" {
+    const allocator = std.testing.allocator;
+    const shader =
+        \\ [nzsl_version("1.1")]
+        \\ module;
+        \\
+        \\ struct FragOut
+        \\ {
+        \\     [location(0)] color: vec4[f32]
+        \\ }
+        \\
+        \\ [entry(frag)]
+        \\ fn main() -> FragOut
+        \\ {
+        \\     let v = vec4[f32](1.0, 2.0, 3.0, 4.0);
+        \\     let a = v.yx;
+        \\     let b = v.wz;
+        \\     let output: FragOut;
+        \\     output.color = vec4[f32](a.x, a.y, b.x, b.y);
+        \\     return output;
+        \\ }
+    ;
+    const code = try compileNzsl(allocator, shader);
+    defer allocator.free(code);
+
+    try case.expect(.{
+        .source = code,
+        .expected_outputs = &.{
+            std.mem.asBytes(&[_]f32{ 2.0, 1.0, 4.0, 3.0 }),
+        },
+    });
 }

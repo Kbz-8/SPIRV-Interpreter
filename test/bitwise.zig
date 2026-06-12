@@ -157,3 +157,42 @@ test "Bitwise vectors" {
         }
     }
 }
+
+test "Bit mix" {
+    const allocator = std.testing.allocator;
+    const shader =
+        \\ [nzsl_version("1.1")]
+        \\ module;
+        \\
+        \\ struct FragOut
+        \\ {
+        \\     [location(0)] color: vec4[u32]
+        \\ }
+        \\
+        \\ [entry(frag)]
+        \\ fn main() -> FragOut
+        \\ {
+        \\     let a: u32 = 0xF0F0_F0F0;
+        \\     let b: u32 = 0x0F0F_00FF;
+        \\     let c = ((a & b) << 4) | ((a ^ b) >> 8);
+        \\     let d = (c & 0xFFFF) ^ 0x55AA;
+        \\     let output: FragOut;
+        \\     output.color = vec4[u32](a & b, a | b, c, d);
+        \\     return output;
+        \\ }
+    ;
+    const code = try compileNzsl(allocator, shader);
+    defer allocator.free(code);
+
+    try case.expect(.{
+        .source = code,
+        .expected_outputs = &.{
+            std.mem.asBytes(&[_]u32{
+                0x0000_00F0,
+                0xFFFF_F0FF,
+                ((0xF0F0_F0F0 & 0x0F0F_00FF) << 4) | ((0xF0F0_F0F0 ^ 0x0F0F_00FF) >> 8),
+                ((((0xF0F0_F0F0 & 0x0F0F_00FF) << 4) | ((0xF0F0_F0F0 ^ 0x0F0F_00FF) >> 8)) & 0xFFFF) ^ 0x55AA,
+            }),
+        },
+    });
+}

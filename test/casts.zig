@@ -116,3 +116,35 @@ test "Primitives bitcasts" {
         });
     }
 }
+
+test "Cast chain" {
+    const allocator = std.testing.allocator;
+    const shader =
+        \\ [nzsl_version("1.1")]
+        \\ module;
+        \\
+        \\ struct FragOut
+        \\ {
+        \\     [location(0)] color: vec4[i32]
+        \\ }
+        \\
+        \\ [entry(frag)]
+        \\ fn main() -> FragOut
+        \\ {
+        \\     let v = vec4[f32](1.25, 2.75, -3.25, 4.5);
+        \\     let a = vec4[i32](v);
+        \\     let output: FragOut;
+        \\     output.color = vec4[i32](a.x, a.y, a.z, a.w);
+        \\     return output;
+        \\ }
+    ;
+    const code = try compileNzsl(allocator, shader);
+    defer allocator.free(code);
+
+    try case.expect(.{
+        .source = code,
+        .expected_outputs = &.{
+            std.mem.asBytes(&[_]i32{ 1, 2, -3, 4 }),
+        },
+    });
+}
