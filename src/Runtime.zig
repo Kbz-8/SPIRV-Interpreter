@@ -148,6 +148,40 @@ pub fn init(allocator: std.mem.Allocator, module: *Module, image_api: ImageAPI) 
     };
 }
 
+pub fn initFrom(allocator: std.mem.Allocator, other: *const Self, image_api: ImageAPI) RuntimeError!Self {
+    const results = allocator.alloc(Result, other.results.len) catch return RuntimeError.OutOfMemory;
+    var initialized: usize = 0;
+    errdefer {
+        for (results[0..initialized]) |*result| {
+            result.deinit(allocator);
+        }
+        allocator.free(results);
+    }
+
+    for (results, other.results) |*new_result, result| {
+        new_result.* = result.dupe(allocator) catch return RuntimeError.OutOfMemory;
+        initialized += 1;
+    }
+
+    var self: Self = .{
+        .mod = other.mod,
+        .it = other.mod.it,
+        .results = results,
+        .current_parameter_index = 0,
+        .current_function = null,
+        .function_stack = .empty,
+        .current_label = null,
+        .previous_label = null,
+        .specialization_constants = .empty,
+        .derivatives = .empty,
+        .image_api = image_api,
+    };
+    errdefer self.deinit(allocator);
+
+    try self.copySpecializationConstantsFrom(allocator, other);
+    return self;
+}
+
 pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
     for (self.results) |*result| {
         result.deinit(allocator);

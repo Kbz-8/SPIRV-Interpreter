@@ -266,6 +266,32 @@ export fn SpvInitRuntime(rt: **RuntimeWrapper, module: *spv.Module, image_api: I
     return .Success;
 }
 
+export fn SpvInitRuntimeFrom(rt: **RuntimeWrapper, other: *RuntimeWrapper, image_api: ImageAPI) callconv(.c) ffi.Result {
+    const allocator = std.heap.c_allocator;
+
+    rt.* = allocator.create(RuntimeWrapper) catch return .OutOfMemory;
+    rt.*.image_api = image_api;
+
+    rt.*.rt = spv.Runtime.initFrom(
+        allocator,
+        &other.rt,
+        .{
+            .readImageFloat4 = ImageAPIBridge.readImageFloat4,
+            .readImageInt4 = ImageAPIBridge.readImageInt4,
+            .writeImageFloat4 = ImageAPIBridge.writeImageFloat4,
+            .writeImageInt4 = ImageAPIBridge.writeImageInt4,
+            .sampleImageFloat4 = ImageAPIBridge.sampleImageFloat4,
+            .sampleImageInt4 = ImageAPIBridge.sampleImageInt4,
+            .sampleImageDref = ImageAPIBridge.sampleImageDref,
+            .queryImageSize = ImageAPIBridge.queryImageSize,
+        },
+    ) catch |err| {
+        allocator.destroy(rt.*);
+        return toCResult(err);
+    };
+    return .Success;
+}
+
 export fn SpvDeinitRuntime(rt: *RuntimeWrapper) callconv(.c) void {
     const allocator = std.heap.c_allocator;
     rt.rt.deinit(allocator);

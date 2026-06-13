@@ -535,6 +535,7 @@ SPV_API SpvModuleReflectionInfos SpvModuleGetReflectionInfos(SpvModule module);
 SPV_API SpvResult SpvModuleGetBindingResult(SpvModule module, SpvWord set, SpvWord binding, SpvWord* result);
 
 SPV_API SpvResult SpvInitRuntime(SpvRuntime* runtime, SpvModule module, SpvImageAPI image_api);
+SPV_API SpvResult SpvInitRuntimeFrom(SpvRuntime* runtime, SpvRuntime other, SpvImageAPI image_api);
 SPV_API void SpvDeinitRuntime(SpvRuntime runtime);
 
 SPV_API SpvResult SpvFlushDescriptorSets(SpvRuntime runtime);
