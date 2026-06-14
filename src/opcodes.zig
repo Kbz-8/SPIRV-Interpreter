@@ -70,6 +70,9 @@ const BitOp = enum {
 
 const ImageOp = enum {
     Fetch,
+    QueryLevels,
+    QueryLod,
+    QuerySamples,
     QuerySize,
     QuerySizeLod,
     Read,
@@ -199,6 +202,9 @@ pub const SetupDispatcher = block: {
         .ISubBorrow = autoSetupConstant,
         .Image = autoSetupConstant,
         .ImageFetch = autoSetupConstant,
+        .ImageQueryLevels = autoSetupConstant,
+        .ImageQueryLod = opDerivativeSetup,
+        .ImageQuerySamples = autoSetupConstant,
         .ImageQuerySize = autoSetupConstant,
         .ImageQuerySizeLod = autoSetupConstant,
         .ImageRead = autoSetupConstant,
@@ -373,6 +379,9 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ISubBorrow)]             = opISubBorrow;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Image)]                  = ImageEngine(.Resolve).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageFetch)]             = ImageEngine(.Fetch).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageQueryLevels)]       = ImageEngine(.QueryLevels).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageQueryLod)]          = ImageEngine(.QueryLod).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageQuerySamples)]      = ImageEngine(.QuerySamples).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageQuerySize)]         = ImageEngine(.QuerySize).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageQuerySizeLod)]      = ImageEngine(.QuerySizeLod).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageRead)]              = ImageEngine(.Read).op;
@@ -1397,6 +1406,7 @@ fn ImageEngine(comptime Op: ImageOp) type {
 
         const ParsedImageOperands = struct {
             lod: ?f32 = null,
+            image_lod: ?i32 = null,
             offset: Runtime.ImageOffset = .{},
         };
 
@@ -1407,7 +1417,9 @@ fn ImageEngine(comptime Op: ImageOp) type {
                 _ = try rt.it.next();
             }
             if (imageOperandPresent(image_operands, .LodMask)) {
-                parsed.lod = try readFloatLane(try rt.results[try rt.it.next()].getValue(), 0);
+                const lod_value = try rt.results[try rt.it.next()].getValue();
+                parsed.lod = try readSampleCoordLane(lod_value, 0);
+                parsed.image_lod = readImageQueryLod(lod_value) catch null;
             }
             if (imageOperandPresent(image_operands, .GradMask)) {
                 _ = try rt.it.next();
@@ -1497,12 +1509,12 @@ fn ImageEngine(comptime Op: ImageOp) type {
             }
         }
 
-        fn readImage(rt: *Runtime, dst: *Value, driver_image: *anyopaque, dim: spv.SpvDim, x: i32, y: i32, z: i32) RuntimeError!void {
+        fn readImage(rt: *Runtime, dst: *Value, driver_image: *anyopaque, dim: spv.SpvDim, x: i32, y: i32, z: i32, lod: ?i32) RuntimeError!void {
             switch (dst.*) {
                 .Vector4f32,
                 .Vector3f32,
                 .Vector2f32,
-                => try writeFloatTexel(dst, try rt.image_api.readImageFloat4(driver_image, dim, x, y, z)),
+                => try writeFloatTexel(dst, try rt.image_api.readImageFloat4(driver_image, dim, x, y, z, lod)),
 
                 .Vector4i32,
                 .Vector3i32,
@@ -1510,13 +1522,13 @@ fn ImageEngine(comptime Op: ImageOp) type {
                 .Vector4u32,
                 .Vector3u32,
                 .Vector2u32,
-                => try writeIntTexel(dst, try rt.image_api.readImageInt4(driver_image, dim, x, y, z)),
+                => try writeIntTexel(dst, try rt.image_api.readImageInt4(driver_image, dim, x, y, z, lod)),
 
                 .Vector => |lanes| {
                     if (lanes.len == 0) return RuntimeError.InvalidSpirV;
                     switch (lanes[0]) {
-                        .Float => try writeFloatTexel(dst, try rt.image_api.readImageFloat4(driver_image, dim, x, y, z)),
-                        .Int => try writeIntTexel(dst, try rt.image_api.readImageInt4(driver_image, dim, x, y, z)),
+                        .Float => try writeFloatTexel(dst, try rt.image_api.readImageFloat4(driver_image, dim, x, y, z, lod)),
+                        .Int => try writeIntTexel(dst, try rt.image_api.readImageInt4(driver_image, dim, x, y, z, lod)),
                         else => return RuntimeError.InvalidValueType,
                     }
                 },
@@ -1673,8 +1685,15 @@ fn ImageEngine(comptime Op: ImageOp) type {
             }
         }
 
-        fn queryImageSize(rt: *Runtime, dst: *Value, image_operand: ImageOperand) RuntimeError!void {
-            const size = try rt.image_api.queryImageSize(image_operand.driver_image, image_operand.dim, image_operand.arrayed);
+        fn readImageQueryLod(value: *const Value) RuntimeError!i32 {
+            return switch (value.*) {
+                .Int => |i| if (i.is_signed) i.value.sint32 else @intCast(i.value.uint32),
+                else => return RuntimeError.InvalidValueType,
+            };
+        }
+
+        fn queryImageSize(rt: *Runtime, dst: *Value, image_operand: ImageOperand, lod: ?i32) RuntimeError!void {
+            const size = try rt.image_api.queryImageSize(image_operand.driver_image, image_operand.dim, image_operand.arrayed, lod);
             switch (dst.*) {
                 .Int => |*v| v.value.uint32 = size.x,
                 .Vector2i32 => |*v| v.* = .{ @bitCast(size.x), @bitCast(size.y) },
@@ -1689,6 +1708,57 @@ fn ImageEngine(comptime Op: ImageOp) type {
                         if (i >= values.len) return RuntimeError.InvalidSpirV;
                         switch (lane.*) {
                             .Int => |*int| int.value.uint32 = values[i],
+                            else => return RuntimeError.InvalidValueType,
+                        }
+                    }
+                },
+                else => return RuntimeError.InvalidValueType,
+            }
+        }
+
+        fn queryImageSamples(rt: *Runtime, dst: *Value, image_operand: ImageOperand) RuntimeError!void {
+            const samples = try rt.image_api.queryImageSamples(image_operand.driver_image);
+            switch (dst.*) {
+                .Int => |*v| v.value.uint32 = samples,
+                else => return RuntimeError.InvalidValueType,
+            }
+        }
+
+        fn queryImageLevels(rt: *Runtime, dst: *Value, image_operand: ImageOperand) RuntimeError!void {
+            const levels = try rt.image_api.queryImageLevels(image_operand.driver_image);
+            switch (dst.*) {
+                .Int => |*v| v.value.uint32 = levels,
+                else => return RuntimeError.InvalidValueType,
+            }
+        }
+
+        fn queryImageLod(rt: *Runtime, dst: *Value, coordinate_id: SpvWord, image_operand: SampledImageOperand) RuntimeError!void {
+            const coord_derivative = rt.derivatives.get(coordinate_id) orelse return RuntimeError.InvalidValueType;
+            const lod = try rt.image_api.queryImageLod(image_operand.driver_image, image_operand.driver_sampler, image_operand.dim, .{
+                .dx = .{
+                    .x = try readSampleCoordLane(&coord_derivative.dx, 0),
+                    .y = readSampleCoordLane(&coord_derivative.dx, 1) catch 0.0,
+                    .z = readSampleCoordLane(&coord_derivative.dx, 2) catch 0.0,
+                    .w = readSampleCoordLane(&coord_derivative.dx, 3) catch 0.0,
+                },
+                .dy = .{
+                    .x = try readSampleCoordLane(&coord_derivative.dy, 0),
+                    .y = readSampleCoordLane(&coord_derivative.dy, 1) catch 0.0,
+                    .z = readSampleCoordLane(&coord_derivative.dy, 2) catch 0.0,
+                    .w = readSampleCoordLane(&coord_derivative.dy, 3) catch 0.0,
+                },
+            });
+
+            switch (dst.*) {
+                .Vector2f32 => |*v| v.* = .{ lod.x, lod.y },
+                .Vector3f32 => |*v| v.* = .{ lod.x, lod.y, lod.z },
+                .Vector4f32 => |*v| v.* = .{ lod.x, lod.y, lod.z, lod.w },
+                .Vector => |lanes| {
+                    const values = [_]f32{ lod.x, lod.y, lod.z, lod.w };
+                    for (lanes, 0..) |*lane, i| {
+                        if (i >= values.len) return RuntimeError.InvalidSpirV;
+                        switch (lane.*) {
+                            .Float => |*float| float.value.float32 = values[i],
                             else => return RuntimeError.InvalidValueType,
                         }
                     }
@@ -1729,13 +1799,20 @@ fn ImageEngine(comptime Op: ImageOp) type {
             const result_type_word = try rt.it.next();
             const result_id = try rt.it.next();
             const image = &rt.results[try rt.it.next()];
-            if (comptime Op == .QuerySize or Op == .QuerySizeLod) {
+            if (comptime Op == .QuerySize or Op == .QuerySizeLod or Op == .QuerySamples or Op == .QueryLevels) {
                 const image_operand = try resolveImageForQuery(image, rt);
-                if (comptime Op == .QuerySizeLod) {
-                    _ = try rt.it.next(); // LOD operand; ImageAPI currently exposes base size only.
-                }
                 const dst = try rt.results[result_id].getValue();
-                return try queryImageSize(rt, dst, image_operand);
+                if (comptime Op == .QuerySamples) {
+                    return try queryImageSamples(rt, dst, image_operand);
+                }
+                if (comptime Op == .QueryLevels) {
+                    return try queryImageLevels(rt, dst, image_operand);
+                }
+                var lod: ?i32 = null;
+                if (comptime Op == .QuerySizeLod) {
+                    lod = try readImageQueryLod(try rt.results[try rt.it.next()].getValue());
+                }
+                return try queryImageSize(rt, dst, image_operand, lod);
             }
 
             const coordinate_id = try rt.it.next();
@@ -1743,15 +1820,22 @@ fn ImageEngine(comptime Op: ImageOp) type {
             const dst = try rt.results[result_id].getValue();
 
             switch (Op) {
+                .QueryLod => {
+                    const sampled_image_operand = try resolveSampledImage(image, rt);
+                    return try queryImageLod(rt, dst, coordinate_id, sampled_image_operand);
+                },
+
                 .Fetch,
                 .Read,
                 => {
                     const image_operand = try resolveImage(image, rt);
-                    const x = try readStorageCoordLane(coordinate, 0);
-                    const y = readStorageCoordLane(coordinate, 1) catch 0;
-                    const z = readStorageCoordLane(coordinate, 2) catch 0;
+                    const image_operands = if (word_count > 4) try rt.it.next() else 0;
+                    const parsed_operands = try parseImageOperands(rt, image_operands);
+                    const x = try readStorageCoordLane(coordinate, 0) + parsed_operands.offset.x;
+                    const y = (readStorageCoordLane(coordinate, 1) catch 0) + parsed_operands.offset.y;
+                    const z = (readStorageCoordLane(coordinate, 2) catch 0) + parsed_operands.offset.z;
 
-                    try readImage(rt, dst, image_operand.driver_image, image_operand.dim, x, y, z);
+                    try readImage(rt, dst, image_operand.driver_image, image_operand.dim, x, y, z, parsed_operands.image_lod);
                 },
 
                 .SampleImplicitLod,
@@ -1967,7 +2051,7 @@ fn opImageTexelPointer(allocator: std.mem.Allocator, word_count: SpvWord, rt: *R
     const x = try readStorageCoordLaneForTexelPointer(coord, 0);
     const y = readStorageCoordLaneForTexelPointer(coord, 1) catch 0;
     const z = readStorageCoordLaneForTexelPointer(coord, 2) catch 0;
-    const texel = try rt.image_api.readImageInt4(image.driver_image, dim, x, y, z);
+    const texel = try rt.image_api.readImageInt4(image.driver_image, dim, x, y, z, null);
 
     const pointer_type = switch ((try rt.results[result_type].getConstVariant()).*) {
         .Type => |t| switch (t) {
