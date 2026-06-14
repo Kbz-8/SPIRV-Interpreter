@@ -10,101 +10,80 @@
 	} \
 } while (0)
 
-static SpvResult ReadImageFloat4(void* driver_image, SpvDim dim, int x, int y, int z, SpvVec4f* dst)
+static SpvResult ReadImageFloat4(SpvReadImageInfo info, SpvVec4f* dst)
 {
-	(void)driver_image;
-	(void)dim;
-	(void)x;
-	(void)y;
-	(void)z;
+	(void)info;
 	(void)dst;
 	return SPV_RESULT_UNSUPPORTED_SPIRV;
 }
 
-static SpvResult ReadImageInt4(void* driver_image, SpvDim dim, int x, int y, int z, SpvVec4u* dst)
+static SpvResult ReadImageInt4(SpvReadImageInfo info, SpvVec4u* dst)
 {
-	(void)driver_image;
-	(void)dim;
-	(void)x;
-	(void)y;
-	(void)z;
+	(void)info;
 	(void)dst;
 	return SPV_RESULT_UNSUPPORTED_SPIRV;
 }
 
-static SpvResult WriteImageFloat4(void* driver_image, SpvDim dim, int x, int y, int z, SpvVec4f src)
+static SpvResult WriteImageFloat4(SpvWriteImageInfo info, SpvVec4f src)
 {
-	(void)driver_image;
-	(void)dim;
-	(void)x;
-	(void)y;
-	(void)z;
+	(void)info;
 	(void)src;
 	return SPV_RESULT_UNSUPPORTED_SPIRV;
 }
 
-static SpvResult WriteImageInt4(void* driver_image, SpvDim dim, int x, int y, int z, SpvVec4u src)
+static SpvResult WriteImageInt4(SpvWriteImageInfo info, SpvVec4u src)
 {
-	(void)driver_image;
-	(void)dim;
-	(void)x;
-	(void)y;
-	(void)z;
+	(void)info;
 	(void)src;
 	return SPV_RESULT_UNSUPPORTED_SPIRV;
 }
 
-static SpvResult SampleImageFloat4(void* driver_image, void* driver_sampler, SpvDim dim, float x, float y, float z, SpvBool has_lod, float lod, SpvImageOffset offset, SpvVec4f* dst)
+static SpvResult SampleImageFloat4(SpvSampleImageInfo info, SpvVec4f* dst)
 {
-	(void)driver_image;
-	(void)driver_sampler;
-	(void)dim;
-	(void)x;
-	(void)y;
-	(void)z;
-	(void)has_lod;
-	(void)lod;
-	(void)offset;
+	(void)info;
 	(void)dst;
 	return SPV_RESULT_UNSUPPORTED_SPIRV;
 }
 
-static SpvResult SampleImageInt4(void* driver_image, void* driver_sampler, SpvDim dim, float x, float y, float z, SpvBool has_lod, float lod, SpvImageOffset offset, SpvVec4u* dst)
+static SpvResult SampleImageInt4(SpvSampleImageInfo info, SpvVec4u* dst)
 {
-	(void)driver_image;
-	(void)driver_sampler;
-	(void)dim;
-	(void)x;
-	(void)y;
-	(void)z;
-	(void)has_lod;
-	(void)lod;
-	(void)offset;
+	(void)info;
 	(void)dst;
 	return SPV_RESULT_UNSUPPORTED_SPIRV;
 }
 
-static SpvResult SampleImageDref(void* driver_image, void* driver_sampler, SpvDim dim, float x, float y, float z, float dref, SpvBool has_lod, float lod, SpvImageOffset offset, float* dst)
+static SpvResult SampleImageDref(SpvSampleImageInfo info, float dref, float* dst)
 {
-	(void)driver_image;
-	(void)driver_sampler;
-	(void)dim;
-	(void)x;
-	(void)y;
-	(void)z;
+	(void)info;
 	(void)dref;
-	(void)has_lod;
-	(void)lod;
-	(void)offset;
 	(void)dst;
 	return SPV_RESULT_UNSUPPORTED_SPIRV;
 }
 
-static SpvResult QueryImageSize(void* driver_image, SpvDim dim, SpvBool arrayed, SpvVec4u* dst)
+static SpvResult QueryImageSize(SpvQueryImageInfo info, SpvVec4u* dst)
+{
+	(void)info;
+	(void)dst;
+	return SPV_RESULT_UNSUPPORTED_SPIRV;
+}
+
+static SpvResult QueryImageLevels(void* driver_image, unsigned long* dst)
 {
 	(void)driver_image;
-	(void)dim;
-	(void)arrayed;
+	(void)dst;
+	return SPV_RESULT_UNSUPPORTED_SPIRV;
+}
+
+static SpvResult QueryImageSamples(void* driver_image, unsigned long* dst)
+{
+	(void)driver_image;
+	(void)dst;
+	return SPV_RESULT_UNSUPPORTED_SPIRV;
+}
+
+static SpvResult QueryImageLod(SpvQueryImageLodInfo info, SpvVec4f* dst)
+{
+	(void)info;
 	(void)dst;
 	return SPV_RESULT_UNSUPPORTED_SPIRV;
 }
@@ -176,7 +155,10 @@ int main(void)
 		.SpvSampleImageFloat4 = SampleImageFloat4,
 		.SpvSampleImageInt4 = SampleImageInt4,
 		.SpvSampleImageDref = SampleImageDref,
-		.SpvQueryImageSize = QueryImageSize
+		.SpvQueryImageSize = QueryImageSize,
+		.SpvQueryImageLevels = QueryImageLevels,
+		.SpvQueryImageSamples = QueryImageSamples,
+		.SpvQueryImageLod = QueryImageLod
 	};
 
 	SpvRuntime runtime;

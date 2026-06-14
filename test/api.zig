@@ -16,11 +16,11 @@ const ImageState = struct {
     last_offset: spv.Runtime.ImageOffset = .{},
 };
 
-fn readImageFloat4(_: *anyopaque, _: spv.spv.SpvDim, _: i32, _: i32, _: i32) spv.Runtime.RuntimeError!spv.Runtime.Vec4(f32) {
+fn readImageFloat4(_: *anyopaque, _: spv.spv.SpvDim, _: i32, _: i32, _: i32, _: ?i32) spv.Runtime.RuntimeError!spv.Runtime.Vec4(f32) {
     return spv.Runtime.RuntimeError.UnsupportedSpirV;
 }
 
-fn readImageInt4(_: *anyopaque, _: spv.spv.SpvDim, _: i32, _: i32, _: i32) spv.Runtime.RuntimeError!spv.Runtime.Vec4(u32) {
+fn readImageInt4(_: *anyopaque, _: spv.spv.SpvDim, _: i32, _: i32, _: i32, _: ?i32) spv.Runtime.RuntimeError!spv.Runtime.Vec4(u32) {
     return spv.Runtime.RuntimeError.UnsupportedSpirV;
 }
 
@@ -61,7 +61,19 @@ fn sampleImageDref(driver_image: *anyopaque, driver_sampler: *anyopaque, _: spv.
     return dref + x + y;
 }
 
-fn queryImageSize(_: *anyopaque, _: spv.spv.SpvDim, _: bool) spv.Runtime.RuntimeError!spv.Runtime.Vec4(u32) {
+fn queryImageSize(_: *anyopaque, _: spv.spv.SpvDim, _: bool, _: ?i32) spv.Runtime.RuntimeError!spv.Runtime.Vec4(u32) {
+    return spv.Runtime.RuntimeError.UnsupportedSpirV;
+}
+
+fn queryImageLevels(_: *anyopaque) spv.Runtime.RuntimeError!u32 {
+    return spv.Runtime.RuntimeError.UnsupportedSpirV;
+}
+
+fn queryImageSamples(_: *anyopaque) spv.Runtime.RuntimeError!u32 {
+    return spv.Runtime.RuntimeError.UnsupportedSpirV;
+}
+
+fn queryImageLod(_: *anyopaque, _: *anyopaque, _: spv.spv.SpvDim, _: spv.Runtime.ImageDerivatives) spv.Runtime.RuntimeError!spv.Runtime.Vec4(f32) {
     return spv.Runtime.RuntimeError.UnsupportedSpirV;
 }
 
@@ -74,6 +86,9 @@ const image_api: spv.Runtime.ImageAPI = .{
     .sampleImageInt4 = sampleImageInt4,
     .sampleImageDref = sampleImageDref,
     .queryImageSize = queryImageSize,
+    .queryImageLevels = queryImageLevels,
+    .queryImageSamples = queryImageSamples,
+    .queryImageLod = queryImageLod,
 };
 
 fn initModule(allocator: std.mem.Allocator, shader: []const u8) !struct { code: []const u32, module: spv.Module } {
