@@ -156,6 +156,38 @@ test "Maths vectors" {
     }
 }
 
+test "Unsigned vector negate wraps" {
+    const allocator = std.testing.allocator;
+    const shader =
+        \\ [nzsl_version("1.1")]
+        \\ module;
+        \\
+        \\ struct FragOut
+        \\ {
+        \\     [location(0)] color: vec4[u32]
+        \\ }
+        \\
+        \\ [entry(frag)]
+        \\ fn main() -> FragOut
+        \\ {
+        \\     let v = vec4[u32](1, 2, 2147483648, 4294967295);
+        \\     let negated = -v;
+        \\     let output: FragOut;
+        \\     output.color = negated;
+        \\     return output;
+        \\ }
+    ;
+    const code = try compileNzsl(allocator, shader);
+    defer allocator.free(code);
+
+    try case.expect(.{
+        .source = code,
+        .expected_outputs = &.{
+            std.mem.asBytes(&[_]u32{ 4294967295, 4294967294, 2147483648, 1 }),
+        },
+    });
+}
+
 // Tests all mathematical operation on vec2/3/4 with scalars with all NZSL supported primitive types
 test "Maths vectors with scalars" {
     const allocator = std.testing.allocator;

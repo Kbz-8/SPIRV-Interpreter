@@ -274,7 +274,56 @@ fn applyStructMemberInterfaceDecorations(self: *Self, storage_class: spv.SpvStor
 }
 
 fn applyDecorations(self: *Self, allocator: std.mem.Allocator) ModuleError!void {
-    for (self.results, 0..) |result, id| {
+    const helpers = struct {
+        fn applyValueLayout(results: []Result, value: *Value, type_word: SpvWord) ModuleError!void {
+            const type_variant = results[type_word].variant orelse return;
+            const type_data = switch (type_variant) {
+                .Type => |type_data| type_data,
+                else => return,
+            };
+
+            switch (value.*) {
+                .Structure => |*structure| switch (type_data) {
+                    .Structure => |type_structure| {
+                        @memcpy(@constCast(structure.offsets), type_structure.members_offsets);
+                        @memcpy(@constCast(structure.matrix_strides), type_structure.members_matrix_strides);
+
+                        for (structure.values, type_structure.members_type_word) |*member_value, member_type_word| {
+                            try applyValueLayout(results, member_value, member_type_word);
+                        }
+                    },
+                    else => {},
+                },
+                .Array => |array| switch (type_data) {
+                    .Array => |type_array| {
+                        for (array.values) |*element| {
+                            try applyValueLayout(results, element, type_array.components_type_word);
+                        }
+                    },
+                    else => {},
+                },
+                .Matrix => |columns| switch (type_data) {
+                    .Matrix => |type_matrix| {
+                        for (columns) |*column| {
+                            try applyValueLayout(results, column, type_matrix.column_type_word);
+                        }
+                    },
+                    else => {},
+                },
+                .Vector => |elements| switch (type_data) {
+                    .Vector => |type_vector| {
+                        for (elements) |*element| {
+                            try applyValueLayout(results, element, type_vector.components_type_word);
+                        }
+                    },
+                    else => {},
+                },
+                else => {},
+            }
+        }
+    };
+
+    for (self.results, 0..) |*result, id| {
         if (result.variant == null)
             continue;
 
@@ -323,18 +372,7 @@ fn applyDecorations(self: *Self, allocator: std.mem.Allocator) ModuleError!void 
                     .StorageBuffer,
                     .Uniform,
                     .PushConstant,
-                    => if (v.value == .Structure) {
-                        if (self.results[v.type_word].variant) |type_variant| switch (type_variant) {
-                            .Type => |type_data| switch (type_data) {
-                                .Structure => |s| {
-                                    @memcpy(@constCast(v.value.Structure.offsets), s.members_offsets);
-                                    @memcpy(@constCast(v.value.Structure.matrix_strides), s.members_matrix_strides);
-                                },
-                                else => {},
-                            },
-                            else => {},
-                        };
-                    },
+                    => try helpers.applyValueLayout(self.results, &v.value, v.type_word),
                     else => {},
                 }
             },

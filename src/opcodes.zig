@@ -972,34 +972,26 @@ fn CondEngine(comptime T: PrimitiveType, comptime Op: CondOp) type {
 
 fn ConversionEngine(comptime from_kind: PrimitiveType, comptime to_kind: PrimitiveType) type {
     return struct {
-        fn castLane(comptime ToT: type, from_bit_count: SpvWord, from: *Value) RuntimeError!ToT {
+        fn castLane(comptime ToT: type, from_bit_count: SpvWord, from: *const Value, lane_index: usize) RuntimeError!ToT {
             return switch (from_bit_count) {
                 inline 8, 16, 32, 64 => |bits| blk: {
                     if (bits == 8 and from_kind == .Float) return RuntimeError.InvalidSpirV; // No f8
-                    const v = (try Value.getPrimitiveField(from_kind, bits, from)).*;
+                    const v = try Value.readLane(from_kind, bits, from, lane_index);
                     break :blk std.math.lossyCast(ToT, v);
                 },
                 else => return RuntimeError.InvalidSpirV,
             };
         }
 
-        fn applyScalar(from_bit_count: SpvWord, to_bit_count: SpvWord, dst: *Value, from: *Value) RuntimeError!void {
+        fn applyLane(from_bit_count: SpvWord, to_bit_count: SpvWord, dst: *Value, from: *const Value, lane_index: usize) RuntimeError!void {
             switch (to_bit_count) {
                 inline 8, 16, 32, 64 => |bits| {
                     if (bits == 8 and to_kind == .Float) return RuntimeError.InvalidSpirV; // No f8
                     const ToT = Value.getPrimitiveFieldType(to_kind, bits);
-                    (try Value.getPrimitiveField(to_kind, bits, dst)).* = try castLane(ToT, from_bit_count, from);
+                    try Value.writeLane(to_kind, bits, dst, lane_index, try castLane(ToT, from_bit_count, from, lane_index));
                 },
                 else => return RuntimeError.InvalidSpirV,
             }
-        }
-
-        fn castSIMDVector(comptime ToT: type, comptime N: usize, dst_arr: *@Vector(N, ToT), src_arr: *const @Vector(N, ToT)) void {
-            inline for (0..N) |i| dst_arr[i] = std.math.lossyCast(ToT, src_arr[i]);
-        }
-
-        fn castSIMDVectorFromOther(comptime ToT: type, comptime FromT: type, comptime N: usize, dst_arr: *@Vector(N, ToT), src_arr: *const @Vector(N, FromT)) void {
-            inline for (0..N) |i| dst_arr[i] = std.math.lossyCast(ToT, src_arr[i]);
         }
 
         fn op(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
@@ -1013,81 +1005,12 @@ fn ConversionEngine(comptime from_kind: PrimitiveType, comptime to_kind: Primiti
             const from_bits = try Result.resolveLaneBitWidth((try rt.results[src_type_word].getVariant()).Type, rt);
             const to_bits = try Result.resolveLaneBitWidth(target_type, rt);
 
-            switch (dst_value.*) {
-                .Float => {
-                    if (to_kind != .Float) return RuntimeError.InvalidSpirV;
-                    try applyScalar(from_bits, to_bits, dst_value, src_value);
-                },
-                .Int => {
-                    if (to_kind != .SInt and to_kind != .UInt) return RuntimeError.InvalidSpirV;
-                    try applyScalar(from_bits, to_bits, dst_value, src_value);
-                },
-                .Vector => |dst_vec| {
-                    const src_vec = src_value.Vector;
-                    if (dst_vec.len != src_vec.len) return RuntimeError.InvalidSpirV;
-                    for (dst_vec, src_vec) |*d_lane, *s_lane| {
-                        try applyScalar(from_bits, to_bits, d_lane, s_lane);
-                    }
-                },
+            const dst_lane_count = try dst_value.resolveLaneCount();
+            const src_lane_count = try src_value.resolveLaneCount();
+            if (dst_lane_count != src_lane_count) return RuntimeError.InvalidSpirV;
 
-                .Vector4f32 => |*dst| switch (src_value.*) {
-                    .Vector4f32 => castSIMDVector(f32, 4, dst, &src_value.Vector4f32),
-                    .Vector4i32 => castSIMDVectorFromOther(f32, i32, 4, dst, &src_value.Vector4i32),
-                    .Vector4u32 => castSIMDVectorFromOther(f32, u32, 4, dst, &src_value.Vector4u32),
-                    else => return RuntimeError.InvalidSpirV,
-                },
-                .Vector3f32 => |*dst| switch (src_value.*) {
-                    .Vector3f32 => castSIMDVector(f32, 3, dst, &src_value.Vector3f32),
-                    .Vector3i32 => castSIMDVectorFromOther(f32, i32, 3, dst, &src_value.Vector3i32),
-                    .Vector3u32 => castSIMDVectorFromOther(f32, u32, 3, dst, &src_value.Vector3u32),
-                    else => return RuntimeError.InvalidSpirV,
-                },
-                .Vector2f32 => |*dst| switch (src_value.*) {
-                    .Vector2f32 => castSIMDVector(f32, 2, dst, &src_value.Vector2f32),
-                    .Vector2i32 => castSIMDVectorFromOther(f32, i32, 2, dst, &src_value.Vector2i32),
-                    .Vector2u32 => castSIMDVectorFromOther(f32, u32, 2, dst, &src_value.Vector2u32),
-                    else => return RuntimeError.InvalidSpirV,
-                },
-
-                .Vector4i32 => |*dst| switch (src_value.*) {
-                    .Vector4f32 => castSIMDVectorFromOther(i32, f32, 4, dst, &src_value.Vector4f32),
-                    .Vector4i32 => castSIMDVector(i32, 4, dst, &src_value.Vector4i32),
-                    .Vector4u32 => castSIMDVectorFromOther(i32, u32, 4, dst, &src_value.Vector4u32),
-                    else => return RuntimeError.InvalidSpirV,
-                },
-                .Vector3i32 => |*dst| switch (src_value.*) {
-                    .Vector3f32 => castSIMDVectorFromOther(i32, f32, 3, dst, &src_value.Vector3f32),
-                    .Vector3i32 => castSIMDVector(i32, 3, dst, &src_value.Vector3i32),
-                    .Vector3u32 => castSIMDVectorFromOther(i32, u32, 3, dst, &src_value.Vector3u32),
-                    else => return RuntimeError.InvalidSpirV,
-                },
-                .Vector2i32 => |*dst| switch (src_value.*) {
-                    .Vector2f32 => castSIMDVectorFromOther(i32, f32, 2, dst, &src_value.Vector2f32),
-                    .Vector2i32 => castSIMDVector(i32, 2, dst, &src_value.Vector2i32),
-                    .Vector2u32 => castSIMDVectorFromOther(i32, u32, 2, dst, &src_value.Vector2u32),
-                    else => return RuntimeError.InvalidSpirV,
-                },
-
-                .Vector4u32 => |*dst| switch (src_value.*) {
-                    .Vector4f32 => castSIMDVectorFromOther(u32, f32, 4, dst, &src_value.Vector4f32),
-                    .Vector4i32 => castSIMDVectorFromOther(u32, i32, 4, dst, &src_value.Vector4i32),
-                    .Vector4u32 => castSIMDVector(u32, 4, dst, &src_value.Vector4u32),
-                    else => return RuntimeError.InvalidSpirV,
-                },
-                .Vector3u32 => |*dst| switch (src_value.*) {
-                    .Vector3f32 => castSIMDVectorFromOther(u32, f32, 3, dst, &src_value.Vector3f32),
-                    .Vector3i32 => castSIMDVectorFromOther(u32, i32, 3, dst, &src_value.Vector3i32),
-                    .Vector3u32 => castSIMDVector(u32, 3, dst, &src_value.Vector3u32),
-                    else => return RuntimeError.InvalidSpirV,
-                },
-                .Vector2u32 => |*dst| switch (src_value.*) {
-                    .Vector2f32 => castSIMDVectorFromOther(u32, f32, 2, dst, &src_value.Vector2f32),
-                    .Vector2i32 => castSIMDVectorFromOther(u32, i32, 2, dst, &src_value.Vector2i32),
-                    .Vector2u32 => castSIMDVector(u32, 2, dst, &src_value.Vector2u32),
-                    else => return RuntimeError.InvalidSpirV,
-                },
-
-                else => return RuntimeError.InvalidSpirV,
+            for (0..dst_lane_count) |lane_index| {
+                try applyLane(from_bits, to_bits, dst_value, src_value, lane_index);
             }
         }
     };
@@ -2452,7 +2375,9 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
                 .VectorTimesMatrix,
                 => if (comptime is_int) @mulWithOverflow(op1, op2)[0] else op1 * op2,
                 .Div => blk: {
-                    if (op2_is_zero) return RuntimeError.DivisionByZero;
+                    if (comptime is_int) {
+                        if (op2_is_zero) return RuntimeError.DivisionByZero;
+                    }
                     break :blk if (comptime is_int) @divTrunc(op1, op2) else op1 / op2;
                 },
                 .Mod => if (op2_is_zero) return RuntimeError.DivisionByZero else @mod(op1, op2),
@@ -2624,7 +2549,7 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
 
         fn operationSingle(comptime TT: type, ope: TT) RuntimeError!TT {
             return switch (Op) {
-                .Negate => if (@typeInfo(TT) == .int) std.math.negate(ope) catch return RuntimeError.InvalidSpirV else -ope,
+                .Negate => if (@typeInfo(TT) == .int) @subWithOverflow(@as(TT, 0), ope)[0] else -ope,
                 else => return RuntimeError.InvalidSpirV,
             };
         }
@@ -3042,6 +2967,13 @@ fn copyValue(dst: *Value, src: *const Value) RuntimeError!void {
                 else => return RuntimeError.InvalidSpirV,
             }
         }
+
+        inline fn readWindow(dst_v: *Value, window: []const u8, matrix_stride: ?SpvWord) RuntimeError!void {
+            _ = if (matrix_stride) |stride|
+                try dst_v.writeMatrixWithStride(window, stride)
+            else
+                try dst_v.write(window);
+        }
     };
 
     if (std.meta.activeTag(dst.*) == .Pointer) {
@@ -3100,14 +3032,43 @@ fn copyValue(dst: *Value, src: *const Value) RuntimeError!void {
             try helpers.copySlice(dst_slice.?, a.values);
         },
         .Structure => |s| {
+            if (dst.* == .Structure) {
+                @memcpy(@constCast(dst.Structure.offsets), s.offsets);
+                @memcpy(@constCast(dst.Structure.matrix_strides), s.matrix_strides);
+            }
             const dst_slice = helpers.getDstSlice(dst);
             try helpers.copySlice(dst_slice.?, s.values);
         },
         .Pointer => |ptr| switch (ptr.ptr) {
-            .common => |src_val_ptr| try copyValue(dst, src_val_ptr),
-            .f32_ptr => |src_f32_ptr| try helpers.readF32(dst, src_f32_ptr),
-            .i32_ptr => |src_i32_ptr| try helpers.readI32(dst, src_i32_ptr),
-            .u32_ptr => |src_u32_ptr| try helpers.readU32(dst, src_u32_ptr),
+            .common => |src_val_ptr| {
+                if (ptr.uniform_slice_window) |window| {
+                    try copyValue(dst, src_val_ptr);
+                    try helpers.readWindow(dst, window, ptr.matrix_stride);
+                } else {
+                    try copyValue(dst, src_val_ptr);
+                }
+            },
+            .f32_ptr => |src_f32_ptr| {
+                if (ptr.uniform_slice_window) |window| {
+                    try helpers.readWindow(dst, window, ptr.matrix_stride);
+                } else {
+                    try helpers.readF32(dst, src_f32_ptr);
+                }
+            },
+            .i32_ptr => |src_i32_ptr| {
+                if (ptr.uniform_slice_window) |window| {
+                    try helpers.readWindow(dst, window, ptr.matrix_stride);
+                } else {
+                    try helpers.readI32(dst, src_i32_ptr);
+                }
+            },
+            .u32_ptr => |src_u32_ptr| {
+                if (ptr.uniform_slice_window) |window| {
+                    try helpers.readWindow(dst, window, ptr.matrix_stride);
+                } else {
+                    try helpers.readU32(dst, src_u32_ptr);
+                }
+            },
         },
         .RuntimeArray => |src_arr| switch (dst.*) {
             .RuntimeArray => |dst_arr| @memcpy(dst_arr.data, src_arr.data),
@@ -3497,134 +3458,111 @@ fn opControlBarrier(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError
     return RuntimeError.Barrier;
 }
 
-fn opCompositeConstruct(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
-    _ = rt.it.skip();
+fn opCompositeConstruct(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
+    const target_type_word = try rt.it.next();
+    const target_type = (try rt.results[target_type_word].getVariant()).Type;
     const id = try rt.it.next();
 
-    const index_count = word_count - 2;
+    const index_count: usize = @intCast(word_count - 2);
+    const operand_ids = allocator.alloc(SpvWord, index_count) catch return RuntimeError.OutOfMemory;
+    defer allocator.free(operand_ids);
+    for (operand_ids) |*operand_id| {
+        operand_id.* = try rt.it.next();
+    }
+
     const value = &(try rt.results[id].getVariant()).Constant.value;
     if (value.getCompositeDataOrNull()) |target| {
-        for (target[0..index_count]) |*elem| {
-            const elem_value = (try rt.results[try rt.it.next()].getVariant()).Constant.value;
-            elem.* = elem_value;
+        for (target[0..index_count], operand_ids) |*elem, operand_id| {
+            try copyValue(elem, try rt.results[operand_id].getValue());
         }
+        rt.clearDerivative(allocator, id);
         return;
     }
 
-    const vectorRoutines = struct {
-        fn routines(value2: *Value, rt2: *Runtime) RuntimeError!void {
-            switch (value2.*) {
-                .Vector4f32 => |*vec| inline for (0..4) |i| {
-                    switch ((try rt2.results[try rt2.it.next()].getVariant()).Constant.value) {
-                        .Vector4f32 => |v| {
-                            vec.* = v;
-                            return;
-                        },
-                        .Float => |f| vec[i] = f.value.float32,
-                        else => return RuntimeError.InvalidValueType,
-                    }
-                },
+    const primitive_type: PrimitiveType = switch (target_type) {
+        .Float, .Vector, .Vector2f32, .Vector3f32, .Vector4f32 => .Float,
+        .Int, .Vector2i32, .Vector3i32, .Vector4i32 => .SInt,
+        .Vector2u32, .Vector3u32, .Vector4u32 => .UInt,
+        else => return RuntimeError.InvalidValueType,
+    };
 
-                .Vector3f32 => |*vec| inline for (0..3) |i| {
-                    switch ((try rt2.results[try rt2.it.next()].getVariant()).Constant.value) {
-                        .Vector3f32 => |v| {
-                            vec.* = v;
-                            return;
-                        },
-                        .Float => |f| vec[i] = f.value.float32,
-                        else => return RuntimeError.InvalidValueType,
-                    }
-                },
+    const lane_bits = try Result.resolveLaneBitWidth(target_type, rt);
+    const target_lane_count = try value.resolveLaneCount();
 
-                .Vector2f32 => |*vec| inline for (0..2) |i| {
-                    switch ((try rt2.results[try rt2.it.next()].getVariant()).Constant.value) {
-                        .Vector2f32 => |v| {
-                            vec.* = v;
-                            return;
-                        },
-                        .Float => |f| vec[i] = f.value.float32,
-                        else => return RuntimeError.InvalidValueType,
-                    }
-                },
+    var dx: ?Value = if (primitive_type == .Float)
+        try Value.init(allocator, rt.results, target_type_word, false)
+    else
+        null;
+    defer if (dx) |*dx_value| dx_value.deinit(allocator);
+    var dy: ?Value = if (primitive_type == .Float)
+        try Value.init(allocator, rt.results, target_type_word, false)
+    else
+        null;
+    defer if (dy) |*dy_value| dy_value.deinit(allocator);
 
-                .Vector4i32 => |*vec| inline for (0..4) |i| {
-                    switch ((try rt2.results[try rt2.it.next()].getVariant()).Constant.value) {
-                        .Vector4i32 => |v| {
-                            vec.* = v;
-                            return;
-                        },
-                        .Int => |int| vec[i] = int.value.sint32,
-                        else => return RuntimeError.InvalidValueType,
-                    }
-                },
+    var has_derivative = false;
+    var target_lane_index: usize = 0;
+    for (operand_ids) |operand_id| {
+        const operand_value = try rt.results[operand_id].getValue();
+        const operand_lane_count = try operand_value.resolveLaneCount();
+        const derivative = rt.derivatives.get(operand_id);
 
-                .Vector3i32 => |*vec| inline for (0..3) |i| {
-                    switch ((try rt2.results[try rt2.it.next()].getVariant()).Constant.value) {
-                        .Vector3i32 => |v| {
-                            vec.* = v;
-                            return;
-                        },
-                        .Int => |int| vec[i] = int.value.sint32,
-                        else => return RuntimeError.InvalidValueType,
-                    }
-                },
+        for (0..operand_lane_count) |operand_lane_index| {
+            if (target_lane_index >= target_lane_count) return RuntimeError.InvalidSpirV;
 
-                .Vector2i32 => |*vec| inline for (0..2) |i| {
-                    switch ((try rt2.results[try rt2.it.next()].getVariant()).Constant.value) {
-                        .Vector2i32 => |v| {
-                            vec.* = v;
-                            return;
-                        },
-                        .Int => |int| vec[i] = int.value.sint32,
-                        else => return RuntimeError.InvalidValueType,
-                    }
-                },
+            switch (primitive_type) {
+                .Float => switch (lane_bits) {
+                    inline 16, 32, 64 => |bits| {
+                        {
+                            const lane = try Value.readLane(.Float, bits, operand_value, operand_lane_index);
+                            try Value.writeLane(.Float, bits, value, target_lane_index, lane);
 
-                .Vector4u32 => |*vec| inline for (0..4) |i| {
-                    switch ((try rt2.results[try rt2.it.next()].getVariant()).Constant.value) {
-                        .Vector4u32 => |v| {
-                            vec.* = v;
-                            return;
-                        },
-                        .Int => |int| vec[i] = int.value.uint32,
-                        else => return RuntimeError.InvalidValueType,
-                    }
+                            const FloatT = Value.getPrimitiveFieldType(.Float, bits);
+                            const dx_lane: FloatT = if (derivative) |d| blk: {
+                                has_derivative = true;
+                                break :blk try Value.readLane(.Float, bits, &d.dx, operand_lane_index);
+                            } else 0;
+                            const dy_lane: FloatT = if (derivative) |d| blk: {
+                                has_derivative = true;
+                                break :blk try Value.readLane(.Float, bits, &d.dy, operand_lane_index);
+                            } else 0;
+                            try Value.writeLane(.Float, bits, &dx.?, target_lane_index, dx_lane);
+                            try Value.writeLane(.Float, bits, &dy.?, target_lane_index, dy_lane);
+                        }
+                    },
+                    else => return RuntimeError.InvalidSpirV,
                 },
-
-                .Vector3u32 => |*vec| inline for (0..3) |i| {
-                    switch ((try rt2.results[try rt2.it.next()].getVariant()).Constant.value) {
-                        .Vector3u32 => |v| {
-                            vec.* = v;
-                            return;
-                        },
-                        .Int => |int| vec[i] = int.value.uint32,
-                        else => return RuntimeError.InvalidValueType,
-                    }
+                .SInt => switch (lane_bits) {
+                    inline 8, 16, 32, 64 => |bits| {
+                        {
+                            const lane = try Value.readLane(.SInt, bits, operand_value, operand_lane_index);
+                            try Value.writeLane(.SInt, bits, value, target_lane_index, lane);
+                        }
+                    },
+                    else => return RuntimeError.InvalidSpirV,
                 },
-
-                .Vector2u32 => |*vec| inline for (0..2) |i| {
-                    switch ((try rt2.results[try rt2.it.next()].getVariant()).Constant.value) {
-                        .Vector2u32 => |v| {
-                            vec.* = v;
-                            return;
-                        },
-                        .Int => |int| vec[i] = int.value.uint32,
-                        else => return RuntimeError.InvalidValueType,
-                    }
+                .UInt => switch (lane_bits) {
+                    inline 8, 16, 32, 64 => |bits| {
+                        {
+                            const lane = try Value.readLane(.UInt, bits, operand_value, operand_lane_index);
+                            try Value.writeLane(.UInt, bits, value, target_lane_index, lane);
+                        }
+                    },
+                    else => return RuntimeError.InvalidSpirV,
                 },
-
                 else => return RuntimeError.InvalidValueType,
             }
+
+            target_lane_index += 1;
         }
-    }.routines;
+    }
 
-    switch (value.*) {
-        .RuntimeArray => |arr| {
-            _ = arr;
-            return RuntimeError.ToDo;
-        },
+    if (target_lane_index != target_lane_count) return RuntimeError.InvalidSpirV;
 
-        else => try vectorRoutines(value, rt),
+    if (has_derivative) {
+        try rt.setDerivative(allocator, id, &dx.?, &dy.?);
+    } else {
+        rt.clearDerivative(allocator, id);
     }
 }
 
@@ -4544,17 +4482,23 @@ fn opFwidth(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError
     const id = try rt.it.next();
     const operand = try rt.it.next();
 
-    const derivative = rt.derivatives.get(operand) orelse return RuntimeError.UnsupportedSpirV;
     const dst = try rt.results[id].getValue();
     const lane_bits = try Result.resolveLaneBitWidth(target_type, rt);
     const lane_count = try Result.resolveLaneCount(target_type);
+    const derivative = rt.derivatives.get(operand);
 
     switch (lane_bits) {
         inline 16, 32, 64 => |bits| {
             const FloatT = Value.getPrimitiveFieldType(.Float, bits);
             for (0..lane_count) |lane_index| {
-                const dx = try Value.readLane(.Float, bits, &derivative.dx, lane_index);
-                const dy = try Value.readLane(.Float, bits, &derivative.dy, lane_index);
+                const dx: FloatT = if (derivative) |d|
+                    try Value.readLane(.Float, bits, &d.dx, lane_index)
+                else
+                    0;
+                const dy: FloatT = if (derivative) |d|
+                    try Value.readLane(.Float, bits, &d.dy, lane_index)
+                else
+                    0;
                 try Value.writeLane(.Float, bits, dst, lane_index, @as(FloatT, @abs(dx) + @abs(dy)));
             }
         },

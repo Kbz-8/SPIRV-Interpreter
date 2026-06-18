@@ -501,6 +501,24 @@ pub const Value = union(Type) {
         return matrix_size;
     }
 
+    pub fn writeMatrixWithStride(self: *Self, input: []const u8, matrix_stride: SpvWord) RuntimeError!usize {
+        const columns = switch (self.*) {
+            .Matrix => |columns| columns,
+            else => return RuntimeError.InvalidValueType,
+        };
+        if (columns.len == 0) return 0;
+
+        const matrix_stride_usize: usize = @intCast(matrix_stride);
+        const column_size = try columns[0].getPlainMemorySize();
+        const matrix_size = (columns.len - 1) * matrix_stride_usize + column_size;
+        if (input.len < matrix_size) return RuntimeError.OutOfBounds;
+
+        for (columns, 0..) |*column, column_index| {
+            _ = try column.write(input[column_index * matrix_stride_usize ..]);
+        }
+        return matrix_size;
+    }
+
     pub fn write(self: *Self, input: []const u8) RuntimeError!usize {
         const vecRoutine = struct {
             inline fn routine(comptime T: type, vec: *T, in: []const u8) RuntimeError!usize {
@@ -605,18 +623,8 @@ pub const Value = union(Type) {
                     const write_size = switch (v.*) {
                         .Matrix => |*columns| blk: {
                             const matrix_stride = s.matrix_strides[i] orelse break :blk try v.write(input[member_offset..]);
-                            if (columns.len == 0) break :blk @as(usize, 0);
-                            const matrix_stride_usize: usize = @intCast(matrix_stride);
-
-                            const column_size = try columns.*[0].getPlainMemorySize();
-                            const matrix_size = (columns.len - 1) * matrix_stride_usize + column_size;
-                            if (input.len - member_offset < matrix_size)
-                                return RuntimeError.OutOfBounds;
-
-                            for (columns.*, 0..) |*column, column_index| {
-                                _ = try column.write(input[member_offset + (column_index * matrix_stride_usize) ..]);
-                            }
-                            break :blk matrix_size;
+                            _ = columns;
+                            break :blk try v.writeMatrixWithStride(input[member_offset..], matrix_stride);
                         },
                         else => try v.write(input[member_offset..]),
                     };
