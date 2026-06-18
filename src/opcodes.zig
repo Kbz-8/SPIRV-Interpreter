@@ -70,6 +70,7 @@ const BitOp = enum {
 
 const ImageOp = enum {
     Fetch,
+    Gather,
     QueryLevels,
     QueryLod,
     QuerySamples,
@@ -202,6 +203,7 @@ pub const SetupDispatcher = block: {
         .ISubBorrow = autoSetupConstant,
         .Image = autoSetupConstant,
         .ImageFetch = autoSetupConstant,
+        .ImageGather = autoSetupConstant,
         .ImageQueryLevels = autoSetupConstant,
         .ImageQueryLod = opDerivativeSetup,
         .ImageQuerySamples = autoSetupConstant,
@@ -379,6 +381,7 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ISubBorrow)]             = opISubBorrow;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Image)]                  = ImageEngine(.Resolve).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageFetch)]             = ImageEngine(.Fetch).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageGather)]            = ImageEngine(.Gather).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageQueryLevels)]       = ImageEngine(.QueryLevels).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageQueryLod)]          = ImageEngine(.QueryLod).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageQuerySamples)]      = ImageEngine(.QuerySamples).op;
@@ -1655,6 +1658,120 @@ fn ImageEngine(comptime Op: ImageOp) type {
             try writeFloatScalar(dst, try rt.image_api.sampleImageDref(driver_image, driver_sampler, dim, x, y, z, dref, lod, offset));
         }
 
+        fn gatherCoord(index: i32, extent: u32) f32 {
+            return (@as(f32, @floatFromInt(index)) + 0.5) / @as(f32, @floatFromInt(extent));
+        }
+
+        fn sampleImageGather(rt: *Runtime, dst: *Value, driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32, component: usize, offset: Runtime.ImageOffset) RuntimeError!void {
+            const size = try rt.image_api.queryImageSize(driver_image, dim, false, 0);
+            if (size.x == 0) return RuntimeError.InvalidSpirV;
+
+            const width_f: f32 = @floatFromInt(size.x);
+            const height = if (size.y == 0) 1 else size.y;
+            const height_f: f32 = @floatFromInt(height);
+            const base_x: i32 = @intFromFloat(@floor(x * width_f - 0.5));
+            const base_y: i32 = @intFromFloat(@floor(y * height_f - 0.5));
+            const gather_x = [_]i32{ base_x, base_x + 1, base_x + 1, base_x };
+            const gather_y = [_]i32{ base_y + 1, base_y + 1, base_y, base_y };
+
+            switch (dst.*) {
+                .Vector4f32,
+                .Vector3f32,
+                .Vector2f32,
+                => {
+                    var result: Runtime.Vec4(f32) = undefined;
+                    inline for (0..4) |i| {
+                        const texel = try rt.image_api.sampleImageFloat4(
+                            driver_image,
+                            driver_sampler,
+                            dim,
+                            gatherCoord(gather_x[i], size.x),
+                            gatherCoord(gather_y[i], height),
+                            z,
+                            0.0,
+                            offset,
+                        );
+                        const values = [_]f32{ texel.x, texel.y, texel.z, texel.w };
+                        @field(result, switch (i) {
+                            0 => "x",
+                            1 => "y",
+                            2 => "z",
+                            3 => "w",
+                            else => unreachable,
+                        }) = if (component < values.len) values[component] else return RuntimeError.InvalidSpirV;
+                    }
+                    try writeFloatTexel(dst, result);
+                },
+                .Vector4i32,
+                .Vector3i32,
+                .Vector2i32,
+                .Vector4u32,
+                .Vector3u32,
+                .Vector2u32,
+                => {
+                    var result: Runtime.Vec4(u32) = undefined;
+                    inline for (0..4) |i| {
+                        const texel = try rt.image_api.sampleImageInt4(
+                            driver_image,
+                            driver_sampler,
+                            dim,
+                            gatherCoord(gather_x[i], size.x),
+                            gatherCoord(gather_y[i], height),
+                            z,
+                            0.0,
+                            offset,
+                        );
+                        const values = [_]u32{ texel.x, texel.y, texel.z, texel.w };
+                        @field(result, switch (i) {
+                            0 => "x",
+                            1 => "y",
+                            2 => "z",
+                            3 => "w",
+                            else => unreachable,
+                        }) = if (component < values.len) values[component] else return RuntimeError.InvalidSpirV;
+                    }
+                    try writeIntTexel(dst, result);
+                },
+                .Vector => |lanes| {
+                    if (lanes.len == 0) return RuntimeError.InvalidSpirV;
+                    switch (lanes[0]) {
+                        .Float => {
+                            var result: Runtime.Vec4(f32) = undefined;
+                            inline for (0..4) |i| {
+                                const texel = try rt.image_api.sampleImageFloat4(driver_image, driver_sampler, dim, gatherCoord(gather_x[i], size.x), gatherCoord(gather_y[i], height), z, 0.0, offset);
+                                const values = [_]f32{ texel.x, texel.y, texel.z, texel.w };
+                                @field(result, switch (i) {
+                                    0 => "x",
+                                    1 => "y",
+                                    2 => "z",
+                                    3 => "w",
+                                    else => unreachable,
+                                }) = if (component < values.len) values[component] else return RuntimeError.InvalidSpirV;
+                            }
+                            try writeFloatTexel(dst, result);
+                        },
+                        .Int => {
+                            var result: Runtime.Vec4(u32) = undefined;
+                            inline for (0..4) |i| {
+                                const texel = try rt.image_api.sampleImageInt4(driver_image, driver_sampler, dim, gatherCoord(gather_x[i], size.x), gatherCoord(gather_y[i], height), z, 0.0, offset);
+                                const values = [_]u32{ texel.x, texel.y, texel.z, texel.w };
+                                @field(result, switch (i) {
+                                    0 => "x",
+                                    1 => "y",
+                                    2 => "z",
+                                    3 => "w",
+                                    else => unreachable,
+                                }) = if (component < values.len) values[component] else return RuntimeError.InvalidSpirV;
+                            }
+                            try writeIntTexel(dst, result);
+                        },
+                        else => return RuntimeError.InvalidValueType,
+                    }
+                },
+                else => return RuntimeError.InvalidValueType,
+            }
+        }
+
         fn writeImage(rt: *Runtime, texel: *const Value, driver_image: *anyopaque, dim: spv.SpvDim, x: i32, y: i32, z: i32) RuntimeError!void {
             switch (texel.*) {
                 .Float,
@@ -1976,6 +2093,32 @@ fn ImageEngine(comptime Op: ImageOp) type {
                         coords.z,
                         dref,
                         parsed_operands.lod,
+                        parsed_operands.offset,
+                    );
+                },
+
+                .Gather => {
+                    const sampled_image_operand = try resolveSampledImage(image, rt);
+                    const coords = .{
+                        .x = try readSampleCoordLane(coordinate, 0),
+                        .y = readSampleCoordLane(coordinate, 1) catch 0,
+                        .z = readSampleCoordLane(coordinate, 2) catch 0,
+                    };
+                    const component_value = try rt.results[try rt.it.next()].getValue();
+                    const component: usize = @intCast(try readIntLane(component_value, 0));
+                    const image_operands = if (word_count > 5) try rt.it.next() else 0;
+                    const parsed_operands = try parseImageOperands(rt, image_operands);
+
+                    try sampleImageGather(
+                        rt,
+                        dst,
+                        sampled_image_operand.driver_image,
+                        sampled_image_operand.driver_sampler,
+                        sampled_image_operand.dim,
+                        coords.x,
+                        coords.y,
+                        coords.z,
+                        component,
                         parsed_operands.offset,
                     );
                 },
