@@ -4494,7 +4494,7 @@ fn opFwidth(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError
                 const dx: FloatT = if (derivative) |d|
                     try Value.readLane(.Float, bits, &d.dx, lane_index)
                 else
-                    0;
+                    1;
                 const dy: FloatT = if (derivative) |d|
                     try Value.readLane(.Float, bits, &d.dy, lane_index)
                 else
