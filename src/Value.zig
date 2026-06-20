@@ -78,6 +78,8 @@ pub const Value = union(Type) {
         type_word: SpvWord,
         stride: SpvWord,
         data: []u8,
+        matrix_stride: ?SpvWord = null,
+        row_major: bool = false,
 
         pub inline fn createValueFromIndex(self: *const @This(), allocator: std.mem.Allocator, results: []const Result, index: usize) RuntimeError!*Value {
             const offset = try self.getCheckedOffsetOfIndex(index);
@@ -86,7 +88,10 @@ pub const Value = union(Type) {
 
             value.* = try Value.init(allocator, results, self.type_word, false);
             errdefer value.deinit(allocator);
-            _ = try value.write(self.data[offset .. offset + self.stride]);
+            _ = if (self.matrix_stride) |matrix_stride|
+                try value.writeWithMatrixLayout(self.data[offset .. offset + self.stride], matrix_stride, self.row_major)
+            else
+                try value.write(self.data[offset .. offset + self.stride]);
 
             return value;
         }
@@ -95,7 +100,10 @@ pub const Value = union(Type) {
             const offset = try self.getCheckedOffsetOfIndex(index);
             var value = try Value.init(allocator, results, self.type_word, false);
             errdefer value.deinit(allocator);
-            _ = try value.write(self.data[offset .. offset + self.stride]);
+            _ = if (self.matrix_stride) |matrix_stride|
+                try value.writeWithMatrixLayout(self.data[offset .. offset + self.stride], matrix_stride, self.row_major)
+            else
+                try value.write(self.data[offset .. offset + self.stride]);
             return value;
         }
 
@@ -119,6 +127,7 @@ pub const Value = union(Type) {
         external_data: ?[]u8,
         offsets: []const ?SpvWord,
         matrix_strides: []const ?SpvWord,
+        row_major: []const bool,
         values: []Self,
     },
     Function: noreturn,
@@ -160,6 +169,7 @@ pub const Value = union(Type) {
         uniform_backing_value: ?*Self = null,
         owns_uniform_backing_value: bool = false,
         matrix_stride: ?SpvWord = null,
+        matrix_row_major: bool = false,
     },
 
     pub inline fn getCompositeDataOrNull(self: *const Self) ?[]Self {
@@ -261,6 +271,8 @@ pub const Value = union(Type) {
                                 .type_word = a.components_type_word,
                                 .stride = a.stride,
                                 .data = &.{},
+                                .matrix_stride = null,
+                                .row_major = false,
                             },
                         };
                     }
@@ -284,6 +296,7 @@ pub const Value = union(Type) {
                             .external_data = null,
                             .offsets = allocator.dupe(?SpvWord, s.members_offsets) catch return RuntimeError.OutOfMemory,
                             .matrix_strides = allocator.dupe(?SpvWord, s.members_matrix_strides) catch return RuntimeError.OutOfMemory,
+                            .row_major = allocator.dupe(bool, s.members_row_major) catch return RuntimeError.OutOfMemory,
                             .values = allocator.alloc(Self, member_count) catch return RuntimeError.OutOfMemory,
                         },
                     };
@@ -299,6 +312,8 @@ pub const Value = union(Type) {
                         .type_word = a.components_type_word,
                         .stride = a.stride,
                         .data = &.{},
+                        .matrix_stride = null,
+                        .row_major = false,
                     },
                 },
                 .Image => .{
@@ -369,6 +384,7 @@ pub const Value = union(Type) {
                         .external_data = s.external_data,
                         .offsets = allocator.dupe(?SpvWord, s.offsets) catch return RuntimeError.OutOfMemory,
                         .matrix_strides = allocator.dupe(?SpvWord, s.matrix_strides) catch return RuntimeError.OutOfMemory,
+                        .row_major = allocator.dupe(bool, s.row_major) catch return RuntimeError.OutOfMemory,
                         .values = values,
                     };
                 },
@@ -472,7 +488,10 @@ pub const Value = union(Type) {
                 for (s.values, 0..) |v, i| {
                     const member_offset: usize = @intCast(s.offsets[i] orelse end_offset);
                     if (member_offset > output.len) return RuntimeError.OutOfBounds;
-                    const read_size = try v.read(output[member_offset..]);
+                    const read_size = if (s.matrix_strides[i]) |matrix_stride|
+                        try v.readWithMatrixLayout(output[member_offset..], matrix_stride, s.row_major[i])
+                    else
+                        try v.read(output[member_offset..]);
                     end_offset = @max(end_offset, member_offset + read_size);
                 }
                 return end_offset;
@@ -483,7 +502,90 @@ pub const Value = union(Type) {
         return 0;
     }
 
-    pub fn readMatrixWithStride(self: *const Self, output: []u8, matrix_stride: SpvWord) RuntimeError!usize {
+    fn readVectorLane(self: *const Self, lane_index: usize, output: []u8) RuntimeError!usize {
+        switch (self.*) {
+            .Vector => |values| {
+                if (lane_index >= values.len) return RuntimeError.OutOfBounds;
+                return values[lane_index].read(output);
+            },
+            .Vector2f32, .Vector3f32, .Vector4f32 => {
+                const value = try readLane(.Float, 32, self, lane_index);
+                if (output.len < @sizeOf(f32)) return RuntimeError.OutOfBounds;
+                @memcpy(output[0..@sizeOf(f32)], std.mem.asBytes(&value));
+                return @sizeOf(f32);
+            },
+            .Vector2i32, .Vector3i32, .Vector4i32 => {
+                const value = try readLane(.SInt, 32, self, lane_index);
+                if (output.len < @sizeOf(i32)) return RuntimeError.OutOfBounds;
+                @memcpy(output[0..@sizeOf(i32)], std.mem.asBytes(&value));
+                return @sizeOf(i32);
+            },
+            .Vector2u32, .Vector3u32, .Vector4u32 => {
+                const value = try readLane(.UInt, 32, self, lane_index);
+                if (output.len < @sizeOf(u32)) return RuntimeError.OutOfBounds;
+                @memcpy(output[0..@sizeOf(u32)], std.mem.asBytes(&value));
+                return @sizeOf(u32);
+            },
+            else => return RuntimeError.InvalidValueType,
+        }
+    }
+
+    fn writeVectorLane(self: *Self, lane_index: usize, input: []const u8) RuntimeError!usize {
+        switch (self.*) {
+            .Vector => |values| {
+                if (lane_index >= values.len) return RuntimeError.OutOfBounds;
+                return values[lane_index].write(input);
+            },
+            .Vector2f32, .Vector3f32, .Vector4f32 => {
+                if (input.len < @sizeOf(f32)) return RuntimeError.OutOfBounds;
+                try writeLane(.Float, 32, self, lane_index, std.mem.bytesToValue(f32, input[0..@sizeOf(f32)]));
+                return @sizeOf(f32);
+            },
+            .Vector2i32, .Vector3i32, .Vector4i32 => {
+                if (input.len < @sizeOf(i32)) return RuntimeError.OutOfBounds;
+                try writeLane(.SInt, 32, self, lane_index, std.mem.bytesToValue(i32, input[0..@sizeOf(i32)]));
+                return @sizeOf(i32);
+            },
+            .Vector2u32, .Vector3u32, .Vector4u32 => {
+                if (input.len < @sizeOf(u32)) return RuntimeError.OutOfBounds;
+                try writeLane(.UInt, 32, self, lane_index, std.mem.bytesToValue(u32, input[0..@sizeOf(u32)]));
+                return @sizeOf(u32);
+            },
+            else => return RuntimeError.InvalidValueType,
+        }
+    }
+
+    pub fn readVectorWithStride(self: *const Self, output: []u8, stride: SpvWord) RuntimeError!usize {
+        const lane_count: usize = @intCast(try self.resolveLaneCount());
+        if (lane_count == 0) return 0;
+
+        const stride_usize: usize = @intCast(stride);
+        const scalar_size = @divExact(try self.getPlainMemorySize(), lane_count);
+        const vector_size = (lane_count - 1) * stride_usize + scalar_size;
+        if (output.len < vector_size) return RuntimeError.OutOfBounds;
+
+        for (0..lane_count) |index| {
+            _ = try self.readVectorLane(index, output[index * stride_usize ..]);
+        }
+        return vector_size;
+    }
+
+    pub fn writeVectorWithStride(self: *Self, input: []const u8, stride: SpvWord) RuntimeError!usize {
+        const lane_count: usize = @intCast(try self.resolveLaneCount());
+        if (lane_count == 0) return 0;
+
+        const stride_usize: usize = @intCast(stride);
+        const scalar_size = @divExact(try self.getPlainMemorySize(), lane_count);
+        const vector_size = (lane_count - 1) * stride_usize + scalar_size;
+        if (input.len < vector_size) return RuntimeError.OutOfBounds;
+
+        for (0..lane_count) |index| {
+            _ = try self.writeVectorLane(index, input[index * stride_usize ..]);
+        }
+        return vector_size;
+    }
+
+    pub fn readMatrixWithStride(self: *const Self, output: []u8, matrix_stride: SpvWord, row_major: bool) RuntimeError!usize {
         const columns = switch (self.*) {
             .Matrix => |columns| columns,
             else => return RuntimeError.InvalidValueType,
@@ -491,17 +593,46 @@ pub const Value = union(Type) {
         if (columns.len == 0) return 0;
 
         const matrix_stride_usize: usize = @intCast(matrix_stride);
-        const column_size = try columns[0].getPlainMemorySize();
-        const matrix_size = (columns.len - 1) * matrix_stride_usize + column_size;
+        const row_count: usize = @intCast(try columns[0].resolveLaneCount());
+        if (row_count == 0) return 0;
+
+        const scalar_size = @divExact(try columns[0].getPlainMemorySize(), row_count);
+        const matrix_size = if (row_major)
+            (row_count - 1) * matrix_stride_usize + columns.len * scalar_size
+        else
+            (columns.len - 1) * matrix_stride_usize + try columns[0].getPlainMemorySize();
         if (output.len < matrix_size) return RuntimeError.OutOfBounds;
 
-        for (columns, 0..) |column, column_index| {
-            _ = try column.read(output[column_index * matrix_stride_usize ..]);
+        if (row_major) {
+            for (columns, 0..) |column, column_index| {
+                for (0..row_count) |row_index| {
+                    _ = try column.readVectorLane(row_index, output[row_index * matrix_stride_usize + column_index * scalar_size ..]);
+                }
+            }
+        } else {
+            for (columns, 0..) |column, column_index| {
+                _ = try column.read(output[column_index * matrix_stride_usize ..]);
+            }
         }
         return matrix_size;
     }
 
-    pub fn writeMatrixWithStride(self: *Self, input: []const u8, matrix_stride: SpvWord) RuntimeError!usize {
+    pub fn readWithMatrixLayout(self: *const Self, output: []u8, matrix_stride: SpvWord, row_major: bool) RuntimeError!usize {
+        return switch (self.*) {
+            .Matrix => try self.readMatrixWithStride(output, matrix_stride, row_major),
+            .Array => |arr| blk: {
+                var offset: usize = 0;
+                for (arr.values) |*value| {
+                    _ = try value.readWithMatrixLayout(output[offset..], matrix_stride, row_major);
+                    offset += arr.stride;
+                }
+                break :blk offset;
+            },
+            else => try self.read(output),
+        };
+    }
+
+    pub fn writeMatrixWithStride(self: *Self, input: []const u8, matrix_stride: SpvWord, row_major: bool) RuntimeError!usize {
         const columns = switch (self.*) {
             .Matrix => |columns| columns,
             else => return RuntimeError.InvalidValueType,
@@ -509,14 +640,43 @@ pub const Value = union(Type) {
         if (columns.len == 0) return 0;
 
         const matrix_stride_usize: usize = @intCast(matrix_stride);
-        const column_size = try columns[0].getPlainMemorySize();
-        const matrix_size = (columns.len - 1) * matrix_stride_usize + column_size;
+        const row_count: usize = @intCast(try columns[0].resolveLaneCount());
+        if (row_count == 0) return 0;
+
+        const scalar_size = @divExact(try columns[0].getPlainMemorySize(), row_count);
+        const matrix_size = if (row_major)
+            (row_count - 1) * matrix_stride_usize + columns.len * scalar_size
+        else
+            (columns.len - 1) * matrix_stride_usize + try columns[0].getPlainMemorySize();
         if (input.len < matrix_size) return RuntimeError.OutOfBounds;
 
-        for (columns, 0..) |*column, column_index| {
-            _ = try column.write(input[column_index * matrix_stride_usize ..]);
+        if (row_major) {
+            for (columns, 0..) |*column, column_index| {
+                for (0..row_count) |row_index| {
+                    _ = try column.writeVectorLane(row_index, input[row_index * matrix_stride_usize + column_index * scalar_size ..]);
+                }
+            }
+        } else {
+            for (columns, 0..) |*column, column_index| {
+                _ = try column.write(input[column_index * matrix_stride_usize ..]);
+            }
         }
         return matrix_size;
+    }
+
+    pub fn writeWithMatrixLayout(self: *Self, input: []const u8, matrix_stride: SpvWord, row_major: bool) RuntimeError!usize {
+        return switch (self.*) {
+            .Matrix => try self.writeMatrixWithStride(input, matrix_stride, row_major),
+            .Array => |*arr| blk: {
+                var offset: usize = 0;
+                for (arr.values) |*value| {
+                    _ = try value.writeWithMatrixLayout(input[offset..], matrix_stride, row_major);
+                    offset += arr.stride;
+                }
+                break :blk offset;
+            },
+            else => try self.write(input),
+        };
     }
 
     pub fn write(self: *Self, input: []const u8) RuntimeError!usize {
@@ -620,14 +780,10 @@ pub const Value = union(Type) {
                 for (s.values, 0..) |*v, i| {
                     const member_offset: usize = @intCast(s.offsets[i] orelse end_offset);
                     if (member_offset > input.len) return RuntimeError.OutOfBounds;
-                    const write_size = switch (v.*) {
-                        .Matrix => |*columns| blk: {
-                            const matrix_stride = s.matrix_strides[i] orelse break :blk try v.write(input[member_offset..]);
-                            _ = columns;
-                            break :blk try v.writeMatrixWithStride(input[member_offset..], matrix_stride);
-                        },
-                        else => try v.write(input[member_offset..]),
-                    };
+                    const write_size = if (s.matrix_strides[i]) |matrix_stride|
+                        try v.writeWithMatrixLayout(input[member_offset..], matrix_stride, s.row_major[i])
+                    else
+                        try v.write(input[member_offset..]);
                     end_offset = @max(end_offset, member_offset + write_size);
                 }
                 if (end_offset > input.len) return RuntimeError.OutOfBounds;
@@ -736,14 +892,20 @@ pub const Value = union(Type) {
     pub fn flushPtr(self: *Self, allocator: std.mem.Allocator) RuntimeError!void {
         _ = allocator;
         switch (self.*) {
+            .Structure => |*s| {
+                if (s.external_data) |data| {
+                    _ = try self.read(data);
+                }
+            },
             .Pointer => |*p| {
                 if (p.uniform_slice_window) |window| {
                     switch (p.ptr) {
                         .common => |ptr| {
-                            _ = if (p.matrix_stride) |matrix_stride|
-                                try ptr.readMatrixWithStride(window, matrix_stride)
-                            else
-                                try ptr.read(window);
+                            _ = if (p.matrix_stride) |matrix_stride| blk: {
+                                if (p.matrix_row_major and ptr.isVector())
+                                    break :blk try ptr.readVectorWithStride(window, matrix_stride);
+                                break :blk try ptr.readWithMatrixLayout(window, matrix_stride, p.matrix_row_major);
+                            } else try ptr.read(window);
                         },
                         .f32_ptr => |ptr| {
                             if (window.len < @sizeOf(f32)) return RuntimeError.OutOfBounds;
@@ -781,6 +943,7 @@ pub const Value = union(Type) {
                 allocator.free(s.values);
                 allocator.free(s.offsets);
                 allocator.free(s.matrix_strides);
+                allocator.free(s.row_major);
             },
             .Pointer => |*p| {
                 if (p.owns_uniform_backing_value) {

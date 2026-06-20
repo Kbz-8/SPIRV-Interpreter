@@ -211,13 +211,13 @@ pub const SetupDispatcher = block: {
         .ImageQuerySizeLod = autoSetupConstant,
         .ImageRead = autoSetupConstant,
         .ImageSampleExplicitLod = autoSetupConstant,
-        .ImageSampleImplicitLod = autoSetupConstant,
+        .ImageSampleImplicitLod = opDerivativeSetup,
         .ImageSampleDrefExplicitLod = autoSetupConstant,
-        .ImageSampleDrefImplicitLod = autoSetupConstant,
+        .ImageSampleDrefImplicitLod = opDerivativeSetup,
         .ImageSampleProjDrefExplicitLod = autoSetupConstant,
-        .ImageSampleProjDrefImplicitLod = autoSetupConstant,
+        .ImageSampleProjDrefImplicitLod = opDerivativeSetup,
         .ImageSampleProjExplicitLod = autoSetupConstant,
-        .ImageSampleProjImplicitLod = autoSetupConstant,
+        .ImageSampleProjImplicitLod = opDerivativeSetup,
         .ImageTexelPointer = autoSetupConstant,
         .InBoundsAccessChain = setupAccessChain,
         .IsFinite = autoSetupConstant,
@@ -1463,31 +1463,106 @@ fn ImageEngine(comptime Op: ImageOp) type {
             }
         }
 
-        fn sampleImageImplicitLod(rt: *Runtime, dst: *Value, driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32, offset: Runtime.ImageOffset) RuntimeError!void {
+        fn sampleImageImplicitLod(rt: *Runtime, dst: *Value, driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32, lod: ?f32, offset: Runtime.ImageOffset) RuntimeError!void {
             switch (dst.*) {
                 .Vector4f32,
                 .Vector3f32,
                 .Vector2f32,
-                => try writeFloatTexel(dst, try rt.image_api.sampleImageFloat4(driver_image, driver_sampler, dim, x, y, z, null, offset)),
+                => try writeFloatTexel(dst, try rt.image_api.sampleImageFloat4(driver_image, driver_sampler, dim, x, y, z, lod, offset)),
                 .Vector4i32,
                 .Vector3i32,
                 .Vector2i32,
                 .Vector4u32,
                 .Vector3u32,
                 .Vector2u32,
-                => try writeIntTexel(dst, try rt.image_api.sampleImageInt4(driver_image, driver_sampler, dim, x, y, z, null, offset)),
+                => try writeIntTexel(dst, try rt.image_api.sampleImageInt4(driver_image, driver_sampler, dim, x, y, z, lod, offset)),
 
                 .Vector => |lanes| {
                     if (lanes.len == 0) return RuntimeError.InvalidSpirV;
                     switch (lanes[0]) {
-                        .Float => try writeFloatTexel(dst, try rt.image_api.sampleImageFloat4(driver_image, driver_sampler, dim, x, y, z, null, offset)),
-                        .Int => try writeIntTexel(dst, try rt.image_api.sampleImageInt4(driver_image, driver_sampler, dim, x, y, z, null, offset)),
+                        .Float => try writeFloatTexel(dst, try rt.image_api.sampleImageFloat4(driver_image, driver_sampler, dim, x, y, z, lod, offset)),
+                        .Int => try writeIntTexel(dst, try rt.image_api.sampleImageInt4(driver_image, driver_sampler, dim, x, y, z, lod, offset)),
                         else => return RuntimeError.InvalidValueType,
                     }
                 },
 
                 else => return RuntimeError.InvalidValueType,
             }
+        }
+
+        fn cubeFaceCoord(x: f32, y: f32, z: f32) struct { u: f32, v: f32 } {
+            const ax = @abs(x);
+            const ay = @abs(y);
+            const az = @abs(z);
+
+            var sc: f32 = 0.0;
+            var tc: f32 = 0.0;
+            var ma: f32 = 1.0;
+
+            if (ax >= ay and ax >= az) {
+                ma = ax;
+                if (x >= 0.0) {
+                    sc = -z;
+                    tc = -y;
+                } else {
+                    sc = z;
+                    tc = -y;
+                }
+            } else if (ay >= ax and ay >= az) {
+                ma = ay;
+                if (y >= 0.0) {
+                    sc = x;
+                    tc = z;
+                } else {
+                    sc = x;
+                    tc = -z;
+                }
+            } else {
+                ma = az;
+                if (z >= 0.0) {
+                    sc = x;
+                    tc = -y;
+                } else {
+                    sc = -x;
+                    tc = -y;
+                }
+            }
+
+            const inv_ma = if (ma == 0.0) 0.0 else 1.0 / ma;
+            return .{
+                .u = (sc * inv_ma + 1.0) * 0.5,
+                .v = (tc * inv_ma + 1.0) * 0.5,
+            };
+        }
+
+        fn implicitSampleLod(rt: *Runtime, coordinate_id: SpvWord, driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32) RuntimeError!?f32 {
+            const coord_derivative = rt.derivatives.get(coordinate_id) orelse return null;
+            const coord_dx_x = try readSampleCoordLane(&coord_derivative.dx, 0);
+            const coord_dx_y = readSampleCoordLane(&coord_derivative.dx, 1) catch 0.0;
+            const coord_dx_z = readSampleCoordLane(&coord_derivative.dx, 2) catch 0.0;
+            const coord_dy_x = try readSampleCoordLane(&coord_derivative.dy, 0);
+            const coord_dy_y = readSampleCoordLane(&coord_derivative.dy, 1) catch 0.0;
+            const coord_dy_z = readSampleCoordLane(&coord_derivative.dy, 2) catch 0.0;
+            const lod_dim, const derivatives = if (dim == .Cube) blk: {
+                const center = cubeFaceCoord(x, y, z);
+                const dx = cubeFaceCoord(x + coord_dx_x, y + coord_dx_y, z + coord_dx_z);
+                const dy = cubeFaceCoord(x + coord_dy_x, y + coord_dy_y, z + coord_dy_z);
+                break :blk .{
+                    spv.SpvDim.@"2D",
+                    Runtime.ImageDerivatives{
+                        .dx = .{ .x = dx.u - center.u, .y = dx.v - center.v, .z = 0.0, .w = 0.0 },
+                        .dy = .{ .x = dy.u - center.u, .y = dy.v - center.v, .z = 0.0, .w = 0.0 },
+                    },
+                };
+            } else .{
+                dim,
+                Runtime.ImageDerivatives{
+                    .dx = .{ .x = coord_dx_x, .y = coord_dx_y, .z = coord_dx_z, .w = 0.0 },
+                    .dy = .{ .x = coord_dy_x, .y = coord_dy_y, .z = coord_dy_z, .w = 0.0 },
+                },
+            };
+            const lod = try rt.image_api.queryImageLod(driver_image, driver_sampler, lod_dim, derivatives);
+            return lod.y;
         }
 
         fn setImplicitSampleDerivative(
@@ -1521,9 +1596,10 @@ fn ImageEngine(comptime Op: ImageOp) type {
             const coord_dy_x = try readSampleCoordLane(&coord_derivative.dy, 0);
             const coord_dy_y = readSampleCoordLane(&coord_derivative.dy, 1) catch 0.0;
             const coord_dy_z = readSampleCoordLane(&coord_derivative.dy, 2) catch 0.0;
+            const sample_lod = try implicitSampleLod(rt, coordinate_id, driver_image, driver_sampler, dim, x, y, z);
 
-            try sampleImageImplicitLod(rt, &dx_sample, driver_image, driver_sampler, dim, x + coord_dx_x, y + coord_dx_y, z + coord_dx_z, offset);
-            try sampleImageImplicitLod(rt, &dy_sample, driver_image, driver_sampler, dim, x + coord_dy_x, y + coord_dy_y, z + coord_dy_z, offset);
+            try sampleImageImplicitLod(rt, &dx_sample, driver_image, driver_sampler, dim, x + coord_dx_x, y + coord_dx_y, z + coord_dx_z, sample_lod, offset);
+            try sampleImageImplicitLod(rt, &dy_sample, driver_image, driver_sampler, dim, x + coord_dy_x, y + coord_dy_y, z + coord_dy_z, sample_lod, offset);
 
             var dx = try Value.init(allocator, rt.results, result_type_word, false);
             defer dx.deinit(allocator);
@@ -1892,6 +1968,16 @@ fn ImageEngine(comptime Op: ImageOp) type {
                         };
                     const image_operands = if (word_count > 4) try rt.it.next() else 0;
                     const parsed_operands = try parseImageOperands(rt, image_operands);
+                    const lod = try implicitSampleLod(
+                        rt,
+                        coordinate_id,
+                        sampled_image_operand.driver_image,
+                        sampled_image_operand.driver_sampler,
+                        sampled_image_operand.dim,
+                        coords.x,
+                        coords.y,
+                        coords.z,
+                    );
 
                     try sampleImageImplicitLod(
                         rt,
@@ -1902,6 +1988,7 @@ fn ImageEngine(comptime Op: ImageOp) type {
                         coords.x,
                         coords.y,
                         coords.z,
+                        lod,
                         parsed_operands.offset,
                     );
                     try setImplicitSampleDerivative(
@@ -2968,11 +3055,12 @@ fn copyValue(dst: *Value, src: *const Value) RuntimeError!void {
             }
         }
 
-        inline fn readWindow(dst_v: *Value, window: []const u8, matrix_stride: ?SpvWord) RuntimeError!void {
-            _ = if (matrix_stride) |stride|
-                try dst_v.writeMatrixWithStride(window, stride)
-            else
-                try dst_v.write(window);
+        inline fn readWindow(dst_v: *Value, window: []const u8, matrix_stride: ?SpvWord, matrix_row_major: bool) RuntimeError!void {
+            _ = if (matrix_stride) |stride| blk: {
+                if (matrix_row_major and dst_v.isVector())
+                    break :blk try dst_v.writeVectorWithStride(window, stride);
+                break :blk try dst_v.writeWithMatrixLayout(window, stride, matrix_row_major);
+            } else try dst_v.write(window);
         }
     };
 
@@ -2988,10 +3076,11 @@ fn copyValue(dst: *Value, src: *const Value) RuntimeError!void {
                     else => try copyValue(dst_val_ptr, src),
                 }
                 if (dst_ptr.uniform_slice_window) |window| {
-                    _ = if (dst_ptr.matrix_stride) |matrix_stride|
-                        try dst_val_ptr.readMatrixWithStride(window, matrix_stride)
-                    else
-                        try dst_val_ptr.read(window);
+                    _ = if (dst_ptr.matrix_stride) |matrix_stride| blk: {
+                        if (dst_ptr.matrix_row_major and dst_val_ptr.isVector())
+                            break :blk try dst_val_ptr.readVectorWithStride(window, matrix_stride);
+                        break :blk try dst_val_ptr.readWithMatrixLayout(window, matrix_stride, dst_ptr.matrix_row_major);
+                    } else try dst_val_ptr.read(window);
                 }
                 return;
             },
@@ -3035,6 +3124,7 @@ fn copyValue(dst: *Value, src: *const Value) RuntimeError!void {
             if (dst.* == .Structure) {
                 @memcpy(@constCast(dst.Structure.offsets), s.offsets);
                 @memcpy(@constCast(dst.Structure.matrix_strides), s.matrix_strides);
+                @memcpy(@constCast(dst.Structure.row_major), s.row_major);
             }
             const dst_slice = helpers.getDstSlice(dst);
             try helpers.copySlice(dst_slice.?, s.values);
@@ -3043,28 +3133,28 @@ fn copyValue(dst: *Value, src: *const Value) RuntimeError!void {
             .common => |src_val_ptr| {
                 if (ptr.uniform_slice_window) |window| {
                     try copyValue(dst, src_val_ptr);
-                    try helpers.readWindow(dst, window, ptr.matrix_stride);
+                    try helpers.readWindow(dst, window, ptr.matrix_stride, ptr.matrix_row_major);
                 } else {
                     try copyValue(dst, src_val_ptr);
                 }
             },
             .f32_ptr => |src_f32_ptr| {
                 if (ptr.uniform_slice_window) |window| {
-                    try helpers.readWindow(dst, window, ptr.matrix_stride);
+                    try helpers.readWindow(dst, window, ptr.matrix_stride, ptr.matrix_row_major);
                 } else {
                     try helpers.readF32(dst, src_f32_ptr);
                 }
             },
             .i32_ptr => |src_i32_ptr| {
                 if (ptr.uniform_slice_window) |window| {
-                    try helpers.readWindow(dst, window, ptr.matrix_stride);
+                    try helpers.readWindow(dst, window, ptr.matrix_stride, ptr.matrix_row_major);
                 } else {
                     try helpers.readI32(dst, src_i32_ptr);
                 }
             },
             .u32_ptr => |src_u32_ptr| {
                 if (ptr.uniform_slice_window) |window| {
-                    try helpers.readWindow(dst, window, ptr.matrix_stride);
+                    try helpers.readWindow(dst, window, ptr.matrix_stride, ptr.matrix_row_major);
                 } else {
                     try helpers.readU32(dst, src_u32_ptr);
                 }
@@ -3136,12 +3226,22 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                         }
                         return null;
                     }
+
+                    fn laneOffset(matrix_stride: ?SpvWord, matrix_row_major: bool, lane_index: usize, lane_size: usize) usize {
+                        if (matrix_row_major) {
+                            if (matrix_stride) |stride| {
+                                return lane_index * @as(usize, @intCast(stride));
+                            }
+                        }
+                        return lane_index * lane_size;
+                    }
                 };
 
                 var uniform_slice_window: ?[]u8 = null;
                 var uniform_backing_value: ?*Value = null;
                 var owns_uniform_backing_value = false;
                 var matrix_stride: ?SpvWord = null;
+                var matrix_row_major = false;
 
                 if (std.meta.activeTag(value_ptr.*) == .Pointer) {
                     const ptr = value_ptr.Pointer;
@@ -3149,6 +3249,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                     uniform_backing_value = ptr.uniform_backing_value;
                     owns_uniform_backing_value = false;
                     matrix_stride = ptr.matrix_stride;
+                    matrix_row_major = ptr.matrix_row_major;
                     switch (ptr.ptr) {
                         .common => |common| value_ptr = common,
                         else => return RuntimeError.InvalidSpirV,
@@ -3173,6 +3274,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                 uniform_backing_value = ptr.uniform_backing_value;
                                 owns_uniform_backing_value = false;
                                 matrix_stride = ptr.matrix_stride;
+                                matrix_row_major = ptr.matrix_row_major;
                                 switch (ptr.ptr) {
                                     .common => |common| value_ptr = common,
                                     else => return RuntimeError.InvalidSpirV,
@@ -3184,7 +3286,15 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                             switch (value_ptr.*) {
                                 .Vector, .Matrix => |v| {
                                     if (component_index >= v.len) return RuntimeError.OutOfBounds;
-                                    const offset = if (std.meta.activeTag(value_ptr.*) == .Matrix and matrix_stride != null)
+                                    const is_matrix = std.meta.activeTag(value_ptr.*) == .Matrix;
+                                    const offset = if (!is_matrix and matrix_stride != null and matrix_row_major)
+                                        component_index * @as(usize, @intCast(matrix_stride.?))
+                                    else if (is_matrix and matrix_stride != null and matrix_row_major) row_major_offset_blk: {
+                                        const column = &v[component_index];
+                                        const lane_count: usize = @intCast(try column.resolveLaneCount());
+                                        if (lane_count == 0) return RuntimeError.OutOfBounds;
+                                        break :row_major_offset_blk component_index * @divExact(try column.getPlainMemorySize(), lane_count);
+                                    } else if (is_matrix and matrix_stride != null)
                                         component_index * @as(usize, @intCast(matrix_stride.?))
                                     else plain_offset_blk: {
                                         var plain_offset: usize = 0;
@@ -3195,12 +3305,24 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                     };
                                     uniform_slice_window = try helpers.advanceWindow(uniform_slice_window, offset);
                                     value_ptr = &v[component_index];
-                                    if (std.meta.activeTag(value_ptr.*) != .Matrix) matrix_stride = null;
+                                    if (is_matrix and matrix_row_major) {
+                                        // Keep stride for the selected column vector; its lanes are separated by MatrixStride.
+                                    } else if (std.meta.activeTag(value_ptr.*) != .Matrix) {
+                                        matrix_stride = null;
+                                        matrix_row_major = false;
+                                    }
                                 },
                                 .Array => |a| {
                                     if (component_index >= a.values.len) return RuntimeError.OutOfBounds;
                                     uniform_slice_window = try helpers.advanceWindow(uniform_slice_window, component_index * a.stride);
                                     value_ptr = &a.values[component_index];
+                                    switch (value_ptr.*) {
+                                        .Array, .Matrix => {},
+                                        else => {
+                                            matrix_stride = null;
+                                            matrix_row_major = false;
+                                        },
+                                    }
                                 },
                                 .Structure => |s| {
                                     if (component_index >= s.values.len) return RuntimeError.OutOfBounds;
@@ -3219,6 +3341,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
 
                                     value_ptr = &s.values[component_index];
                                     matrix_stride = s.matrix_strides[component_index];
+                                    matrix_row_major = s.row_major[component_index];
                                 },
                                 .RuntimeArray => |*arr| {
                                     if (component_index >= arr.getLen()) return RuntimeError.OutOfBounds;
@@ -3242,11 +3365,22 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                     uniform_backing_value = backing;
                                     owns_uniform_backing_value = true;
                                     uniform_slice_window = arr.data[element_offset .. element_offset + arr.stride];
+                                    if (arr.matrix_stride) |stride| {
+                                        matrix_stride = stride;
+                                        matrix_row_major = arr.row_major;
+                                    }
+                                    switch (value_ptr.*) {
+                                        .Array, .Matrix => {},
+                                        else => {
+                                            matrix_stride = null;
+                                            matrix_row_major = false;
+                                        },
+                                    }
                                 },
                                 .Vector4f32 => |*v| switch (component_index) {
                                     inline 0...3 => |idx| break :blk .{ .Pointer = .{
                                         .ptr = .{ .f32_ptr = &v[idx] },
-                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(f32), @sizeOf(f32)),
+                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(f32)), @sizeOf(f32)),
                                         .uniform_backing_value = uniform_backing_value,
                                         .owns_uniform_backing_value = owns_uniform_backing_value,
                                         .matrix_stride = null,
@@ -3256,7 +3390,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                 .Vector3f32 => |*v| switch (component_index) {
                                     inline 0...2 => |idx| break :blk .{ .Pointer = .{
                                         .ptr = .{ .f32_ptr = &v[idx] },
-                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(f32), @sizeOf(f32)),
+                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(f32)), @sizeOf(f32)),
                                         .uniform_backing_value = uniform_backing_value,
                                         .owns_uniform_backing_value = owns_uniform_backing_value,
                                         .matrix_stride = null,
@@ -3266,7 +3400,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                 .Vector2f32 => |*v| switch (component_index) {
                                     inline 0...1 => |idx| break :blk .{ .Pointer = .{
                                         .ptr = .{ .f32_ptr = &v[idx] },
-                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(f32), @sizeOf(f32)),
+                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(f32)), @sizeOf(f32)),
                                         .uniform_backing_value = uniform_backing_value,
                                         .owns_uniform_backing_value = owns_uniform_backing_value,
                                         .matrix_stride = null,
@@ -3276,7 +3410,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                 .Vector4i32 => |*v| switch (component_index) {
                                     inline 0...3 => |idx| break :blk .{ .Pointer = .{
                                         .ptr = .{ .i32_ptr = &v[idx] },
-                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(i32), @sizeOf(i32)),
+                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(i32)), @sizeOf(i32)),
                                         .uniform_backing_value = uniform_backing_value,
                                         .owns_uniform_backing_value = owns_uniform_backing_value,
                                         .matrix_stride = null,
@@ -3286,7 +3420,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                 .Vector3i32 => |*v| switch (component_index) {
                                     inline 0...2 => |idx| break :blk .{ .Pointer = .{
                                         .ptr = .{ .i32_ptr = &v[idx] },
-                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(i32), @sizeOf(i32)),
+                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(i32)), @sizeOf(i32)),
                                         .uniform_backing_value = uniform_backing_value,
                                         .owns_uniform_backing_value = owns_uniform_backing_value,
                                         .matrix_stride = null,
@@ -3296,7 +3430,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                 .Vector2i32 => |*v| switch (component_index) {
                                     inline 0...1 => |idx| break :blk .{ .Pointer = .{
                                         .ptr = .{ .i32_ptr = &v[idx] },
-                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(i32), @sizeOf(i32)),
+                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(i32)), @sizeOf(i32)),
                                         .uniform_backing_value = uniform_backing_value,
                                         .owns_uniform_backing_value = owns_uniform_backing_value,
                                         .matrix_stride = null,
@@ -3306,7 +3440,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                 .Vector4u32 => |*v| switch (component_index) {
                                     inline 0...3 => |idx| break :blk .{ .Pointer = .{
                                         .ptr = .{ .u32_ptr = &v[idx] },
-                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(u32), @sizeOf(u32)),
+                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(u32)), @sizeOf(u32)),
                                         .uniform_backing_value = uniform_backing_value,
                                         .owns_uniform_backing_value = owns_uniform_backing_value,
                                         .matrix_stride = null,
@@ -3316,7 +3450,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                 .Vector3u32 => |*v| switch (component_index) {
                                     inline 0...2 => |idx| break :blk .{ .Pointer = .{
                                         .ptr = .{ .u32_ptr = &v[idx] },
-                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(u32), @sizeOf(u32)),
+                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(u32)), @sizeOf(u32)),
                                         .uniform_backing_value = uniform_backing_value,
                                         .owns_uniform_backing_value = owns_uniform_backing_value,
                                         .matrix_stride = null,
@@ -3326,7 +3460,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                 .Vector2u32 => |*v| switch (component_index) {
                                     inline 0...1 => |idx| break :blk .{ .Pointer = .{
                                         .ptr = .{ .u32_ptr = &v[idx] },
-                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, idx * @sizeOf(u32), @sizeOf(u32)),
+                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(u32)), @sizeOf(u32)),
                                         .uniform_backing_value = uniform_backing_value,
                                         .owns_uniform_backing_value = owns_uniform_backing_value,
                                         .matrix_stride = null,
@@ -3346,6 +3480,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                         .uniform_backing_value = uniform_backing_value,
                         .owns_uniform_backing_value = owns_uniform_backing_value,
                         .matrix_stride = matrix_stride,
+                        .matrix_row_major = matrix_row_major,
                     },
                 };
             },
@@ -4721,6 +4856,7 @@ fn opMemberName(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime)
                     .members_type_word = undefined,
                     .members_offsets = undefined,
                     .members_matrix_strides = undefined,
+                    .members_row_major = undefined,
                     .member_names = .empty,
                 },
             },
@@ -5146,6 +5282,8 @@ fn opTypeStruct(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime)
     @memset(members_offsets, null);
     const members_matrix_strides = allocator.alloc(?SpvWord, word_count - 1) catch return RuntimeError.OutOfMemory;
     @memset(members_matrix_strides, null);
+    const members_row_major = allocator.alloc(bool, word_count - 1) catch return RuntimeError.OutOfMemory;
+    @memset(members_row_major, false);
 
     if (rt.results[id].variant) |*variant| {
         switch (variant.*) {
@@ -5154,6 +5292,7 @@ fn opTypeStruct(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime)
                     s.members_type_word = members_type_word;
                     s.members_offsets = members_offsets;
                     s.members_matrix_strides = members_matrix_strides;
+                    s.members_row_major = members_row_major;
                 },
                 else => unreachable,
             },
@@ -5166,6 +5305,7 @@ fn opTypeStruct(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime)
                     .members_type_word = members_type_word,
                     .members_offsets = members_offsets,
                     .members_matrix_strides = members_matrix_strides,
+                    .members_row_major = members_row_major,
                     .member_names = .empty,
                 },
             },

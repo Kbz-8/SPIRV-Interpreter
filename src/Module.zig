@@ -277,7 +277,15 @@ fn applyDecorations(self: *Self, allocator: std.mem.Allocator) ModuleError!void 
     const helpers = struct {
         fn applyValueLayout(results: []Result, value: *Value, type_word: SpvWord) ModuleError!void {
             const type_variant = results[type_word].variant orelse return;
-            const type_data = switch (type_variant) {
+            const resolved_type_word = switch (type_variant) {
+                .Type => |type_data| switch (type_data) {
+                    .Pointer => |ptr| ptr.target,
+                    else => type_word,
+                },
+                else => return,
+            };
+            const resolved_type_variant = results[resolved_type_word].variant orelse return;
+            const type_data = switch (resolved_type_variant) {
                 .Type => |type_data| type_data,
                 else => return,
             };
@@ -287,8 +295,13 @@ fn applyDecorations(self: *Self, allocator: std.mem.Allocator) ModuleError!void 
                     .Structure => |type_structure| {
                         @memcpy(@constCast(structure.offsets), type_structure.members_offsets);
                         @memcpy(@constCast(structure.matrix_strides), type_structure.members_matrix_strides);
+                        @memcpy(@constCast(structure.row_major), type_structure.members_row_major);
 
-                        for (structure.values, type_structure.members_type_word) |*member_value, member_type_word| {
+                        for (structure.values, type_structure.members_type_word, 0..) |*member_value, member_type_word, member_index| {
+                            if (member_value.* == .RuntimeArray) {
+                                member_value.RuntimeArray.matrix_stride = type_structure.members_matrix_strides[member_index];
+                                member_value.RuntimeArray.row_major = type_structure.members_row_major[member_index];
+                            }
                             try applyValueLayout(results, member_value, member_type_word);
                         }
                     },
@@ -355,6 +368,8 @@ fn applyDecorations(self: *Self, allocator: std.mem.Allocator) ModuleError!void 
                             switch (decoration.rtype) {
                                 .Offset => s.members_offsets[decoration.index] = decoration.literal_1,
                                 .MatrixStride => s.members_matrix_strides[decoration.index] = decoration.literal_1,
+                                .RowMajor => s.members_row_major[decoration.index] = true,
+                                .ColMajor => s.members_row_major[decoration.index] = false,
                                 else => {},
                             }
                         },

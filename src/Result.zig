@@ -123,6 +123,7 @@ pub const TypeData = union(Type) {
         members_type_word: []const SpvWord,
         members_offsets: []?SpvWord,
         members_matrix_strides: []?SpvWord,
+        members_row_major: []bool,
         member_names: std.ArrayList([]const u8),
     },
     Function: struct {
@@ -247,6 +248,7 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
                     }
                     allocator.free(data.members_offsets);
                     allocator.free(data.members_matrix_strides);
+                    allocator.free(data.members_row_major);
                     data.member_names.deinit(allocator);
                 },
                 else => {},
@@ -331,6 +333,7 @@ pub fn dupe(self: *const Self, allocator: std.mem.Allocator) RuntimeError!Self {
                                     .members_type_word = allocator.dupe(SpvWord, s.members_type_word) catch return RuntimeError.OutOfMemory,
                                     .members_offsets = allocator.dupe(?SpvWord, s.members_offsets) catch return RuntimeError.OutOfMemory,
                                     .members_matrix_strides = allocator.dupe(?SpvWord, s.members_matrix_strides) catch return RuntimeError.OutOfMemory,
+                                    .members_row_major = allocator.dupe(bool, s.members_row_major) catch return RuntimeError.OutOfMemory,
                                     .member_names = blk2: {
                                         const member_names = s.member_names.clone(allocator) catch return RuntimeError.OutOfMemory;
                                         for (member_names.items, s.member_names.items) |*new_name, name| {
