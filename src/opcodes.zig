@@ -1333,6 +1333,7 @@ fn ImageEngine(comptime Op: ImageOp) type {
         const ParsedImageOperands = struct {
             lod: ?f32 = null,
             image_lod: ?i32 = null,
+            sample: ?i32 = null,
             offset: Runtime.ImageOffset = .{},
         };
 
@@ -1358,7 +1359,8 @@ fn ImageEngine(comptime Op: ImageOp) type {
                 _ = try rt.it.next();
             }
             if (imageOperandPresent(image_operands, .SampleMask)) {
-                _ = try rt.it.next();
+                const sample_value = try rt.results[try rt.it.next()].getValue();
+                parsed.sample = try readStorageCoordLane(sample_value, 0);
             }
             if (imageOperandPresent(image_operands, .MinLodMask)) {
                 _ = try rt.it.next();
@@ -1536,6 +1538,9 @@ fn ImageEngine(comptime Op: ImageOp) type {
         }
 
         fn implicitSampleLod(rt: *Runtime, coordinate_id: SpvWord, driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32) RuntimeError!?f32 {
+            if (dim == .Cube)
+                return 0.0;
+
             const coord_derivative = rt.derivatives.get(coordinate_id) orelse return null;
             const coord_dx_x = try readSampleCoordLane(&coord_derivative.dx, 0);
             const coord_dx_y = readSampleCoordLane(&coord_derivative.dx, 1) catch 0.0;
@@ -1951,7 +1956,8 @@ fn ImageEngine(comptime Op: ImageOp) type {
                     const y = (readStorageCoordLane(coordinate, 1) catch 0) + parsed_operands.offset.y;
                     const z = (readStorageCoordLane(coordinate, 2) catch 0) + parsed_operands.offset.z;
 
-                    try readImage(rt, dst, image_operand.driver_image, image_operand.dim, x, y, z, parsed_operands.image_lod);
+                    const read_z = if (image_operand.arrayed) z else parsed_operands.sample orelse z;
+                    try readImage(rt, dst, image_operand.driver_image, image_operand.dim, x, y, read_z, parsed_operands.image_lod);
                 },
 
                 .SampleImplicitLod,
