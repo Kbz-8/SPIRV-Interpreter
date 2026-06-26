@@ -336,6 +336,44 @@ pub fn getResultPrimitiveType(self: *const Self, result: SpvWord) RuntimeError!P
     return (try self.results[result].getConstValue()).resolvePrimitiveType();
 }
 
+pub fn getWorkgroupSize(self: *Self, allocator: std.mem.Allocator) RuntimeError!?@Vector(3, u32) {
+    try self.pass(allocator, .initMany(&.{
+        .SpecConstantTrue,
+        .SpecConstantFalse,
+        .SpecConstantComposite,
+        .SpecConstant,
+        .SpecConstantOp,
+    }));
+
+    for (self.results) |*result| {
+        for (result.decorations.items) |decoration| {
+            if (decoration.rtype != .BuiltIn or decoration.literal_1 != @intFromEnum(spv.SpvBuiltIn.WorkgroupSize))
+                continue;
+
+            const value = try result.getValue();
+            return switch (value.*) {
+                .Vector3u32 => |v| v,
+                .Vector => |values| blk: {
+                    if (values.len != 3)
+                        return RuntimeError.InvalidValueType;
+
+                    var result_value = @Vector(3, u32){ 0, 0, 0 };
+                    inline for (0..3) |i| {
+                        result_value[i] = switch (values[i]) {
+                            .Int => |int| int.value.uint32,
+                            else => return RuntimeError.InvalidValueType,
+                        };
+                    }
+                    break :blk result_value;
+                },
+                else => return RuntimeError.InvalidValueType,
+            };
+        }
+    }
+
+    return null;
+}
+
 pub fn dumpResultsTable(self: *Self, allocator: std.mem.Allocator, writer: *std.Io.Writer) RuntimeError!void {
     const dump = pretty.dump(allocator, self.results, .{
         .tab_size = 4,
@@ -485,10 +523,40 @@ fn readResultValue(self: *const Self, output: []u8, result: SpvWord) RuntimeErro
     }
 }
 
-fn writeResultValue(self: *const Self, input: []const u8, result: SpvWord) RuntimeError!void {
+fn writeResultValue(self: *const Self, allocator: std.mem.Allocator, input: []const u8, result: SpvWord) RuntimeError!void {
     if (self.results[result].variant) |*variant| {
         switch (variant.*) {
-            .Variable => |*v| _ = try v.value.write(input),
+            .Variable => |*v| switch (v.value) {
+                .Pointer => |*ptr| {
+                    if (ptr.owns_uniform_backing_value) {
+                        if (ptr.uniform_backing_value) |value_ptr| {
+                            _ = try value_ptr.write(input);
+                            return;
+                        }
+                    }
+
+                    const target_type = switch ((try self.results[v.type_word].getConstVariant()).*) {
+                        .Type => |t| switch (t) {
+                            .Pointer => |p| p.target,
+                            else => return RuntimeError.InvalidSpirV,
+                        },
+                        else => return RuntimeError.InvalidSpirV,
+                    };
+                    const value_ptr = allocator.create(Value) catch return RuntimeError.OutOfMemory;
+                    errdefer allocator.destroy(value_ptr);
+
+                    value_ptr.* = try Value.init(allocator, self.results, target_type, false);
+                    errdefer value_ptr.deinit(allocator);
+
+                    _ = try value_ptr.write(input);
+                    ptr.* = .{
+                        .ptr = .{ .common = value_ptr },
+                        .uniform_backing_value = value_ptr,
+                        .owns_uniform_backing_value = true,
+                    };
+                },
+                else => _ = try v.value.write(input),
+            },
             .AccessChain => |*a| switch (a.value) {
                 .Pointer => |ptr| switch (ptr.ptr) {
                     .common => |value_ptr| _ = try value_ptr.write(input),
@@ -595,10 +663,10 @@ pub fn readBuiltIn(self: *const Self, output: []u8, builtin: spv.SpvBuiltIn) Run
     }
 }
 
-pub fn writeInput(self: *const Self, input: []const u8, result: SpvWord) RuntimeError!void {
+pub fn writeInput(self: *const Self, allocator: std.mem.Allocator, input: []const u8, result: SpvWord) RuntimeError!void {
     for (&self.mod.input_locations) |*location| {
         if (std.mem.indexOfScalar(SpvWord, location, result)) |_| {
-            try self.writeResultValue(input, result);
+            try self.writeResultValue(allocator, input, result);
             if (self.results[result].variant) |*variant| switch (variant.*) {
                 .Variable => |*v| v.value.clearExternalData(),
                 .AccessChain => |*a| a.value.clearExternalData(),
@@ -622,9 +690,9 @@ pub fn writeInputLocation(self: *const Self, input: []const u8, location: SpvWor
     value.clearExternalData();
 }
 
-pub fn writeBuiltIn(self: *const Self, input: []const u8, builtin: spv.SpvBuiltIn) RuntimeError!void {
+pub fn writeBuiltIn(self: *const Self, allocator: std.mem.Allocator, input: []const u8, builtin: spv.SpvBuiltIn) RuntimeError!void {
     if (self.mod.builtins.get(builtin)) |result| {
-        try self.writeResultValue(input, result);
+        try self.writeResultValue(allocator, input, result);
     } else {
         return RuntimeError.NotFound;
     }

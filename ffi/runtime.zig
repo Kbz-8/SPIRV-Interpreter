@@ -608,7 +608,8 @@ export fn SpvReadBuiltIn(rt: *RuntimeWrapper, output: [*]u8, output_size: c_ulon
 }
 
 export fn SpvWriteInput(rt: *RuntimeWrapper, input: [*]const u8, input_size: c_ulong, result: spv.SpvWord) callconv(.c) ffi.Result {
-    rt.rt.writeInput(input[0..input_size], result) catch |err| return toCResult(err);
+    const allocator = std.heap.c_allocator;
+    rt.rt.writeInput(allocator, input[0..input_size], result) catch |err| return toCResult(err);
     return .Success;
 }
 
@@ -618,7 +619,8 @@ export fn SpvWriteInputLocation(rt: *RuntimeWrapper, input: [*]const u8, input_s
 }
 
 export fn SpvWriteBuiltIn(rt: *RuntimeWrapper, input: [*]const u8, input_size: c_ulong, builtin: spv.spv.SpvBuiltIn) callconv(.c) ffi.Result {
-    rt.rt.writeBuiltIn(input[0..input_size], builtin) catch |err| return toCResult(err);
+    const allocator = std.heap.c_allocator;
+    rt.rt.writeBuiltIn(allocator, input[0..input_size], builtin) catch |err| return toCResult(err);
     return .Success;
 }
 

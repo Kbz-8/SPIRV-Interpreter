@@ -49,7 +49,7 @@ pub const case = struct {
             defer rt.deinit(allocator);
 
             for (config.inputs, 0..) |input, n| {
-                try rt.writeInput(input[0..], module.input_locations[n][0]);
+                try rt.writeInput(allocator, input[0..], module.input_locations[n][0]);
             }
 
             for (config.descriptor_sets, 0..) |descriptor_set, set_index| {

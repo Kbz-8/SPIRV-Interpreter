@@ -291,6 +291,7 @@ pub const SetupDispatcher = block: {
         .Undef = autoSetupConstant,
         .Variable = opVariable,
         .VectorExtractDynamic = autoSetupConstant,
+        .VectorInsertDynamic = autoSetupConstant,
         .VectorShuffle = autoSetupConstant,
         .VectorTimesMatrix = autoSetupConstant,
         .VectorTimesScalar = autoSetupConstant,
@@ -418,6 +419,7 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Not)]                    = BitEngine(.UInt, .Not).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.OuterProduct)]           = opOuterProduct;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Phi)]                    = opPhi;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.QuantizeToF16)]          = opQuantizeToF16;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Return)]                 = opReturn;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ReturnValue)]            = opReturnValue;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.SConvert)]               = ConversionEngine(.SInt, .SInt).op;
@@ -454,6 +456,7 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.UMulExtended)]           = opUMulExtended;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Unreachable)]            = opUnreachable;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorExtractDynamic)]   = opVectorExtractDynamic;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorInsertDynamic)]    = opVectorInsertDynamic;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorShuffle)]          = opVectorShuffle;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorTimesMatrix)]      = MathEngine(.Float, .VectorTimesMatrix, false).op; // TODO
     runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorTimesScalar)]      = MathEngine(.Float, .VectorTimesScalar, false).op;
@@ -3269,6 +3272,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                     const member_value = switch ((try member.getVariant()).*) {
                         .Constant => |c| &c.value,
                         .Variable => |v| &v.value,
+                        .FunctionParameter => |p| p.value_ptr orelse return RuntimeError.InvalidSpirV,
                         else => return RuntimeError.InvalidSpirV,
                     };
 
@@ -4355,6 +4359,81 @@ fn opSpecConstantOp(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runt
             }
         }
 
+        fn signedBinary(lhs_u: u64, rhs_u: u64, bit_count: usize, comptime op: enum { div, rem, mod }) RuntimeError!u64 {
+            if (rhs_u == 0) return 0;
+
+            return switch (bit_count) {
+                inline 8, 16, 32, 64 => |bits| blk: {
+                    const SInt = std.meta.Int(.signed, bits);
+                    const UInt = std.meta.Int(.unsigned, bits);
+                    const lhs: SInt = @bitCast(@as(UInt, @truncate(lhs_u)));
+                    const rhs: SInt = @bitCast(@as(UInt, @truncate(rhs_u)));
+
+                    if (lhs == std.math.minInt(SInt) and rhs == -1)
+                        break :blk @as(u64, @as(UInt, @bitCast(lhs)));
+
+                    const result = switch (op) {
+                        .div => @divTrunc(lhs, rhs),
+                        .rem => @rem(lhs, rhs),
+                        .mod => @mod(lhs, rhs),
+                    };
+                    break :blk @as(u64, @as(UInt, @bitCast(result)));
+                },
+                else => return RuntimeError.InvalidSpirV,
+            };
+        }
+
+        fn convertLane(
+            comptime from_kind: PrimitiveType,
+            comptime to_kind: PrimitiveType,
+            comptime to_bits: SpvWord,
+            from_bits: SpvWord,
+            dst: *Value,
+            src: *const Value,
+            lane_index: usize,
+        ) RuntimeError!void {
+            const ToT = Value.getPrimitiveFieldType(to_kind, to_bits);
+            switch (from_bits) {
+                inline 8, 16, 32, 64 => |bits| {
+                    if (bits == 8 and from_kind == .Float) return RuntimeError.InvalidSpirV;
+                    const from = try Value.readLane(from_kind, bits, src, lane_index);
+                    try Value.writeLane(to_kind, to_bits, dst, lane_index, std.math.lossyCast(ToT, from));
+                },
+                else => return RuntimeError.InvalidSpirV,
+            }
+        }
+
+        fn convertValue(
+            comptime from_kind: PrimitiveType,
+            comptime to_kind: PrimitiveType,
+            target_type: Result.TypeData,
+            runtime: *Runtime,
+            dst: *Value,
+            src_result: *Result,
+        ) RuntimeError!void {
+            const src_type_word = try src_result.getValueTypeWord();
+            const src_value = try src_result.getValue();
+            const from_bits = try Result.resolveLaneBitWidth((try runtime.results[src_type_word].getVariant()).Type, runtime);
+            const to_bits = try Result.resolveLaneBitWidth(target_type, runtime);
+
+            const dst_lane_count = try dst.resolveLaneCount();
+            const src_lane_count = try src_value.resolveLaneCount();
+            if (dst_lane_count != src_lane_count) return RuntimeError.InvalidSpirV;
+
+            for (0..dst_lane_count) |lane_index| {
+                switch (to_bits) {
+                    inline 8, 16, 32, 64 => |bits| {
+                        if (comptime to_kind == .Float and bits == 8) {
+                            return RuntimeError.InvalidSpirV;
+                        } else {
+                            try convertLane(from_kind, to_kind, bits, from_bits, dst, src_value, lane_index);
+                        }
+                    },
+                    else => return RuntimeError.InvalidSpirV,
+                }
+            }
+        }
+
         fn shiftLeftLogical(value: u64, amount: u64, bit_count: usize) RuntimeError!u64 {
             return switch (bit_count) {
                 inline 8, 16, 32, 64 => |bits| blk: {
@@ -4409,23 +4488,158 @@ fn opSpecConstantOp(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runt
                 else => return RuntimeError.InvalidSpirV,
             };
         }
+
+        fn readVectorLane(alloc: std.mem.Allocator, src: *const Value, lane_index: usize) RuntimeError!Value {
+            if (src.getCompositeDataOrNull()) |lanes| {
+                if (lane_index >= lanes.len) return RuntimeError.OutOfBounds;
+                return lanes[lane_index].dupe(alloc);
+            }
+
+            return switch (try src.resolvePrimitiveType()) {
+                .Float => .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = try Value.readLane(.Float, 32, src, lane_index) } } },
+                .SInt => .{ .Int = .{ .bit_count = 32, .is_signed = true, .value = .{ .sint32 = try Value.readLane(.SInt, 32, src, lane_index) } } },
+                .UInt => .{ .Int = .{ .bit_count = 32, .is_signed = false, .value = .{ .uint32 = try Value.readLane(.UInt, 32, src, lane_index) } } },
+                else => return RuntimeError.InvalidSpirV,
+            };
+        }
+
+        fn writeVectorLane(dst: *Value, lane_index: usize, lane: *const Value) RuntimeError!void {
+            if (dst.getCompositeDataOrNull()) |lanes| {
+                if (lane_index >= lanes.len) return RuntimeError.OutOfBounds;
+                try copyValue(&lanes[lane_index], lane);
+                return;
+            }
+
+            switch (try dst.resolvePrimitiveType()) {
+                .Float => try Value.writeLane(.Float, 32, dst, lane_index, try Value.readLane(.Float, 32, lane, 0)),
+                .SInt => try Value.writeLane(.SInt, 32, dst, lane_index, try Value.readLane(.SInt, 32, lane, 0)),
+                .UInt => try Value.writeLane(.UInt, 32, dst, lane_index, try Value.readLane(.UInt, 32, lane, 0)),
+                else => return RuntimeError.InvalidSpirV,
+            }
+        }
+
+        fn insertAt(current: *Value, object_value: *const Value, indices: []const SpvWord) RuntimeError!void {
+            if (indices.len == 0) {
+                try copyValue(current, object_value);
+                return;
+            }
+
+            const index = indices[0];
+            if (current.getCompositeDataOrNull()) |children| {
+                if (index >= children.len) return RuntimeError.OutOfBounds;
+                return insertAt(&children[index], object_value, indices[1..]);
+            }
+
+            if (indices.len != 1) return RuntimeError.OutOfBounds;
+            try writeVectorLane(current, index, object_value);
+        }
+
+        fn extractAt(alloc: std.mem.Allocator, composite: *const Value, indices: []const SpvWord) RuntimeError!Value {
+            if (indices.len == 0) return composite.dupe(alloc);
+
+            const index = indices[0];
+            if (composite.getCompositeDataOrNull()) |children| {
+                if (index >= children.len) return RuntimeError.OutOfBounds;
+                return extractAt(alloc, &children[index], indices[1..]);
+            }
+
+            if (indices.len != 1) return RuntimeError.OutOfBounds;
+            return readVectorLane(alloc, composite, index);
+        }
+
+        fn readIndices(rt_iter: anytype, op_word_count: SpvWord, base_words: SpvWord) RuntimeError![16]SpvWord {
+            var indices: [16]SpvWord = undefined;
+            const index_count: usize = @intCast(op_word_count - base_words);
+            if (index_count > indices.len) return RuntimeError.OutOfBounds;
+            for (indices[0..index_count]) |*index| index.* = try rt_iter.next();
+            return indices;
+        }
+
+        fn specCompositeInsert(rt_iter: anytype, op_word_count: SpvWord, target_value: *Value, object_value: *const Value, composite: *const Value) RuntimeError!void {
+            try copyValue(target_value, composite);
+
+            const indices = try readIndices(rt_iter, op_word_count, 5);
+            const index_count: usize = @intCast(op_word_count - 5);
+            try insertAt(target_value, object_value, indices[0..index_count]);
+        }
+
+        fn specCompositeExtract(alloc: std.mem.Allocator, rt_iter: anytype, op_word_count: SpvWord, target_value: *Value, composite: *const Value) RuntimeError!void {
+            const indices = try readIndices(rt_iter, op_word_count, 4);
+            const index_count: usize = @intCast(op_word_count - 4);
+            var extracted = try extractAt(alloc, composite, indices[0..index_count]);
+            defer extracted.deinit(alloc);
+            try copyValue(target_value, &extracted);
+        }
+
+        fn specVectorShuffle(alloc: std.mem.Allocator, rt_iter: anytype, target_value: *Value, vector_1: *const Value, vector_2: *const Value) RuntimeError!void {
+            const vector_1_lanes: usize = @intCast(try vector_1.resolveLaneCount());
+            const dst_lanes: usize = @intCast(try target_value.resolveLaneCount());
+
+            for (0..dst_lanes) |lane_index| {
+                const component = try rt_iter.next();
+                if (component == 0xFFFFFFFF) continue;
+
+                const source = if (component < vector_1_lanes) vector_1 else vector_2;
+                const source_lane: usize = @intCast(if (component < vector_1_lanes) component else component - vector_1_lanes);
+                var lane = try readVectorLane(alloc, source, source_lane);
+                defer lane.deinit(alloc);
+                try writeVectorLane(target_value, lane_index, &lane);
+            }
+        }
     };
 
     const target = try setupConstant(allocator, rt);
     const inner_op = try rt.it.nextAs(spv.SpvOp);
     const target_value = try target.getValue();
+    const target_type = switch ((try rt.results[target.variant.?.Constant.type_word].getVariant()).*) {
+        .Type => |t| t,
+        else => return RuntimeError.InvalidSpirV,
+    };
 
     switch (target_value.*) {
         .Int => |dst| {
             const bit_count = dst.bit_count;
 
             const result = switch (inner_op) {
-                .Not => blk: {
+                .Not, .SNegate => blk: {
                     if (word_count != 4)
                         return RuntimeError.InvalidSpirV;
 
                     const operand = try rt.results[try rt.it.next()].getValue();
-                    break :blk try helpers.bitNot(try helpers.readUInt(operand), bit_count);
+                    const operand_u = try helpers.readUInt(operand);
+                    break :blk switch (inner_op) {
+                        .Not => try helpers.bitNot(operand_u, bit_count),
+                        .SNegate => @subWithOverflow(@as(u64, 0), operand_u)[0],
+                        else => unreachable,
+                    };
+                },
+                .Select => blk: {
+                    if (word_count != 6)
+                        return RuntimeError.InvalidSpirV;
+
+                    const condition = try rt.results[try rt.it.next()].getValue();
+                    const true_value = try rt.results[try rt.it.next()].getValue();
+                    const false_value = try rt.results[try rt.it.next()].getValue();
+                    break :blk try helpers.readUInt(if (try helpers.readBool(condition)) true_value else false_value);
+                },
+                .SConvert => blk: {
+                    if (word_count != 4)
+                        return RuntimeError.InvalidSpirV;
+
+                    try helpers.convertValue(.SInt, .SInt, target_type, rt, target_value, &rt.results[try rt.it.next()]);
+                    break :blk try helpers.readUInt(target_value);
+                },
+                .UConvert => blk: {
+                    if (word_count != 4)
+                        return RuntimeError.InvalidSpirV;
+
+                    try helpers.convertValue(.UInt, .UInt, target_type, rt, target_value, &rt.results[try rt.it.next()]);
+                    break :blk try helpers.readUInt(target_value);
+                },
+                .CompositeExtract => blk: {
+                    const composite = try rt.results[try rt.it.next()].getValue();
+                    try helpers.specCompositeExtract(allocator, &rt.it, word_count, target_value, composite);
+                    break :blk try helpers.readUInt(target_value);
                 },
                 else => blk: {
                     if (word_count != 5)
@@ -4441,28 +4655,11 @@ fn opSpecConstantOp(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runt
                         .ISub => @subWithOverflow(lhs_u, rhs_u)[0],
                         .IMul => @mulWithOverflow(lhs_u, rhs_u)[0],
 
-                        .UDiv => if (rhs_u != 0) @divTrunc(lhs_u, rhs_u) else return RuntimeError.DivisionByZero,
-                        .UMod => if (rhs_u != 0) @mod(lhs_u, rhs_u) else return RuntimeError.DivisionByZero,
-                        .SDiv => blk_signed: {
-                            if (rhs_u == 0) return RuntimeError.DivisionByZero;
-                            break :blk_signed switch (bit_count) {
-                                8 => @as(u8, @bitCast(@divTrunc(@as(i8, @bitCast(@as(u8, @truncate(lhs_u)))), @as(i8, @bitCast(@as(u8, @truncate(rhs_u))))))),
-                                16 => @as(u16, @bitCast(@divTrunc(@as(i16, @bitCast(@as(u16, @truncate(lhs_u)))), @as(i16, @bitCast(@as(u16, @truncate(rhs_u))))))),
-                                32 => @as(u32, @bitCast(@divTrunc(@as(i32, @bitCast(@as(u32, @truncate(lhs_u)))), @as(i32, @bitCast(@as(u32, @truncate(rhs_u))))))),
-                                64 => @as(u64, @bitCast(@divTrunc(@as(i64, @bitCast(lhs_u)), @as(i64, @bitCast(rhs_u))))),
-                                else => return RuntimeError.InvalidSpirV,
-                            };
-                        },
-                        .SMod => blk_signed: {
-                            if (rhs_u == 0) return RuntimeError.DivisionByZero;
-                            break :blk_signed switch (bit_count) {
-                                8 => @as(u8, @bitCast(@mod(@as(i8, @bitCast(@as(u8, @truncate(lhs_u)))), @as(i8, @bitCast(@as(u8, @truncate(rhs_u))))))),
-                                16 => @as(u16, @bitCast(@mod(@as(i16, @bitCast(@as(u16, @truncate(lhs_u)))), @as(i16, @bitCast(@as(u16, @truncate(rhs_u))))))),
-                                32 => @as(u32, @bitCast(@mod(@as(i32, @bitCast(@as(u32, @truncate(lhs_u)))), @as(i32, @bitCast(@as(u32, @truncate(rhs_u))))))),
-                                64 => @as(u64, @bitCast(@mod(@as(i64, @bitCast(lhs_u)), @as(i64, @bitCast(rhs_u))))),
-                                else => return RuntimeError.InvalidSpirV,
-                            };
-                        },
+                        .UDiv => if (rhs_u != 0) @divTrunc(lhs_u, rhs_u) else 0,
+                        .UMod => if (rhs_u != 0) @mod(lhs_u, rhs_u) else 0,
+                        .SDiv => try helpers.signedBinary(lhs_u, rhs_u, bit_count, .div),
+                        .SRem => try helpers.signedBinary(lhs_u, rhs_u, bit_count, .rem),
+                        .SMod => try helpers.signedBinary(lhs_u, rhs_u, bit_count, .mod),
 
                         .BitwiseAnd => lhs_u & rhs_u,
                         .BitwiseOr => lhs_u | rhs_u,
@@ -4477,6 +4674,16 @@ fn opSpecConstantOp(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runt
             };
 
             try helpers.writeUInt(target_value, result);
+        },
+        .Array, .Matrix, .Structure => {
+            switch (inner_op) {
+                .CompositeInsert => {
+                    const object = try rt.results[try rt.it.next()].getValue();
+                    const composite = try rt.results[try rt.it.next()].getValue();
+                    try helpers.specCompositeInsert(&rt.it, word_count, target_value, object, composite);
+                },
+                else => return RuntimeError.UnsupportedSpirV,
+            }
         },
         .Bool => |*dst| {
             const result = switch (inner_op) {
@@ -4515,6 +4722,68 @@ fn opSpecConstantOp(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runt
             };
 
             dst.* = result;
+        },
+        .Float,
+        .Vector,
+        .Vector2f32,
+        .Vector3f32,
+        .Vector4f32,
+        => {
+            switch (inner_op) {
+                .QuantizeToF16 => {
+                    if (word_count != 4)
+                        return RuntimeError.UnsupportedSpirV;
+
+                    const operand = try rt.results[try rt.it.next()].getValue();
+                    try quantizeToF16Value(target_type, rt, target_value, operand);
+                },
+                .FConvert => {
+                    if (word_count != 4)
+                        return RuntimeError.InvalidSpirV;
+
+                    try helpers.convertValue(.Float, .Float, target_type, rt, target_value, &rt.results[try rt.it.next()]);
+                },
+                .CompositeInsert => {
+                    const object = try rt.results[try rt.it.next()].getValue();
+                    const composite = try rt.results[try rt.it.next()].getValue();
+                    try helpers.specCompositeInsert(&rt.it, word_count, target_value, object, composite);
+                },
+                .CompositeExtract => {
+                    const composite = try rt.results[try rt.it.next()].getValue();
+                    try helpers.specCompositeExtract(allocator, &rt.it, word_count, target_value, composite);
+                },
+                .VectorShuffle => {
+                    const vector_1 = try rt.results[try rt.it.next()].getValue();
+                    const vector_2 = try rt.results[try rt.it.next()].getValue();
+                    try helpers.specVectorShuffle(allocator, &rt.it, target_value, vector_1, vector_2);
+                },
+                else => return RuntimeError.UnsupportedSpirV,
+            }
+        },
+        .Vector2i32,
+        .Vector3i32,
+        .Vector4i32,
+        .Vector2u32,
+        .Vector3u32,
+        .Vector4u32,
+        => {
+            switch (inner_op) {
+                .CompositeInsert => {
+                    const object = try rt.results[try rt.it.next()].getValue();
+                    const composite = try rt.results[try rt.it.next()].getValue();
+                    try helpers.specCompositeInsert(&rt.it, word_count, target_value, object, composite);
+                },
+                .CompositeExtract => {
+                    const composite = try rt.results[try rt.it.next()].getValue();
+                    try helpers.specCompositeExtract(allocator, &rt.it, word_count, target_value, composite);
+                },
+                .VectorShuffle => {
+                    const vector_1 = try rt.results[try rt.it.next()].getValue();
+                    const vector_2 = try rt.results[try rt.it.next()].getValue();
+                    try helpers.specVectorShuffle(allocator, &rt.it, target_value, vector_1, vector_2);
+                },
+                else => return RuntimeError.UnsupportedSpirV,
+            }
         },
         else => return RuntimeError.UnsupportedSpirV,
     }
@@ -4918,6 +5187,35 @@ fn opPhi(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) Runtim
         }
     }
     return RuntimeError.InvalidSpirV;
+}
+
+fn quantizeF32ToF16(value: f32) f32 {
+    const rounded = @as(f32, @floatCast(@as(f16, @floatCast(value))));
+    if (@abs(rounded) != 0.0 and @abs(rounded) < @as(f32, 0x1p-14)) {
+        const sign = @as(u32, @bitCast(value)) & 0x80000000;
+        return @bitCast(sign);
+    }
+    return rounded;
+}
+
+fn quantizeToF16Value(target_type: Result.TypeData, rt: *Runtime, dst: *Value, src: *const Value) RuntimeError!void {
+    const lane_bits = try Result.resolveLaneBitWidth(target_type, rt);
+    if (lane_bits != 32)
+        return RuntimeError.InvalidSpirV;
+
+    const lane_count = try Result.resolveLaneCount(target_type);
+    for (0..lane_count) |lane_index| {
+        try Value.writeLane(.Float, 32, dst, lane_index, quantizeF32ToF16(try Value.readLane(.Float, 32, src, lane_index)));
+    }
+}
+
+fn opQuantizeToF16(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const target_type = (try rt.results[try rt.it.next()].getVariant()).Type;
+    const id = try rt.it.next();
+    const src = try rt.results[try rt.it.next()].getValue();
+    const dst = try rt.results[id].getValue();
+
+    try quantizeToF16Value(target_type, rt, dst, src);
 }
 
 fn opReturn(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
@@ -5493,6 +5791,58 @@ fn opVectorExtractDynamic(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime
         try rt.setDerivative(allocator, result_id, &dx_lane, &dy_lane);
     } else {
         rt.clearDerivative(allocator, result_id);
+    }
+}
+
+fn opVectorInsertDynamic(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const result_type_word = try rt.it.next();
+    const result_id = try rt.it.next();
+    const vector_id = try rt.it.next();
+    const component_id = try rt.it.next();
+    const index = try readDynamicVectorIndex(try rt.results[try rt.it.next()].getValue());
+
+    const target = try rt.results[result_id].getValue();
+    try copyValue(target, try rt.results[vector_id].getValue());
+
+    const target_type = switch ((try rt.results[result_type_word].getVariant()).*) {
+        .Type => |t| t,
+        else => return RuntimeError.InvalidSpirV,
+    };
+    const component = try rt.results[component_id].getValue();
+
+    const lane_bits = try Result.resolveLaneBitWidth(target_type, rt);
+    const lane_kind: PrimitiveType = switch (target_type) {
+        .Float,
+        .Vector2f32,
+        .Vector3f32,
+        .Vector4f32,
+        => .Float,
+        .Int => |i| if (i.is_signed) .SInt else .UInt,
+        .Vector => |v| switch ((try rt.results[v.components_type_word].getVariant()).*) {
+            .Type => |t| switch (t) {
+                .Float => .Float,
+                .Int => |i| if (i.is_signed) .SInt else .UInt,
+                else => return RuntimeError.InvalidSpirV,
+            },
+            else => return RuntimeError.InvalidSpirV,
+        },
+        .Vector2i32,
+        .Vector3i32,
+        .Vector4i32,
+        => .SInt,
+        .Vector2u32,
+        .Vector3u32,
+        .Vector4u32,
+        => .UInt,
+        else => return RuntimeError.InvalidSpirV,
+    };
+
+    switch (lane_bits) {
+        inline 32 => |bits| switch (lane_kind) {
+            inline .Float, .SInt, .UInt => |kind| try Value.writeLane(kind, bits, target, index, try Value.readLane(kind, bits, component, 0)),
+            else => return RuntimeError.InvalidSpirV,
+        },
+        else => return RuntimeError.UnsupportedSpirV,
     }
 }
 

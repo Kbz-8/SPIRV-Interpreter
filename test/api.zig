@@ -283,7 +283,7 @@ test "Built-in inputs and outputs" {
     defer rt.deinit(allocator);
 
     const vertex_index: i32 = 7;
-    try rt.writeBuiltIn(std.mem.asBytes(&vertex_index), .VertexIndex);
+    try rt.writeBuiltIn(allocator, std.mem.asBytes(&vertex_index), .VertexIndex);
     try rt.callEntryPoint(allocator, try rt.getEntryPointByName("main"));
 
     var position: [4]f32 = undefined;
@@ -412,7 +412,7 @@ test "Derivative memory buffers" {
     rt.clearDerivative(allocator, output_result);
 
     const input = [_]f32{ 1.0, 2.0, 3.0 };
-    try rt.writeInput(std.mem.asBytes(&input), input_result);
+    try rt.writeInput(allocator, std.mem.asBytes(&input), input_result);
     try rt.callEntryPoint(allocator, try rt.getEntryPointByName("main"));
 
     var output: [4]f32 = undefined;
