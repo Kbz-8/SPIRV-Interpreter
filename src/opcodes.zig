@@ -1334,8 +1334,10 @@ fn ImageEngine(comptime Op: ImageOp) type {
         }
 
         const ParsedImageOperands = struct {
+            bias: f32 = 0.0,
             lod: ?f32 = null,
             image_lod: ?i32 = null,
+            grad: ?Runtime.ImageDerivatives = null,
             sample: ?i32 = null,
             offset: Runtime.ImageOffset = .{},
         };
@@ -1344,7 +1346,7 @@ fn ImageEngine(comptime Op: ImageOp) type {
             var parsed: ParsedImageOperands = .{};
 
             if (imageOperandPresent(image_operands, .BiasMask)) {
-                _ = try rt.it.next();
+                parsed.bias = try readSampleCoordLane(try rt.results[try rt.it.next()].getValue(), 0);
             }
             if (imageOperandPresent(image_operands, .LodMask)) {
                 const lod_value = try rt.results[try rt.it.next()].getValue();
@@ -1352,8 +1354,22 @@ fn ImageEngine(comptime Op: ImageOp) type {
                 parsed.image_lod = readImageQueryLod(lod_value) catch null;
             }
             if (imageOperandPresent(image_operands, .GradMask)) {
-                _ = try rt.it.next();
-                _ = try rt.it.next();
+                const dx = try rt.results[try rt.it.next()].getValue();
+                const dy = try rt.results[try rt.it.next()].getValue();
+                parsed.grad = .{
+                    .dx = .{
+                        .x = try readSampleCoordLane(dx, 0),
+                        .y = if (try valueLaneCount(dx) > 1) try readSampleCoordLane(dx, 1) else 0.0,
+                        .z = if (try valueLaneCount(dx) > 2) try readSampleCoordLane(dx, 2) else 0.0,
+                        .w = if (try valueLaneCount(dx) > 3) try readSampleCoordLane(dx, 3) else 0.0,
+                    },
+                    .dy = .{
+                        .x = try readSampleCoordLane(dy, 0),
+                        .y = if (try valueLaneCount(dy) > 1) try readSampleCoordLane(dy, 1) else 0.0,
+                        .z = if (try valueLaneCount(dy) > 2) try readSampleCoordLane(dy, 2) else 0.0,
+                        .w = if (try valueLaneCount(dy) > 3) try readSampleCoordLane(dy, 3) else 0.0,
+                    },
+                };
             }
             if (imageOperandPresent(image_operands, .ConstOffsetMask) or imageOperandPresent(image_operands, .OffsetMask)) {
                 parsed.offset = try readImageOffset(rt, try rt.it.next());
@@ -1495,7 +1511,32 @@ fn ImageEngine(comptime Op: ImageOp) type {
             }
         }
 
-        fn cubeFaceCoord(x: f32, y: f32, z: f32) struct { u: f32, v: f32 } {
+        const CubeFaceCoord = struct {
+            face: u32,
+            u: f32,
+            v: f32,
+        };
+
+        fn cubeFaceCoordForFace(face: u32, x: f32, y: f32, z: f32) CubeFaceCoord {
+            const sc, const tc, const ma = switch (face) {
+                0 => .{ -z, -y, @abs(x) },
+                1 => .{ z, -y, @abs(x) },
+                2 => .{ x, z, @abs(y) },
+                3 => .{ x, -z, @abs(y) },
+                4 => .{ x, -y, @abs(z) },
+                5 => .{ -x, -y, @abs(z) },
+                else => .{ 0.0, 0.0, 1.0 },
+            };
+
+            const inv_ma = if (ma == 0.0) 0.0 else 1.0 / ma;
+            return .{
+                .face = face,
+                .u = (sc * inv_ma + 1.0) * 0.5,
+                .v = (tc * inv_ma + 1.0) * 0.5,
+            };
+        }
+
+        fn cubeFaceCoord(x: f32, y: f32, z: f32) CubeFaceCoord {
             const ax = @abs(x);
             const ay = @abs(y);
             const az = @abs(z);
@@ -1503,31 +1544,38 @@ fn ImageEngine(comptime Op: ImageOp) type {
             var sc: f32 = 0.0;
             var tc: f32 = 0.0;
             var ma: f32 = 1.0;
+            var face: u32 = 0;
 
             if (ax >= ay and ax >= az) {
                 ma = ax;
                 if (x >= 0.0) {
+                    face = 0;
                     sc = -z;
                     tc = -y;
                 } else {
+                    face = 1;
                     sc = z;
                     tc = -y;
                 }
             } else if (ay >= ax and ay >= az) {
                 ma = ay;
                 if (y >= 0.0) {
+                    face = 2;
                     sc = x;
                     tc = z;
                 } else {
+                    face = 3;
                     sc = x;
                     tc = -z;
                 }
             } else {
                 ma = az;
                 if (z >= 0.0) {
+                    face = 4;
                     sc = x;
                     tc = -y;
                 } else {
+                    face = 5;
                     sc = -x;
                     tc = -y;
                 }
@@ -1535,26 +1583,84 @@ fn ImageEngine(comptime Op: ImageOp) type {
 
             const inv_ma = if (ma == 0.0) 0.0 else 1.0 / ma;
             return .{
+                .face = face,
                 .u = (sc * inv_ma + 1.0) * 0.5,
                 .v = (tc * inv_ma + 1.0) * 0.5,
             };
         }
 
-        fn implicitSampleLod(rt: *Runtime, coordinate_id: SpvWord, driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32) RuntimeError!?f32 {
-            if (dim == .Cube)
-                return 0.0;
-
+        fn projectedSampleDerivatives(rt: *Runtime, coordinate_id: SpvWord, coordinate: *const Value) RuntimeError!?Runtime.ImageDerivatives {
             const coord_derivative = rt.derivatives.get(coordinate_id) orelse return null;
-            const coord_dx_x = try readSampleCoordLane(&coord_derivative.dx, 0);
-            const coord_dx_y = readSampleCoordLane(&coord_derivative.dx, 1) catch 0.0;
-            const coord_dx_z = readSampleCoordLane(&coord_derivative.dx, 2) catch 0.0;
-            const coord_dy_x = try readSampleCoordLane(&coord_derivative.dy, 0);
-            const coord_dy_y = readSampleCoordLane(&coord_derivative.dy, 1) catch 0.0;
-            const coord_dy_z = readSampleCoordLane(&coord_derivative.dy, 2) catch 0.0;
+            const lane_count = try valueLaneCount(coordinate);
+            if (lane_count < 2)
+                return RuntimeError.InvalidSpirV;
+
+            const q_lane = lane_count - 1;
+            const q = try readProjectionDivisor(coordinate);
+            const inv_q_squared = 1.0 / (q * q);
+            const dq_dx = try readSampleCoordLane(&coord_derivative.dx, q_lane);
+            const dq_dy = try readSampleCoordLane(&coord_derivative.dy, q_lane);
+
+            const coord_x = try readSampleCoordLane(coordinate, 0);
+            const coord_y = readSampleCoordLane(coordinate, 1) catch 0.0;
+            const coord_z = readSampleCoordLane(coordinate, 2) catch 0.0;
+            const dx_x = try readSampleCoordLane(&coord_derivative.dx, 0);
+            const dx_y = readSampleCoordLane(&coord_derivative.dx, 1) catch 0.0;
+            const dx_z = readSampleCoordLane(&coord_derivative.dx, 2) catch 0.0;
+            const dy_x = try readSampleCoordLane(&coord_derivative.dy, 0);
+            const dy_y = readSampleCoordLane(&coord_derivative.dy, 1) catch 0.0;
+            const dy_z = readSampleCoordLane(&coord_derivative.dy, 2) catch 0.0;
+
+            return .{
+                .dx = .{
+                    .x = (dx_x * q - coord_x * dq_dx) * inv_q_squared,
+                    .y = if (q_lane > 1) (dx_y * q - coord_y * dq_dx) * inv_q_squared else 0.0,
+                    .z = if (q_lane > 2) (dx_z * q - coord_z * dq_dx) * inv_q_squared else 0.0,
+                    .w = 0.0,
+                },
+                .dy = .{
+                    .x = (dy_x * q - coord_x * dq_dy) * inv_q_squared,
+                    .y = if (q_lane > 1) (dy_y * q - coord_y * dq_dy) * inv_q_squared else 0.0,
+                    .z = if (q_lane > 2) (dy_z * q - coord_z * dq_dy) * inv_q_squared else 0.0,
+                    .w = 0.0,
+                },
+            };
+        }
+
+        fn sampleDerivativesFromRuntime(rt: *Runtime, coordinate_id: SpvWord) RuntimeError!?Runtime.ImageDerivatives {
+            const coord_derivative = rt.derivatives.get(coordinate_id) orelse return null;
+            return .{
+                .dx = .{
+                    .x = try readSampleCoordLane(&coord_derivative.dx, 0),
+                    .y = readSampleCoordLane(&coord_derivative.dx, 1) catch 0.0,
+                    .z = readSampleCoordLane(&coord_derivative.dx, 2) catch 0.0,
+                    .w = readSampleCoordLane(&coord_derivative.dx, 3) catch 0.0,
+                },
+                .dy = .{
+                    .x = try readSampleCoordLane(&coord_derivative.dy, 0),
+                    .y = readSampleCoordLane(&coord_derivative.dy, 1) catch 0.0,
+                    .z = readSampleCoordLane(&coord_derivative.dy, 2) catch 0.0,
+                    .w = readSampleCoordLane(&coord_derivative.dy, 3) catch 0.0,
+                },
+            };
+        }
+
+        fn implicitSampleLod(rt: *Runtime, coordinate_id: SpvWord, coordinate: *const Value, projected: bool, driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32, bias: f32) RuntimeError!?f32 {
+            const fallback_lod = if (bias != 0.0) bias else null;
+            const coord_derivatives = if (projected)
+                (try projectedSampleDerivatives(rt, coordinate_id, coordinate)) orelse return fallback_lod
+            else
+                (try sampleDerivativesFromRuntime(rt, coordinate_id)) orelse return fallback_lod;
+            const coord_dx_x = coord_derivatives.dx.x;
+            const coord_dx_y = coord_derivatives.dx.y;
+            const coord_dx_z = coord_derivatives.dx.z;
+            const coord_dy_x = coord_derivatives.dy.x;
+            const coord_dy_y = coord_derivatives.dy.y;
+            const coord_dy_z = coord_derivatives.dy.z;
             const lod_dim, const derivatives = if (dim == .Cube) blk: {
                 const center = cubeFaceCoord(x, y, z);
-                const dx = cubeFaceCoord(x + coord_dx_x, y + coord_dx_y, z + coord_dx_z);
-                const dy = cubeFaceCoord(x + coord_dy_x, y + coord_dy_y, z + coord_dy_z);
+                const dx = cubeFaceCoordForFace(center.face, x + coord_dx_x, y + coord_dx_y, z + coord_dx_z);
+                const dy = cubeFaceCoordForFace(center.face, x + coord_dy_x, y + coord_dy_y, z + coord_dy_z);
                 break :blk .{
                     spv.SpvDim.@"2D",
                     Runtime.ImageDerivatives{
@@ -1570,7 +1676,7 @@ fn ImageEngine(comptime Op: ImageOp) type {
                 },
             };
             const lod = try rt.image_api.queryImageLod(driver_image, driver_sampler, lod_dim, derivatives);
-            return lod.y;
+            return lod.y + bias;
         }
 
         fn setImplicitSampleDerivative(
@@ -1579,6 +1685,8 @@ fn ImageEngine(comptime Op: ImageOp) type {
             result_type_word: SpvWord,
             result_id: SpvWord,
             coordinate_id: SpvWord,
+            coordinate: *const Value,
+            projected: bool,
             dst: *const Value,
             driver_image: *anyopaque,
             driver_sampler: *anyopaque,
@@ -1586,25 +1694,32 @@ fn ImageEngine(comptime Op: ImageOp) type {
             x: f32,
             y: f32,
             z: f32,
+            bias: f32,
             offset: Runtime.ImageOffset,
         ) RuntimeError!void {
-            const coord_derivative = rt.derivatives.get(coordinate_id) orelse {
-                rt.clearDerivative(allocator, result_id);
-                return;
-            };
+            const coord_derivatives = if (projected)
+                (try projectedSampleDerivatives(rt, coordinate_id, coordinate)) orelse {
+                    rt.clearDerivative(allocator, result_id);
+                    return;
+                }
+            else
+                (try sampleDerivativesFromRuntime(rt, coordinate_id)) orelse {
+                    rt.clearDerivative(allocator, result_id);
+                    return;
+                };
 
             var dx_sample = try Value.init(allocator, rt.results, result_type_word, false);
             defer dx_sample.deinit(allocator);
             var dy_sample = try Value.init(allocator, rt.results, result_type_word, false);
             defer dy_sample.deinit(allocator);
 
-            const coord_dx_x = try readSampleCoordLane(&coord_derivative.dx, 0);
-            const coord_dx_y = readSampleCoordLane(&coord_derivative.dx, 1) catch 0.0;
-            const coord_dx_z = readSampleCoordLane(&coord_derivative.dx, 2) catch 0.0;
-            const coord_dy_x = try readSampleCoordLane(&coord_derivative.dy, 0);
-            const coord_dy_y = readSampleCoordLane(&coord_derivative.dy, 1) catch 0.0;
-            const coord_dy_z = readSampleCoordLane(&coord_derivative.dy, 2) catch 0.0;
-            const sample_lod = try implicitSampleLod(rt, coordinate_id, driver_image, driver_sampler, dim, x, y, z);
+            const coord_dx_x = coord_derivatives.dx.x;
+            const coord_dx_y = coord_derivatives.dx.y;
+            const coord_dx_z = coord_derivatives.dx.z;
+            const coord_dy_x = coord_derivatives.dy.x;
+            const coord_dy_y = coord_derivatives.dy.y;
+            const coord_dy_z = coord_derivatives.dy.z;
+            const sample_lod = try implicitSampleLod(rt, coordinate_id, coordinate, projected, driver_image, driver_sampler, dim, x, y, z, bias);
 
             try sampleImageImplicitLod(rt, &dx_sample, driver_image, driver_sampler, dim, x + coord_dx_x, y + coord_dx_y, z + coord_dx_z, sample_lod, offset);
             try sampleImageImplicitLod(rt, &dy_sample, driver_image, driver_sampler, dim, x + coord_dy_x, y + coord_dy_y, z + coord_dy_z, sample_lod, offset);
@@ -1659,6 +1774,14 @@ fn ImageEngine(comptime Op: ImageOp) type {
 
                 else => return RuntimeError.InvalidValueType,
             }
+        }
+
+        fn explicitSampleLod(rt: *Runtime, driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, parsed: ParsedImageOperands) RuntimeError!?f32 {
+            if (parsed.grad) |derivatives| {
+                const lod = try rt.image_api.queryImageLod(driver_image, driver_sampler, dim, derivatives);
+                return lod.y;
+            }
+            return parsed.lod;
         }
 
         fn sampleImageDref(rt: *Runtime, dst: *Value, driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32, dref: f32, lod: ?f32, offset: Runtime.ImageOffset) RuntimeError!void {
@@ -1977,15 +2100,19 @@ fn ImageEngine(comptime Op: ImageOp) type {
                         };
                     const image_operands = if (word_count > 4) try rt.it.next() else 0;
                     const parsed_operands = try parseImageOperands(rt, image_operands);
+                    const projected = comptime Op == .SampleProjImplicitLod;
                     const lod = try implicitSampleLod(
                         rt,
                         coordinate_id,
+                        coordinate,
+                        projected,
                         sampled_image_operand.driver_image,
                         sampled_image_operand.driver_sampler,
                         sampled_image_operand.dim,
                         coords.x,
                         coords.y,
                         coords.z,
+                        parsed_operands.bias,
                     );
 
                     try sampleImageImplicitLod(
@@ -2006,6 +2133,8 @@ fn ImageEngine(comptime Op: ImageOp) type {
                         result_type_word,
                         result_id,
                         coordinate_id,
+                        coordinate,
+                        projected,
                         dst,
                         sampled_image_operand.driver_image,
                         sampled_image_operand.driver_sampler,
@@ -2013,6 +2142,7 @@ fn ImageEngine(comptime Op: ImageOp) type {
                         coords.x,
                         coords.y,
                         coords.z,
+                        parsed_operands.bias,
                         parsed_operands.offset,
                     );
                 },
@@ -2076,7 +2206,13 @@ fn ImageEngine(comptime Op: ImageOp) type {
                         coords.x,
                         coords.y,
                         coords.z,
-                        parsed_operands.lod,
+                        try explicitSampleLod(
+                            rt,
+                            sampled_image_operand.driver_image,
+                            sampled_image_operand.driver_sampler,
+                            sampled_image_operand.dim,
+                            parsed_operands,
+                        ),
                         parsed_operands.offset,
                     );
                 },
@@ -2111,7 +2247,13 @@ fn ImageEngine(comptime Op: ImageOp) type {
                         coords.y,
                         coords.z,
                         dref,
-                        parsed_operands.lod,
+                        try explicitSampleLod(
+                            rt,
+                            sampled_image_operand.driver_image,
+                            sampled_image_operand.driver_sampler,
+                            sampled_image_operand.dim,
+                            parsed_operands,
+                        ),
                         parsed_operands.offset,
                     );
                 },

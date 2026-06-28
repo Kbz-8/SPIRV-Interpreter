@@ -281,6 +281,19 @@ pub fn copyDerivative(self: *Self, allocator: std.mem.Allocator, dst: SpvWord, s
     }
 }
 
+pub fn applySpecializationLayout(self: *Self, allocator: std.mem.Allocator) RuntimeError!void {
+    self.reset();
+    try self.pass(allocator, .initMany(&.{
+        .SpecConstantTrue,
+        .SpecConstantFalse,
+        .SpecConstantComposite,
+        .SpecConstant,
+        .SpecConstantOp,
+        .TypeArray,
+        .Variable,
+    }));
+}
+
 pub fn getEntryPointByName(self: *const Self, name: []const u8) RuntimeError!SpvWord {
     for (self.mod.entry_points.items, 0..) |entry_point, i| {
         if (blk: {
@@ -523,6 +536,61 @@ fn readResultValue(self: *const Self, output: []u8, result: SpvWord) RuntimeErro
     }
 }
 
+fn readConstantIndex(self: *const Self, result: SpvWord) RuntimeError!usize {
+    const value = try self.results[result].getConstValue();
+    return switch (value.*) {
+        .Int => |i| switch (i.bit_count) {
+            8 => if (i.is_signed) std.math.cast(usize, i.value.sint8) orelse RuntimeError.OutOfBounds else @as(usize, i.value.uint8),
+            16 => if (i.is_signed) std.math.cast(usize, i.value.sint16) orelse RuntimeError.OutOfBounds else @as(usize, i.value.uint16),
+            32 => if (i.is_signed) std.math.cast(usize, i.value.sint32) orelse RuntimeError.OutOfBounds else @as(usize, i.value.uint32),
+            64 => if (i.is_signed) std.math.cast(usize, i.value.sint64) orelse RuntimeError.OutOfBounds else std.math.cast(usize, i.value.uint64) orelse RuntimeError.OutOfBounds,
+            else => RuntimeError.InvalidSpirV,
+        },
+        else => RuntimeError.InvalidSpirV,
+    };
+}
+
+fn accessChainPrefixValue(self: *const Self, result: SpvWord, prefix_len: usize) RuntimeError!*Value {
+    const access_chain = switch ((self.results[result].variant orelse return RuntimeError.InvalidSpirV)) {
+        .AccessChain => |*a| a,
+        else => return RuntimeError.InvalidSpirV,
+    };
+    if (prefix_len > access_chain.indexes.len) return RuntimeError.OutOfBounds;
+
+    var value = switch ((self.results[access_chain.base].variant orelse return RuntimeError.InvalidSpirV)) {
+        .Variable => |*v| &v.value,
+        .AccessChain => |*a| switch (a.value) {
+            .Pointer => |ptr| switch (ptr.ptr) {
+                .common => |value_ptr| value_ptr,
+                else => return RuntimeError.InvalidSpirV,
+            },
+            else => &a.value,
+        },
+        else => return RuntimeError.InvalidSpirV,
+    };
+
+    for (access_chain.indexes[0..prefix_len]) |index_id| {
+        const index = try self.readConstantIndex(index_id);
+        value = switch (value.*) {
+            .Vector, .Matrix => |values| blk: {
+                if (index >= values.len) return RuntimeError.OutOfBounds;
+                break :blk &values[index];
+            },
+            .Array => |arr| blk: {
+                if (index >= arr.values.len) return RuntimeError.OutOfBounds;
+                break :blk &arr.values[index];
+            },
+            .Structure => |structure| blk: {
+                if (index >= structure.values.len) return RuntimeError.OutOfBounds;
+                break :blk &structure.values[index];
+            },
+            else => return RuntimeError.InvalidValueType,
+        };
+    }
+
+    return value;
+}
+
 fn writeResultValue(self: *const Self, allocator: std.mem.Allocator, input: []const u8, result: SpvWord) RuntimeError!void {
     if (self.results[result].variant) |*variant| {
         switch (variant.*) {
@@ -559,18 +627,41 @@ fn writeResultValue(self: *const Self, allocator: std.mem.Allocator, input: []co
             },
             .AccessChain => |*a| switch (a.value) {
                 .Pointer => |ptr| switch (ptr.ptr) {
-                    .common => |value_ptr| _ = try value_ptr.write(input),
+                    .common => |value_ptr| {
+                        const value_size = try value_ptr.getPlainMemorySize();
+                        if (a.indexes.len > 1 and input.len > value_size) {
+                            const parent = try self.accessChainPrefixValue(result, a.indexes.len - 1);
+                            _ = try parent.write(input);
+                        } else {
+                            _ = try value_ptr.write(input);
+                        }
+                    },
                     .f32_ptr => |value_ptr| {
                         if (input.len < @sizeOf(f32)) return RuntimeError.OutOfBounds;
-                        std.mem.copyForwards(u8, std.mem.asBytes(value_ptr), input[0..@sizeOf(f32)]);
+                        if (a.indexes.len > 1 and input.len > @sizeOf(f32)) {
+                            const parent = try self.accessChainPrefixValue(result, a.indexes.len - 1);
+                            _ = try parent.write(input);
+                        } else {
+                            std.mem.copyForwards(u8, std.mem.asBytes(value_ptr), input[0..@sizeOf(f32)]);
+                        }
                     },
                     .i32_ptr => |value_ptr| {
                         if (input.len < @sizeOf(i32)) return RuntimeError.OutOfBounds;
-                        std.mem.copyForwards(u8, std.mem.asBytes(value_ptr), input[0..@sizeOf(i32)]);
+                        if (a.indexes.len > 1 and input.len > @sizeOf(i32)) {
+                            const parent = try self.accessChainPrefixValue(result, a.indexes.len - 1);
+                            _ = try parent.write(input);
+                        } else {
+                            std.mem.copyForwards(u8, std.mem.asBytes(value_ptr), input[0..@sizeOf(i32)]);
+                        }
                     },
                     .u32_ptr => |value_ptr| {
                         if (input.len < @sizeOf(u32)) return RuntimeError.OutOfBounds;
-                        std.mem.copyForwards(u8, std.mem.asBytes(value_ptr), input[0..@sizeOf(u32)]);
+                        if (a.indexes.len > 1 and input.len > @sizeOf(u32)) {
+                            const parent = try self.accessChainPrefixValue(result, a.indexes.len - 1);
+                            _ = try parent.write(input);
+                        } else {
+                            std.mem.copyForwards(u8, std.mem.asBytes(value_ptr), input[0..@sizeOf(u32)]);
+                        }
                     },
                 },
                 else => _ = try a.value.write(input),
@@ -584,16 +675,60 @@ fn writeResultValue(self: *const Self, allocator: std.mem.Allocator, input: []co
 
 const InputLocationTarget = struct {
     result: SpvWord,
+    struct_member: ?usize = null,
+    array_element: ?usize = null,
     matrix_column: ?usize = null,
 };
 
 fn resolveInputLocationTarget(self: *const Self, location: SpvWord) RuntimeError!InputLocationTarget {
-    if (location < self.mod.input_locations.len and self.mod.input_locations[location][0] != 0) {
+    if (location < self.mod.input_locations.len and
+        self.mod.input_locations[location][0] != 0 and
+        self.results[self.mod.input_locations[location][0]].variant != null)
+    {
         const result = self.mod.input_locations[location][0];
         const value = try self.results[result].getConstValue();
         switch (value.*) {
+            .Array => |arr| {
+                if (arr.values.len == 0) return RuntimeError.OutOfBounds;
+                return .{ .result = result, .array_element = 0 };
+            },
             .Matrix => return .{ .result = result, .matrix_column = 0 },
             else => return .{ .result = result },
+        }
+    }
+
+    for (self.results, 0..) |*result, id| {
+        const variant = result.variant orelse continue;
+        const variable = switch (variant) {
+            .Variable => |v| v,
+            else => continue,
+        };
+        if (variable.storage_class != .Input) continue;
+
+        const type_word = switch ((self.results[variable.type_word].variant orelse continue)) {
+            .Type => |t| switch (t) {
+                .Pointer => |ptr| ptr.target,
+                else => variable.type_word,
+            },
+            else => continue,
+        };
+        const type_result = &self.results[type_word];
+        const type_variant = type_result.variant orelse continue;
+        switch (type_variant) {
+            .Type => |t| switch (t) {
+                .Structure => {
+                    for (type_result.decorations.items) |decoration| {
+                        if (decoration.rtype == .Location and decoration.literal_1 == location) {
+                            return .{
+                                .result = @intCast(id),
+                                .struct_member = @intCast(decoration.index),
+                            };
+                        }
+                    }
+                },
+                else => {},
+            },
+            else => {},
         }
     }
 
@@ -610,6 +745,25 @@ fn resolveInputLocationTarget(self: *const Self, location: SpvWord) RuntimeError
         const location_offset: usize = @intCast(location - base_location);
         const value = try self.results[result].getConstValue();
         switch (value.*) {
+            .Array => |arr| {
+                if (arr.values.len == 0) continue;
+
+                const element_locations = switch (arr.values[0]) {
+                    .Matrix => |columns| columns.len,
+                    else => 1,
+                };
+                if (element_locations == 0) continue;
+
+                const element_index = location_offset / element_locations;
+                if (element_index >= arr.values.len) continue;
+
+                const element_location = location_offset % element_locations;
+                return .{
+                    .result = result,
+                    .array_element = element_index,
+                    .matrix_column = if (std.meta.activeTag(arr.values[element_index]) == .Matrix) element_location else null,
+                };
+            },
             .Matrix => |columns| {
                 if (location_offset < columns.len) {
                     return .{
@@ -632,8 +786,28 @@ fn getInputLocationTargetValue(self: *const Self, target: InputLocationTarget) R
         else => return RuntimeError.InvalidSpirV,
     };
 
-    if (target.matrix_column) |column| {
+    const element_value = if (target.array_element) |element| blk: {
         switch (value.*) {
+            .Array => |arr| {
+                if (element >= arr.values.len) return RuntimeError.OutOfBounds;
+                break :blk &arr.values[element];
+            },
+            else => return RuntimeError.InvalidValueType,
+        }
+    } else value;
+
+    const member_value = if (target.struct_member) |member| blk: {
+        switch (element_value.*) {
+            .Structure => |structure| {
+                if (member >= structure.values.len) return RuntimeError.OutOfBounds;
+                break :blk &structure.values[member];
+            },
+            else => return RuntimeError.InvalidValueType,
+        }
+    } else element_value;
+
+    if (target.matrix_column) |column| {
+        switch (member_value.*) {
             .Matrix => |columns| {
                 if (column >= columns.len) return RuntimeError.OutOfBounds;
                 return &columns[column];
@@ -642,7 +816,7 @@ fn getInputLocationTargetValue(self: *const Self, target: InputLocationTarget) R
         }
     }
 
-    return value;
+    return member_value;
 }
 
 pub fn readOutput(self: *const Self, output: []u8, result: SpvWord) RuntimeError!void {
@@ -705,8 +879,19 @@ pub fn flushDescriptorSets(self: *const Self, allocator: std.mem.Allocator) Runt
 }
 
 pub fn getResultMemorySize(self: *const Self, result: SpvWord) RuntimeError!usize {
-    const value = try self.results[result].getConstValue();
-    return value.getPlainMemorySize();
+    const variant = self.results[result].variant orelse return RuntimeError.InvalidSpirV;
+    return switch (variant) {
+        .AccessChain => |a| switch (a.value) {
+            .Pointer => |ptr| switch (ptr.ptr) {
+                .common => |value_ptr| value_ptr.getPlainMemorySize(),
+                .f32_ptr => @sizeOf(f32),
+                .i32_ptr => @sizeOf(i32),
+                .u32_ptr => @sizeOf(u32),
+            },
+            else => a.value.getPlainMemorySize(),
+        },
+        else => (try self.results[result].getConstValue()).getPlainMemorySize(),
+    };
 }
 
 pub fn hasResultDecoration(self: *const Self, result: SpvWord, decoration: spv.SpvDecoration) bool {
