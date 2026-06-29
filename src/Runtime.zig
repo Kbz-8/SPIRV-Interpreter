@@ -104,7 +104,7 @@ pub const ImageAPI = struct {
     writeImageInt4: *const fn (driver_image: *anyopaque, dim: spv.SpvDim, x: i32, y: i32, z: i32, pixel: Vec4(u32)) RuntimeError!void,
     sampleImageFloat4: *const fn (driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32, lod: ?f32, offset: ImageOffset) RuntimeError!Vec4(f32),
     sampleImageInt4: *const fn (driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32, lod: ?f32, offset: ImageOffset) RuntimeError!Vec4(u32),
-    sampleImageDref: *const fn (driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32, dref: f32, lod: ?f32, offset: ImageOffset) RuntimeError!f32,
+    sampleImageDref: *const fn (driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32, w: f32, dref: f32, lod: ?f32, offset: ImageOffset) RuntimeError!f32,
     queryImageSize: *const fn (driver_image: *anyopaque, dim: spv.SpvDim, arrayed: bool, lod: ?i32) RuntimeError!Vec4(u32),
     queryImageLevels: *const fn (driver_image: *anyopaque) RuntimeError!u32,
     queryImageSamples: *const fn (driver_image: *anyopaque) RuntimeError!u32,

@@ -1367,7 +1367,7 @@ fn ImageEngine(comptime Op: ImageOp) type {
             };
         }
 
-        fn readProjectedSampleCoords(coordinate: *const Value) RuntimeError!struct { x: f32, y: f32, z: f32 } {
+        fn readProjectedSampleCoords(coordinate: *const Value) RuntimeError!struct { x: f32, y: f32, z: f32, w: f32 } {
             const lane_count = try valueLaneCount(coordinate);
             if (lane_count < 2)
                 return RuntimeError.InvalidSpirV;
@@ -1378,6 +1378,7 @@ fn ImageEngine(comptime Op: ImageOp) type {
                 .x = try readSampleCoordLane(coordinate, 0) / q,
                 .y = if (q_lane > 1) (readSampleCoordLane(coordinate, 1) catch 0.0) / q else 0.0,
                 .z = if (q_lane > 2) (readSampleCoordLane(coordinate, 2) catch 0.0) / q else 0.0,
+                .w = if (q_lane > 3) (readSampleCoordLane(coordinate, 3) catch 0.0) / q else 0.0,
             };
         }
 
@@ -1856,8 +1857,8 @@ fn ImageEngine(comptime Op: ImageOp) type {
             return parsed.lod;
         }
 
-        fn sampleImageDref(rt: *Runtime, dst: *Value, driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32, dref: f32, lod: ?f32, offset: Runtime.ImageOffset) RuntimeError!void {
-            try writeFloatScalar(dst, try rt.image_api.sampleImageDref(driver_image, driver_sampler, dim, x, y, z, dref, lod, offset));
+        fn sampleImageDref(rt: *Runtime, dst: *Value, driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32, w: f32, dref: f32, lod: ?f32, offset: Runtime.ImageOffset) RuntimeError!void {
+            try writeFloatScalar(dst, try rt.image_api.sampleImageDref(driver_image, driver_sampler, dim, x, y, z, w, dref, lod, offset));
         }
 
         fn gatherCoord(index: i32, extent: u32) f32 {
@@ -2169,6 +2170,7 @@ fn ImageEngine(comptime Op: ImageOp) type {
                             .x = try readSampleCoordLane(coordinate, 0),
                             .y = readSampleCoordLane(coordinate, 1) catch 0,
                             .z = readSampleCoordLane(coordinate, 2) catch 0,
+                            .w = readSampleCoordLane(coordinate, 3) catch 0,
                         };
                     const image_operands = if (word_count > 4) try rt.it.next() else 0;
                     const parsed_operands = try parseImageOperands(rt, image_operands);
@@ -2230,6 +2232,7 @@ fn ImageEngine(comptime Op: ImageOp) type {
                             .x = try readSampleCoordLane(coordinate, 0),
                             .y = readSampleCoordLane(coordinate, 1) catch 0,
                             .z = readSampleCoordLane(coordinate, 2) catch 0,
+                            .w = readSampleCoordLane(coordinate, 3) catch 0,
                         };
                     const raw_dref = try readFloatLane(try rt.results[try rt.it.next()].getValue(), 0);
                     const dref = if (comptime Op == .SampleProjDrefImplicitLod)
@@ -2238,6 +2241,20 @@ fn ImageEngine(comptime Op: ImageOp) type {
                         raw_dref;
                     const image_operands = if (word_count > 5) try rt.it.next() else 0;
                     const parsed_operands = try parseImageOperands(rt, image_operands);
+                    const projected = comptime Op == .SampleProjDrefImplicitLod;
+                    const lod = try implicitSampleLod(
+                        rt,
+                        coordinate_id,
+                        coordinate,
+                        projected,
+                        sampled_image_operand.driver_image,
+                        sampled_image_operand.driver_sampler,
+                        sampled_image_operand.dim,
+                        coords.x,
+                        coords.y,
+                        coords.z,
+                        parsed_operands.bias,
+                    );
 
                     try sampleImageDref(
                         rt,
@@ -2248,8 +2265,9 @@ fn ImageEngine(comptime Op: ImageOp) type {
                         coords.x,
                         coords.y,
                         coords.z,
+                        coords.w,
                         dref,
-                        null,
+                        lod,
                         parsed_operands.offset,
                     );
                 },
@@ -2265,6 +2283,7 @@ fn ImageEngine(comptime Op: ImageOp) type {
                             .x = try readSampleCoordLane(coordinate, 0),
                             .y = readSampleCoordLane(coordinate, 1) catch 0,
                             .z = readSampleCoordLane(coordinate, 2) catch 0,
+                            .w = readSampleCoordLane(coordinate, 3) catch 0,
                         };
                     const image_operands = if (word_count > 4) try rt.it.next() else 0;
                     const parsed_operands = try parseImageOperands(rt, image_operands);
@@ -2300,6 +2319,7 @@ fn ImageEngine(comptime Op: ImageOp) type {
                             .x = try readSampleCoordLane(coordinate, 0),
                             .y = readSampleCoordLane(coordinate, 1) catch 0,
                             .z = readSampleCoordLane(coordinate, 2) catch 0,
+                            .w = readSampleCoordLane(coordinate, 3) catch 0,
                         };
                     const raw_dref = try readFloatLane(try rt.results[try rt.it.next()].getValue(), 0);
                     const dref = if (comptime Op == .SampleProjDrefExplicitLod)
@@ -2318,6 +2338,7 @@ fn ImageEngine(comptime Op: ImageOp) type {
                         coords.x,
                         coords.y,
                         coords.z,
+                        coords.w,
                         dref,
                         try explicitSampleLod(
                             rt,
@@ -3514,9 +3535,60 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
             .indexes = indexes,
             .value = blk: {
                 const helpers = struct {
+                    const F32Pointer = struct {
+                        ptr: *f32,
+                        backing: ?*Value,
+                        owns_backing: bool,
+                    };
+                    const I32Pointer = struct {
+                        ptr: *i32,
+                        backing: ?*Value,
+                        owns_backing: bool,
+                    };
+                    const U32Pointer = struct {
+                        ptr: *u32,
+                        backing: ?*Value,
+                        owns_backing: bool,
+                    };
+
+                    fn destroyBacking(gpa: std.mem.Allocator, backing: ?*Value, owns_backing: bool) void {
+                        if (!owns_backing) return;
+                        if (backing) |value| {
+                            value.deinit(gpa);
+                            gpa.destroy(value);
+                        }
+                    }
+
+                    fn robustF32Pointer(gpa: std.mem.Allocator, ptr: ?*f32, window: ?[]u8, descriptor_backed: bool, backing: ?*Value, owns_backing: bool) RuntimeError!F32Pointer {
+                        if (window != null or !descriptor_backed) return .{ .ptr = ptr orelse return RuntimeError.InvalidSpirV, .backing = backing, .owns_backing = owns_backing };
+
+                        destroyBacking(gpa, backing, owns_backing);
+                        const value = gpa.create(Value) catch return RuntimeError.OutOfMemory;
+                        value.* = .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = 0 } } };
+                        return .{ .ptr = &value.Float.value.float32, .backing = value, .owns_backing = true };
+                    }
+
+                    fn robustI32Pointer(gpa: std.mem.Allocator, ptr: ?*i32, window: ?[]u8, descriptor_backed: bool, backing: ?*Value, owns_backing: bool) RuntimeError!I32Pointer {
+                        if (window != null or !descriptor_backed) return .{ .ptr = ptr orelse return RuntimeError.InvalidSpirV, .backing = backing, .owns_backing = owns_backing };
+
+                        destroyBacking(gpa, backing, owns_backing);
+                        const value = gpa.create(Value) catch return RuntimeError.OutOfMemory;
+                        value.* = .{ .Int = .{ .bit_count = 32, .is_signed = true, .value = .{ .sint32 = 0 } } };
+                        return .{ .ptr = &value.Int.value.sint32, .backing = value, .owns_backing = true };
+                    }
+
+                    fn robustU32Pointer(gpa: std.mem.Allocator, ptr: ?*u32, window: ?[]u8, descriptor_backed: bool, backing: ?*Value, owns_backing: bool) RuntimeError!U32Pointer {
+                        if (window != null or !descriptor_backed) return .{ .ptr = ptr orelse return RuntimeError.InvalidSpirV, .backing = backing, .owns_backing = owns_backing };
+
+                        destroyBacking(gpa, backing, owns_backing);
+                        const value = gpa.create(Value) catch return RuntimeError.OutOfMemory;
+                        value.* = .{ .Int = .{ .bit_count = 32, .is_signed = false, .value = .{ .uint32 = 0 } } };
+                        return .{ .ptr = &value.Int.value.uint32, .backing = value, .owns_backing = true };
+                    }
+
                     fn advanceWindow(window: ?[]u8, offset: usize) RuntimeError!?[]u8 {
                         if (window) |w| {
-                            if (offset > w.len) return RuntimeError.OutOfBounds;
+                            if (offset > w.len) return null;
                             return w[offset..];
                         }
                         return null;
@@ -3524,7 +3596,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
 
                     fn advanceWindowSized(window: ?[]u8, offset: usize, size: usize) RuntimeError!?[]u8 {
                         if (window) |w| {
-                            if (offset > w.len or size > w.len - offset) return RuntimeError.OutOfBounds;
+                            if (offset > w.len or size > w.len - offset) return null;
                             return w[offset .. offset + size];
                         }
                         return null;
@@ -3545,6 +3617,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                 var owns_uniform_backing_value = false;
                 var matrix_stride: ?SpvWord = null;
                 var matrix_row_major = false;
+                var descriptor_backed = false;
 
                 if (std.meta.activeTag(value_ptr.*) == .Pointer) {
                     const ptr = value_ptr.Pointer;
@@ -3553,6 +3626,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                     owns_uniform_backing_value = false;
                     matrix_stride = ptr.matrix_stride;
                     matrix_row_major = ptr.matrix_row_major;
+                    descriptor_backed = uniform_slice_window != null or uniform_backing_value != null;
                     switch (ptr.ptr) {
                         .common => |common| value_ptr = common,
                         else => return RuntimeError.InvalidSpirV,
@@ -3579,6 +3653,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                 owns_uniform_backing_value = false;
                                 matrix_stride = ptr.matrix_stride;
                                 matrix_row_major = ptr.matrix_row_major;
+                                descriptor_backed = uniform_slice_window != null or uniform_backing_value != null;
                                 switch (ptr.ptr) {
                                     .common => |common| value_ptr = common,
                                     else => return RuntimeError.InvalidSpirV,
@@ -3639,8 +3714,10 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                     const member_offset: usize = @intCast(s.offsets[component_index] orelse end_offset);
 
                                     if (uniform_slice_window != null) {
+                                        descriptor_backed = true;
                                         uniform_slice_window = try helpers.advanceWindow(uniform_slice_window, member_offset);
                                     } else if (s.external_data) |data| {
+                                        descriptor_backed = true;
                                         uniform_slice_window = try helpers.advanceWindow(data, member_offset);
                                     }
 
@@ -3658,13 +3735,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                     }
                                 },
                                 .RuntimeArray => |*arr| {
-                                    if (component_index >= arr.getLen()) return RuntimeError.OutOfBounds;
-
-                                    const element_offset = arr.getOffsetOfIndex(component_index);
-                                    if (element_offset > arr.data.len or arr.stride > arr.data.len - element_offset)
-                                        return RuntimeError.OutOfBounds;
-
-                                    const backing = try arr.createValueFromIndex(allocator, rt.results, component_index);
+                                    const backing = try arr.createRobustValueFromIndex(allocator, rt.results, component_index);
                                     errdefer {
                                         backing.deinit(allocator);
                                         allocator.destroy(backing);
@@ -3678,7 +3749,11 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                     value_ptr = backing;
                                     uniform_backing_value = backing;
                                     owns_uniform_backing_value = true;
-                                    uniform_slice_window = arr.data[element_offset .. element_offset + arr.stride];
+                                    descriptor_backed = true;
+                                    uniform_slice_window = if (arr.getRobustOffsetOfIndex(component_index)) |element_offset|
+                                        arr.data[element_offset..]
+                                    else
+                                        null;
                                     if (arr.matrix_stride) |stride| {
                                         matrix_stride = stride;
                                         matrix_row_major = arr.row_major;
@@ -3692,94 +3767,103 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                     }
                                 },
                                 .Vector4f32 => |*v| switch (component_index) {
-                                    inline 0...3 => |idx| break :blk .{ .Pointer = .{
-                                        .ptr = .{ .f32_ptr = &v[idx] },
-                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(f32)), @sizeOf(f32)),
-                                        .uniform_backing_value = uniform_backing_value,
-                                        .owns_uniform_backing_value = owns_uniform_backing_value,
-                                        .matrix_stride = null,
-                                    } },
-                                    else => return RuntimeError.InvalidSpirV,
+                                    inline 0...3 => |idx| {
+                                        const lane_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(f32)), @sizeOf(f32));
+                                        const ptr = try helpers.robustF32Pointer(allocator, &v[idx], lane_window, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
+                                        break :blk .{ .Pointer = .{ .ptr = .{ .f32_ptr = ptr.ptr }, .uniform_slice_window = lane_window, .uniform_backing_value = ptr.backing, .owns_uniform_backing_value = ptr.owns_backing, .matrix_stride = null } };
+                                    },
+                                    else => {
+                                        const ptr = try helpers.robustF32Pointer(allocator, null, null, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
+                                        break :blk .{ .Pointer = .{ .ptr = .{ .f32_ptr = ptr.ptr }, .uniform_slice_window = null, .uniform_backing_value = ptr.backing, .owns_uniform_backing_value = ptr.owns_backing, .matrix_stride = null } };
+                                    },
                                 },
                                 .Vector3f32 => |*v| switch (component_index) {
-                                    inline 0...2 => |idx| break :blk .{ .Pointer = .{
-                                        .ptr = .{ .f32_ptr = &v[idx] },
-                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(f32)), @sizeOf(f32)),
-                                        .uniform_backing_value = uniform_backing_value,
-                                        .owns_uniform_backing_value = owns_uniform_backing_value,
-                                        .matrix_stride = null,
-                                    } },
-                                    else => return RuntimeError.InvalidSpirV,
+                                    inline 0...2 => |idx| {
+                                        const lane_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(f32)), @sizeOf(f32));
+                                        const ptr = try helpers.robustF32Pointer(allocator, &v[idx], lane_window, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
+                                        break :blk .{ .Pointer = .{ .ptr = .{ .f32_ptr = ptr.ptr }, .uniform_slice_window = lane_window, .uniform_backing_value = ptr.backing, .owns_uniform_backing_value = ptr.owns_backing, .matrix_stride = null } };
+                                    },
+                                    else => {
+                                        const ptr = try helpers.robustF32Pointer(allocator, null, null, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
+                                        break :blk .{ .Pointer = .{ .ptr = .{ .f32_ptr = ptr.ptr }, .uniform_slice_window = null, .uniform_backing_value = ptr.backing, .owns_uniform_backing_value = ptr.owns_backing, .matrix_stride = null } };
+                                    },
                                 },
                                 .Vector2f32 => |*v| switch (component_index) {
-                                    inline 0...1 => |idx| break :blk .{ .Pointer = .{
-                                        .ptr = .{ .f32_ptr = &v[idx] },
-                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(f32)), @sizeOf(f32)),
-                                        .uniform_backing_value = uniform_backing_value,
-                                        .owns_uniform_backing_value = owns_uniform_backing_value,
-                                        .matrix_stride = null,
-                                    } },
-                                    else => return RuntimeError.InvalidSpirV,
+                                    inline 0...1 => |idx| {
+                                        const lane_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(f32)), @sizeOf(f32));
+                                        const ptr = try helpers.robustF32Pointer(allocator, &v[idx], lane_window, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
+                                        break :blk .{ .Pointer = .{ .ptr = .{ .f32_ptr = ptr.ptr }, .uniform_slice_window = lane_window, .uniform_backing_value = ptr.backing, .owns_uniform_backing_value = ptr.owns_backing, .matrix_stride = null } };
+                                    },
+                                    else => {
+                                        const ptr = try helpers.robustF32Pointer(allocator, null, null, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
+                                        break :blk .{ .Pointer = .{ .ptr = .{ .f32_ptr = ptr.ptr }, .uniform_slice_window = null, .uniform_backing_value = ptr.backing, .owns_uniform_backing_value = ptr.owns_backing, .matrix_stride = null } };
+                                    },
                                 },
                                 .Vector4i32 => |*v| switch (component_index) {
-                                    inline 0...3 => |idx| break :blk .{ .Pointer = .{
-                                        .ptr = .{ .i32_ptr = &v[idx] },
-                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(i32)), @sizeOf(i32)),
-                                        .uniform_backing_value = uniform_backing_value,
-                                        .owns_uniform_backing_value = owns_uniform_backing_value,
-                                        .matrix_stride = null,
-                                    } },
-                                    else => return RuntimeError.InvalidSpirV,
+                                    inline 0...3 => |idx| {
+                                        const lane_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(i32)), @sizeOf(i32));
+                                        const ptr = try helpers.robustI32Pointer(allocator, &v[idx], lane_window, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
+                                        break :blk .{ .Pointer = .{ .ptr = .{ .i32_ptr = ptr.ptr }, .uniform_slice_window = lane_window, .uniform_backing_value = ptr.backing, .owns_uniform_backing_value = ptr.owns_backing, .matrix_stride = null } };
+                                    },
+                                    else => {
+                                        const ptr = try helpers.robustI32Pointer(allocator, null, null, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
+                                        break :blk .{ .Pointer = .{ .ptr = .{ .i32_ptr = ptr.ptr }, .uniform_slice_window = null, .uniform_backing_value = ptr.backing, .owns_uniform_backing_value = ptr.owns_backing, .matrix_stride = null } };
+                                    },
                                 },
                                 .Vector3i32 => |*v| switch (component_index) {
-                                    inline 0...2 => |idx| break :blk .{ .Pointer = .{
-                                        .ptr = .{ .i32_ptr = &v[idx] },
-                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(i32)), @sizeOf(i32)),
-                                        .uniform_backing_value = uniform_backing_value,
-                                        .owns_uniform_backing_value = owns_uniform_backing_value,
-                                        .matrix_stride = null,
-                                    } },
-                                    else => return RuntimeError.InvalidSpirV,
+                                    inline 0...2 => |idx| {
+                                        const lane_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(i32)), @sizeOf(i32));
+                                        const ptr = try helpers.robustI32Pointer(allocator, &v[idx], lane_window, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
+                                        break :blk .{ .Pointer = .{ .ptr = .{ .i32_ptr = ptr.ptr }, .uniform_slice_window = lane_window, .uniform_backing_value = ptr.backing, .owns_uniform_backing_value = ptr.owns_backing, .matrix_stride = null } };
+                                    },
+                                    else => {
+                                        const ptr = try helpers.robustI32Pointer(allocator, null, null, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
+                                        break :blk .{ .Pointer = .{ .ptr = .{ .i32_ptr = ptr.ptr }, .uniform_slice_window = null, .uniform_backing_value = ptr.backing, .owns_uniform_backing_value = ptr.owns_backing, .matrix_stride = null } };
+                                    },
                                 },
                                 .Vector2i32 => |*v| switch (component_index) {
-                                    inline 0...1 => |idx| break :blk .{ .Pointer = .{
-                                        .ptr = .{ .i32_ptr = &v[idx] },
-                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(i32)), @sizeOf(i32)),
-                                        .uniform_backing_value = uniform_backing_value,
-                                        .owns_uniform_backing_value = owns_uniform_backing_value,
-                                        .matrix_stride = null,
-                                    } },
-                                    else => return RuntimeError.InvalidSpirV,
+                                    inline 0...1 => |idx| {
+                                        const lane_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(i32)), @sizeOf(i32));
+                                        const ptr = try helpers.robustI32Pointer(allocator, &v[idx], lane_window, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
+                                        break :blk .{ .Pointer = .{ .ptr = .{ .i32_ptr = ptr.ptr }, .uniform_slice_window = lane_window, .uniform_backing_value = ptr.backing, .owns_uniform_backing_value = ptr.owns_backing, .matrix_stride = null } };
+                                    },
+                                    else => {
+                                        const ptr = try helpers.robustI32Pointer(allocator, null, null, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
+                                        break :blk .{ .Pointer = .{ .ptr = .{ .i32_ptr = ptr.ptr }, .uniform_slice_window = null, .uniform_backing_value = ptr.backing, .owns_uniform_backing_value = ptr.owns_backing, .matrix_stride = null } };
+                                    },
                                 },
                                 .Vector4u32 => |*v| switch (component_index) {
-                                    inline 0...3 => |idx| break :blk .{ .Pointer = .{
-                                        .ptr = .{ .u32_ptr = &v[idx] },
-                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(u32)), @sizeOf(u32)),
-                                        .uniform_backing_value = uniform_backing_value,
-                                        .owns_uniform_backing_value = owns_uniform_backing_value,
-                                        .matrix_stride = null,
-                                    } },
-                                    else => return RuntimeError.InvalidSpirV,
+                                    inline 0...3 => |idx| {
+                                        const lane_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(u32)), @sizeOf(u32));
+                                        const ptr = try helpers.robustU32Pointer(allocator, &v[idx], lane_window, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
+                                        break :blk .{ .Pointer = .{ .ptr = .{ .u32_ptr = ptr.ptr }, .uniform_slice_window = lane_window, .uniform_backing_value = ptr.backing, .owns_uniform_backing_value = ptr.owns_backing, .matrix_stride = null } };
+                                    },
+                                    else => {
+                                        const ptr = try helpers.robustU32Pointer(allocator, null, null, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
+                                        break :blk .{ .Pointer = .{ .ptr = .{ .u32_ptr = ptr.ptr }, .uniform_slice_window = null, .uniform_backing_value = ptr.backing, .owns_uniform_backing_value = ptr.owns_backing, .matrix_stride = null } };
+                                    },
                                 },
                                 .Vector3u32 => |*v| switch (component_index) {
-                                    inline 0...2 => |idx| break :blk .{ .Pointer = .{
-                                        .ptr = .{ .u32_ptr = &v[idx] },
-                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(u32)), @sizeOf(u32)),
-                                        .uniform_backing_value = uniform_backing_value,
-                                        .owns_uniform_backing_value = owns_uniform_backing_value,
-                                        .matrix_stride = null,
-                                    } },
-                                    else => return RuntimeError.InvalidSpirV,
+                                    inline 0...2 => |idx| {
+                                        const lane_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(u32)), @sizeOf(u32));
+                                        const ptr = try helpers.robustU32Pointer(allocator, &v[idx], lane_window, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
+                                        break :blk .{ .Pointer = .{ .ptr = .{ .u32_ptr = ptr.ptr }, .uniform_slice_window = lane_window, .uniform_backing_value = ptr.backing, .owns_uniform_backing_value = ptr.owns_backing, .matrix_stride = null } };
+                                    },
+                                    else => {
+                                        const ptr = try helpers.robustU32Pointer(allocator, null, null, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
+                                        break :blk .{ .Pointer = .{ .ptr = .{ .u32_ptr = ptr.ptr }, .uniform_slice_window = null, .uniform_backing_value = ptr.backing, .owns_uniform_backing_value = ptr.owns_backing, .matrix_stride = null } };
+                                    },
                                 },
                                 .Vector2u32 => |*v| switch (component_index) {
-                                    inline 0...1 => |idx| break :blk .{ .Pointer = .{
-                                        .ptr = .{ .u32_ptr = &v[idx] },
-                                        .uniform_slice_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(u32)), @sizeOf(u32)),
-                                        .uniform_backing_value = uniform_backing_value,
-                                        .owns_uniform_backing_value = owns_uniform_backing_value,
-                                        .matrix_stride = null,
-                                    } },
-                                    else => return RuntimeError.InvalidSpirV,
+                                    inline 0...1 => |idx| {
+                                        const lane_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(u32)), @sizeOf(u32));
+                                        const ptr = try helpers.robustU32Pointer(allocator, &v[idx], lane_window, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
+                                        break :blk .{ .Pointer = .{ .ptr = .{ .u32_ptr = ptr.ptr }, .uniform_slice_window = lane_window, .uniform_backing_value = ptr.backing, .owns_uniform_backing_value = ptr.owns_backing, .matrix_stride = null } };
+                                    },
+                                    else => {
+                                        const ptr = try helpers.robustU32Pointer(allocator, null, null, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
+                                        break :blk .{ .Pointer = .{ .ptr = .{ .u32_ptr = ptr.ptr }, .uniform_slice_window = null, .uniform_backing_value = ptr.backing, .owns_uniform_backing_value = ptr.owns_backing, .matrix_stride = null } };
+                                    },
                                 },
                                 else => return RuntimeError.InvalidSpirV,
                             }
@@ -4017,17 +4101,71 @@ fn opCompositeConstruct(allocator: std.mem.Allocator, word_count: SpvWord, rt: *
     }
 }
 
+fn extractCompositeValue(allocator: std.mem.Allocator, results: []Result, value: *const Value, member_ids: []const SpvWord) RuntimeError!Value {
+    var composite = value.*;
+    for (member_ids) |member_id_word| {
+        const member_id: usize = @intCast(member_id_word);
+        if (composite.getCompositeDataOrNull()) |v| {
+            composite = v[member_id];
+            continue;
+        }
+        switch (composite) {
+            .RuntimeArray => |arr| composite = try arr.createLocalValueFromIndex(allocator, results, member_id_word),
+            .Vector4f32 => |v| return .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = switch (member_id) {
+                inline 0...3 => |idx| v[idx],
+                else => return RuntimeError.OutOfBounds,
+            } } } },
+            .Vector3f32 => |v| return .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = switch (member_id) {
+                inline 0...2 => |idx| v[idx],
+                else => return RuntimeError.OutOfBounds,
+            } } } },
+            .Vector2f32 => |v| return .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = switch (member_id) {
+                inline 0...1 => |idx| v[idx],
+                else => return RuntimeError.OutOfBounds,
+            } } } },
+            .Vector4i32 => |v| return .{ .Int = .{ .bit_count = 32, .is_signed = true, .value = .{ .sint32 = switch (member_id) {
+                inline 0...3 => |idx| v[idx],
+                else => return RuntimeError.OutOfBounds,
+            } } } },
+            .Vector3i32 => |v| return .{ .Int = .{ .bit_count = 32, .is_signed = true, .value = .{ .sint32 = switch (member_id) {
+                inline 0...2 => |idx| v[idx],
+                else => return RuntimeError.OutOfBounds,
+            } } } },
+            .Vector2i32 => |v| return .{ .Int = .{ .bit_count = 32, .is_signed = true, .value = .{ .sint32 = switch (member_id) {
+                inline 0...1 => |idx| v[idx],
+                else => return RuntimeError.OutOfBounds,
+            } } } },
+            .Vector4u32 => |v| return .{ .Int = .{ .bit_count = 32, .is_signed = false, .value = .{ .uint32 = switch (member_id) {
+                inline 0...3 => |idx| v[idx],
+                else => return RuntimeError.OutOfBounds,
+            } } } },
+            .Vector3u32 => |v| return .{ .Int = .{ .bit_count = 32, .is_signed = false, .value = .{ .uint32 = switch (member_id) {
+                inline 0...2 => |idx| v[idx],
+                else => return RuntimeError.OutOfBounds,
+            } } } },
+            .Vector2u32 => |v| return .{ .Int = .{ .bit_count = 32, .is_signed = false, .value = .{ .uint32 = switch (member_id) {
+                inline 0...1 => |idx| v[idx],
+                else => return RuntimeError.OutOfBounds,
+            } } } },
+            else => return RuntimeError.InvalidValueType,
+        }
+    }
+    return composite.dupe(allocator);
+}
+
 fn opCompositeExtract(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
     const res_type = try rt.it.next();
     const id = try rt.it.next();
     const composite_id = try rt.it.next();
     const index_count: usize = @intCast(word_count - 3);
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
+    const member_ids = allocator.alloc(SpvWord, index_count) catch return RuntimeError.OutOfMemory;
+    defer allocator.free(member_ids);
+    for (member_ids) |*member_id| {
+        member_id.* = try rt.it.next();
+    }
 
-    const arena_allocator = arena.allocator();
-
+    const value = try extractCompositeValue(allocator, rt.results, try rt.results[composite_id].getValue(), member_ids);
     rt.results[id].variant = .{
         .Constant = .{
             .type_word = res_type,
@@ -4035,59 +4173,19 @@ fn opCompositeExtract(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Ru
                 .Type => |t| @as(Result.Type, t),
                 else => return RuntimeError.InvalidSpirV,
             },
-            .value = blk: {
-                var composite = (try rt.results[composite_id].getValue()).*;
-                for (0..index_count) |_| {
-                    const member_id = try rt.it.next();
-                    if (composite.getCompositeDataOrNull()) |v| {
-                        composite = v[member_id];
-                        continue;
-                    }
-                    switch (composite) {
-                        .RuntimeArray => |arr| composite = try arr.createLocalValueFromIndex(arena_allocator, rt.results, member_id),
-                        .Vector4f32 => |v| break :blk .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = switch (member_id) {
-                            inline 0...3 => |idx| v[idx],
-                            else => return RuntimeError.OutOfBounds,
-                        } } } },
-                        .Vector3f32 => |v| break :blk .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = switch (member_id) {
-                            inline 0...2 => |idx| v[idx],
-                            else => return RuntimeError.OutOfBounds,
-                        } } } },
-                        .Vector2f32 => |v| break :blk .{ .Float = .{ .bit_count = 32, .value = .{ .float32 = switch (member_id) {
-                            inline 0...1 => |idx| v[idx],
-                            else => return RuntimeError.OutOfBounds,
-                        } } } },
-                        .Vector4i32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .is_signed = true, .value = .{ .sint32 = switch (member_id) {
-                            inline 0...3 => |idx| v[idx],
-                            else => return RuntimeError.OutOfBounds,
-                        } } } },
-                        .Vector3i32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .is_signed = true, .value = .{ .sint32 = switch (member_id) {
-                            inline 0...2 => |idx| v[idx],
-                            else => return RuntimeError.OutOfBounds,
-                        } } } },
-                        .Vector2i32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .is_signed = true, .value = .{ .sint32 = switch (member_id) {
-                            inline 0...1 => |idx| v[idx],
-                            else => return RuntimeError.OutOfBounds,
-                        } } } },
-                        .Vector4u32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .is_signed = false, .value = .{ .uint32 = switch (member_id) {
-                            inline 0...3 => |idx| v[idx],
-                            else => return RuntimeError.OutOfBounds,
-                        } } } },
-                        .Vector3u32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .is_signed = false, .value = .{ .uint32 = switch (member_id) {
-                            inline 0...2 => |idx| v[idx],
-                            else => return RuntimeError.OutOfBounds,
-                        } } } },
-                        .Vector2u32 => |v| break :blk .{ .Int = .{ .bit_count = 32, .is_signed = false, .value = .{ .uint32 = switch (member_id) {
-                            inline 0...1 => |idx| v[idx],
-                            else => return RuntimeError.OutOfBounds,
-                        } } } },
-                        else => return RuntimeError.InvalidValueType,
-                    }
-                }
-                break :blk try composite.dupe(allocator);
-            },
+            .value = value,
         },
     };
+
+    if (rt.derivatives.get(composite_id)) |derivative| {
+        var dx = try extractCompositeValue(allocator, rt.results, &derivative.dx, member_ids);
+        defer dx.deinit(allocator);
+        var dy = try extractCompositeValue(allocator, rt.results, &derivative.dy, member_ids);
+        defer dy.deinit(allocator);
+        try rt.setDerivative(allocator, id, &dx, &dy);
+    } else {
+        rt.clearDerivative(allocator, id);
+    }
 }
 
 fn opCompositeInsert(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {

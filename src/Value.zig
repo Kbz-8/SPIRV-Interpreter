@@ -96,6 +96,30 @@ pub const Value = union(Type) {
             return value;
         }
 
+        pub inline fn createRobustValueFromIndex(self: *const @This(), allocator: std.mem.Allocator, results: []const Result, index: usize) RuntimeError!*Value {
+            const value = allocator.create(Value) catch return RuntimeError.OutOfMemory;
+            errdefer allocator.destroy(value);
+
+            value.* = try Value.init(allocator, results, self.type_word, false);
+            errdefer value.deinit(allocator);
+
+            const bytes = allocator.alloc(u8, self.stride) catch return RuntimeError.OutOfMemory;
+            defer allocator.free(bytes);
+            @memset(bytes, 0);
+
+            if (self.getRobustOffsetOfIndex(index)) |offset| {
+                const available = @min(self.stride, self.data.len - offset);
+                @memcpy(bytes[0..available], self.data[offset .. offset + available]);
+            }
+
+            _ = if (self.matrix_stride) |matrix_stride|
+                try value.writeWithMatrixLayout(bytes, matrix_stride, self.row_major)
+            else
+                try value.write(bytes);
+
+            return value;
+        }
+
         pub inline fn createLocalValueFromIndex(self: *const @This(), allocator: std.mem.Allocator, results: []const Result, index: usize) RuntimeError!Value {
             const offset = try self.getCheckedOffsetOfIndex(index);
             var value = try Value.init(allocator, results, self.type_word, false);
@@ -109,6 +133,12 @@ pub const Value = union(Type) {
 
         pub inline fn getOffsetOfIndex(self: *const @This(), index: usize) usize {
             return self.stride * index;
+        }
+
+        pub inline fn getRobustOffsetOfIndex(self: *const @This(), index: usize) ?usize {
+            if (self.stride == 0) return null;
+            const offset = std.math.mul(usize, self.stride, index) catch return null;
+            return if (offset < self.data.len) offset else null;
         }
 
         pub inline fn getCheckedOffsetOfIndex(self: *const @This(), index: usize) RuntimeError!usize {
@@ -540,18 +570,18 @@ pub const Value = union(Type) {
                 return values[lane_index].write(input);
             },
             .Vector2f32, .Vector3f32, .Vector4f32 => {
-                if (input.len < @sizeOf(f32)) return RuntimeError.OutOfBounds;
-                try writeLane(.Float, 32, self, lane_index, std.mem.bytesToValue(f32, input[0..@sizeOf(f32)]));
+                const value: f32 = if (input.len >= @sizeOf(f32)) std.mem.bytesToValue(f32, input[0..@sizeOf(f32)]) else 0;
+                try writeLane(.Float, 32, self, lane_index, value);
                 return @sizeOf(f32);
             },
             .Vector2i32, .Vector3i32, .Vector4i32 => {
-                if (input.len < @sizeOf(i32)) return RuntimeError.OutOfBounds;
-                try writeLane(.SInt, 32, self, lane_index, std.mem.bytesToValue(i32, input[0..@sizeOf(i32)]));
+                const value: i32 = if (input.len >= @sizeOf(i32)) std.mem.bytesToValue(i32, input[0..@sizeOf(i32)]) else 0;
+                try writeLane(.SInt, 32, self, lane_index, value);
                 return @sizeOf(i32);
             },
             .Vector2u32, .Vector3u32, .Vector4u32 => {
-                if (input.len < @sizeOf(u32)) return RuntimeError.OutOfBounds;
-                try writeLane(.UInt, 32, self, lane_index, std.mem.bytesToValue(u32, input[0..@sizeOf(u32)]));
+                const value: u32 = if (input.len >= @sizeOf(u32)) std.mem.bytesToValue(u32, input[0..@sizeOf(u32)]) else 0;
+                try writeLane(.UInt, 32, self, lane_index, value);
                 return @sizeOf(u32);
             },
             else => return RuntimeError.InvalidValueType,
@@ -651,17 +681,17 @@ pub const Value = union(Type) {
             (row_count - 1) * matrix_stride_usize + columns.len * scalar_size
         else
             (columns.len - 1) * matrix_stride_usize + try columns[0].getPlainMemorySize();
-        if (input.len < matrix_size) return RuntimeError.OutOfBounds;
-
         if (row_major) {
             for (columns, 0..) |*column, column_index| {
                 for (0..row_count) |row_index| {
-                    _ = try column.writeVectorLane(row_index, input[row_index * matrix_stride_usize + column_index * scalar_size ..]);
+                    const offset = row_index * matrix_stride_usize + column_index * scalar_size;
+                    _ = try column.writeVectorLane(row_index, input[@min(offset, input.len)..]);
                 }
             }
         } else {
             for (columns, 0..) |*column, column_index| {
-                _ = try column.write(input[column_index * matrix_stride_usize ..]);
+                const offset = column_index * matrix_stride_usize;
+                _ = try column.write(input[@min(offset, input.len)..]);
             }
         }
         return matrix_size;
@@ -673,7 +703,7 @@ pub const Value = union(Type) {
             .Array => |*arr| blk: {
                 var offset: usize = 0;
                 for (arr.values) |*value| {
-                    _ = try value.writeWithMatrixLayout(input[offset..], matrix_stride, row_major);
+                    _ = try value.writeWithMatrixLayout(input[@min(offset, input.len)..], matrix_stride, row_major);
                     offset += if (arr.stride != 0) arr.stride else try value.getPlainMemorySize();
                 }
                 break :blk offset;
@@ -688,10 +718,12 @@ pub const Value = union(Type) {
                 const info = @typeInfo(T).vector;
                 const Lane = info.child;
                 const size = info.len * @sizeOf(Lane);
-                if (in.len < size) return RuntimeError.OutOfBounds;
                 inline for (0..info.len) |i| {
                     const offset = i * @sizeOf(Lane);
-                    vec[i] = std.mem.bytesToValue(Lane, in[offset..][0..@sizeOf(Lane)]);
+                    vec[i] = if (offset + @sizeOf(Lane) <= in.len)
+                        std.mem.bytesToValue(Lane, in[offset..][0..@sizeOf(Lane)])
+                    else
+                        0;
                 }
                 return size;
             }
@@ -699,27 +731,25 @@ pub const Value = union(Type) {
 
         switch (self.*) {
             .Bool => |*b| {
-                if (input.len < 1) return RuntimeError.OutOfBounds;
-                b.* = if (input[0] != 0) true else false;
+                b.* = if (input.len >= 1 and input[0] != 0) true else false;
                 return 1;
             },
             .Int => |*i| {
                 switch (i.bit_count) {
                     8 => {
-                        if (input.len < 1) return RuntimeError.OutOfBounds;
-                        i.value.uint8 = @bitCast(input[0]);
+                        i.value.uint8 = if (input.len >= 1) @bitCast(input[0]) else 0;
                     },
                     16 => {
-                        if (input.len < 2) return RuntimeError.OutOfBounds;
-                        @memcpy(std.mem.asBytes(&i.value.uint16), input[0..2]);
+                        i.value.uint16 = 0;
+                        if (input.len >= 2) @memcpy(std.mem.asBytes(&i.value.uint16), input[0..2]);
                     },
                     32 => {
-                        if (input.len < 4) return RuntimeError.OutOfBounds;
-                        @memcpy(std.mem.asBytes(&i.value.uint32), input[0..4]);
+                        i.value.uint32 = 0;
+                        if (input.len >= 4) @memcpy(std.mem.asBytes(&i.value.uint32), input[0..4]);
                     },
                     64 => {
-                        if (input.len < 8) return RuntimeError.OutOfBounds;
-                        @memcpy(std.mem.asBytes(&i.value.uint64), input[0..8]);
+                        i.value.uint64 = 0;
+                        if (input.len >= 8) @memcpy(std.mem.asBytes(&i.value.uint64), input[0..8]);
                     },
                     else => return RuntimeError.InvalidValueType,
                 }
@@ -728,16 +758,16 @@ pub const Value = union(Type) {
             .Float => |*f| {
                 switch (f.bit_count) {
                     16 => {
-                        if (input.len < 2) return RuntimeError.OutOfBounds;
-                        @memcpy(std.mem.asBytes(&f.value.float16), input[0..2]);
+                        f.value.float16 = 0;
+                        if (input.len >= 2) @memcpy(std.mem.asBytes(&f.value.float16), input[0..2]);
                     },
                     32 => {
-                        if (input.len < 4) return RuntimeError.OutOfBounds;
-                        @memcpy(std.mem.asBytes(&f.value.float32), input[0..4]);
+                        f.value.float32 = 0;
+                        if (input.len >= 4) @memcpy(std.mem.asBytes(&f.value.float32), input[0..4]);
                     },
                     64 => {
-                        if (input.len < 8) return RuntimeError.OutOfBounds;
-                        @memcpy(std.mem.asBytes(&f.value.float64), input[0..8]);
+                        f.value.float64 = 0;
+                        if (input.len >= 8) @memcpy(std.mem.asBytes(&f.value.float64), input[0..8]);
                     },
                     else => return RuntimeError.InvalidValueType,
                 }
@@ -773,7 +803,12 @@ pub const Value = union(Type) {
             .Array => |*arr| {
                 var offset: usize = 0;
                 for (arr.values) |*v| {
-                    _ = try v.write(input[offset..]);
+                    if (v.* == .RuntimeArray) {
+                        v.RuntimeArray.data = @constCast(input[@min(offset, input.len)..]);
+                        offset += input.len - @min(offset, input.len);
+                        continue;
+                    }
+                    _ = try v.write(input[@min(offset, input.len)..]);
                     offset += if (arr.stride != 0) arr.stride else try v.getPlainMemorySize();
                 }
                 return offset;
@@ -782,20 +817,29 @@ pub const Value = union(Type) {
                 var end_offset: usize = 0;
                 for (s.values, 0..) |*v, i| {
                     const member_offset: usize = @intCast(s.offsets[i] orelse end_offset);
-                    if (member_offset > input.len) return RuntimeError.OutOfBounds;
+                    if (member_offset > input.len) {
+                        if (v.* == .RuntimeArray) {
+                            v.RuntimeArray.data = &.{};
+                            continue;
+                        }
+                    }
                     const member_input = if (v.* == .RuntimeArray and i + 1 < s.values.len and s.offsets[i + 1] != null) blk: {
                         const next_offset: usize = @intCast(s.offsets[i + 1].?);
-                        if (next_offset < member_offset or next_offset > input.len) return RuntimeError.OutOfBounds;
-                        break :blk input[member_offset..next_offset];
-                    } else input[member_offset..];
+                        if (next_offset < member_offset) return RuntimeError.OutOfBounds;
+                        break :blk input[member_offset..@min(next_offset, input.len)];
+                    } else input[@min(member_offset, input.len)..];
+                    if (v.* == .RuntimeArray) {
+                        v.RuntimeArray.data = @constCast(member_input);
+                        end_offset = @max(end_offset, input.len);
+                        continue;
+                    }
                     const write_size = if (s.matrix_strides[i]) |matrix_stride|
                         try v.writeWithMatrixLayout(member_input, matrix_stride, s.row_major[i])
                     else
                         try v.write(member_input);
                     end_offset = @max(end_offset, member_offset + write_size);
                 }
-                if (end_offset > input.len) return RuntimeError.OutOfBounds;
-                s.external_data = @constCast(input[0..end_offset]);
+                s.external_data = @constCast(input[0..@min(end_offset, input.len)]);
                 return end_offset;
             },
             .RuntimeArray => |*arr| {
