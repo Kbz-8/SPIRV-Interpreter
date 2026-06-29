@@ -114,21 +114,22 @@ pub const SetupDispatcher = block: {
         .AccessChain = setupAccessChain,
         .All = autoSetupConstant,
         .Any = autoSetupConstant,
-        .AtomicAnd = autoSetupConstant,
-        .AtomicCompareExchange = autoSetupConstant,
-        .AtomicExchange = autoSetupConstant,
-        .AtomicIAdd = autoSetupConstant,
-        .AtomicIDecrement = autoSetupConstant,
-        .AtomicIIncrement = autoSetupConstant,
-        .AtomicISub = autoSetupConstant,
-        .AtomicLoad = autoSetupConstant,
-        .AtomicOr = autoSetupConstant,
-        .AtomicSMax = autoSetupConstant,
-        .AtomicSMin = autoSetupConstant,
-        .AtomicStore = autoSetupConstant,
-        .AtomicUMax = autoSetupConstant,
-        .AtomicUMin = autoSetupConstant,
-        .AtomicXor = autoSetupConstant,
+        .ArrayLength = autoSetupConstant,
+        .AtomicAnd = setupAtomic,
+        .AtomicCompareExchange = setupAtomic,
+        .AtomicExchange = setupAtomic,
+        .AtomicIAdd = setupAtomic,
+        .AtomicIDecrement = setupAtomic,
+        .AtomicIIncrement = setupAtomic,
+        .AtomicISub = setupAtomic,
+        .AtomicLoad = setupAtomic,
+        .AtomicOr = setupAtomic,
+        .AtomicSMax = setupAtomic,
+        .AtomicSMin = setupAtomic,
+        .AtomicStore = setupAtomicStore,
+        .AtomicUMax = setupAtomic,
+        .AtomicUMin = setupAtomic,
+        .AtomicXor = setupAtomic,
         .BitCount = autoSetupConstant,
         .BitFieldInsert = autoSetupConstant,
         .BitFieldSExtract = autoSetupConstant,
@@ -144,14 +145,16 @@ pub const SetupDispatcher = block: {
         .Constant = opConstant,
         .ConstantComposite = opConstantComposite,
         .ConstantFalse = opConstantFalse,
+        .ConstantNull = opConstantNull,
         .ConstantTrue = opConstantTrue,
-        .ControlBarrier = opControlBarrier,
+        .ControlBarrier = opControlBarrierSetup,
         .ConvertFToS = autoSetupConstant,
         .ConvertFToU = autoSetupConstant,
         .ConvertPtrToU = autoSetupConstant,
         .ConvertSToF = autoSetupConstant,
         .ConvertUToF = autoSetupConstant,
         .ConvertUToPtr = autoSetupConstant,
+        .CopyObject = autoSetupConstant,
         .DPdx = opDerivativeSetup,
         .DPdxCoarse = opDerivativeSetup,
         .DPdxFine = opDerivativeSetup,
@@ -321,6 +324,7 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.AtomicUMax)]             = AtomicEngine(.MaxUnsigned).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.AtomicUMin)]             = AtomicEngine(.MinUnsigned).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.AtomicXor)]              = AtomicEngine(.Xor).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ArrayLength)]            = opArrayLength;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.BitCount)]               = BitEngine(.UInt, .BitCount).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.BitFieldInsert)]         = BitEngine(.UInt, .BitFieldInsert).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.BitFieldSExtract)]       = BitEngine(.SInt, .BitFieldSExtract).op;
@@ -335,11 +339,13 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.CompositeConstruct)]     = opCompositeConstruct;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.CompositeExtract)]       = opCompositeExtract;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.CompositeInsert)]        = opCompositeInsert;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.ConstantNull)]           = opConstantNull;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ControlBarrier)]         = opControlBarrier;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ConvertFToS)]            = ConversionEngine(.Float, .SInt).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ConvertFToU)]            = ConversionEngine(.Float, .UInt).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ConvertSToF)]            = ConversionEngine(.SInt, .Float).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ConvertUToF)]            = ConversionEngine(.UInt, .Float).op;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.CopyObject)]             = opCopyObject;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.CopyMemory)]             = opCopyMemory;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.DPdx)]                   = DerivativeEngine(.x).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.DPdxCoarse)]             = DerivativeEngine(.x).op;
@@ -580,15 +586,17 @@ fn BitEngine(comptime T: PrimitiveType, comptime Op: BitOp) type {
             const bits: u32 = info.int.bits;
             const U = std.meta.Int(.unsigned, bits);
 
-            if (count == 0) return base;
+            if (count == 0 or offset >= bits) return base;
+
+            const actual_count: u64 = @min(count, @as(u64, bits) - offset);
 
             const base_u: U = @bitCast(base);
             const insert_u: U = @bitCast(insert);
 
-            const field_mask: U = if (count == bits)
+            const field_mask: U = if (actual_count == bits)
                 ~@as(U, 0)
             else
-                (@as(U, 1) << @intCast(count)) - 1;
+                (@as(U, 1) << @intCast(actual_count)) - 1;
 
             const shift: std.math.Log2Int(U) = @truncate(offset);
 
@@ -604,23 +612,26 @@ fn BitEngine(comptime T: PrimitiveType, comptime Op: BitOp) type {
 
             const bits: u32 = info.int.bits;
 
-            if (count == 0) return @as(TT, 0);
+            if (count == 0 or offset >= bits) return @as(TT, 0);
+
+            const actual_count: u64 = @min(count, @as(u64, bits) - offset);
 
             const U = std.meta.Int(.unsigned, bits);
             const base_u: U = @bitCast(base);
+            const shift: std.math.Log2Int(U) = @truncate(offset);
 
-            const field: U = if (count == bits)
+            const field: U = if (actual_count == bits)
                 base_u
             else
-                (base_u >> @intCast(offset)) &
-                    ((@as(U, 1) << @intCast(count)) - 1);
+                (base_u >> shift) &
+                    ((@as(U, 1) << @intCast(actual_count)) - 1);
 
-            const result: U = if (!signed_result or count == bits) blk: {
+            const result: U = if (!signed_result or actual_count == bits) blk: {
                 break :blk field;
             } else blk: {
-                const sign_bit: U = @as(U, 1) << @intCast(count - 1);
+                const sign_bit: U = @as(U, 1) << @intCast(actual_count - 1);
                 if ((field & sign_bit) != 0) {
-                    break :blk field | (~@as(U, 0) << @intCast(count));
+                    break :blk field | (~@as(U, 0) << @intCast(actual_count));
                 }
                 break :blk field;
             };
@@ -647,31 +658,54 @@ fn BitEngine(comptime T: PrimitiveType, comptime Op: BitOp) type {
                 .BitwiseAnd => op1 & op2,
                 .BitwiseOr => op1 | op2,
                 .BitwiseXor => op1 ^ op2,
-                .ShiftLeft => op1 << @intCast(op2),
-                .ShiftRight, .ShiftRightArithmetic => op1 >> @intCast(op2),
 
                 else => RuntimeError.InvalidSpirV,
             };
         }
 
-        inline fn operationTernary(comptime TT: type, op1: TT, op2: TT, op3: *const Value) RuntimeError!TT {
+        inline fn operationShift(comptime TT: type, op1: TT, amount: u64) RuntimeError!TT {
+            if (amount >= @bitSizeOf(TT)) return @as(TT, 0);
+            const shift: std.math.Log2Int(TT) = @intCast(amount);
+            return switch (Op) {
+                .ShiftLeft => op1 << shift,
+                .ShiftRight, .ShiftRightArithmetic => op1 >> shift,
+                else => RuntimeError.InvalidSpirV,
+            };
+        }
+
+        inline fn operationTernary(comptime TT: type, op1: TT, op2: u64, op3: u64) RuntimeError!TT {
             return switch (Op) {
                 .BitFieldSExtract => blk: {
                     if (T != .SInt) return RuntimeError.InvalidSpirV;
-                    break :blk bitExtract(TT, true, op1, @intCast(op2), op3.Int.value.uint64);
+                    break :blk bitExtract(TT, true, op1, op2, op3);
                 },
                 .BitFieldUExtract => blk: {
                     if (T != .UInt) return RuntimeError.InvalidSpirV;
-                    break :blk bitExtract(TT, false, op1, @intCast(op2), op3.Int.value.uint64);
+                    break :blk bitExtract(TT, false, op1, op2, op3);
                 },
                 else => RuntimeError.InvalidSpirV,
             };
         }
 
-        inline fn operationQuaternary(comptime TT: type, op1: TT, op2: TT, op3: *const Value, op4: *const Value) RuntimeError!TT {
+        inline fn operationQuaternary(comptime TT: type, op1: TT, op2: TT, op3: u64, op4: u64) RuntimeError!TT {
             return switch (Op) {
-                .BitFieldInsert => bitInsert(TT, op1, op2, op3.Int.value.uint64, op4.Int.value.uint64),
+                .BitFieldInsert => bitInsert(TT, op1, op2, op3, op4),
                 else => RuntimeError.InvalidSpirV,
+            };
+        }
+
+        fn readIntegerLaneAsU64(value: *const Value, lane_index: usize) RuntimeError!u64 {
+            const lane_bits = try value.resolveLaneBitWidth();
+            const sign = try value.resolveSign();
+            return switch (lane_bits) {
+                inline 8, 16, 32, 64 => |bits| blk: {
+                    if (sign == .signed) {
+                        const lane = try Value.readLane(.SInt, bits, value, lane_index);
+                        break :blk std.math.cast(u64, lane) orelse return RuntimeError.OutOfBounds;
+                    }
+                    break :blk @intCast(try Value.readLane(.UInt, bits, value, lane_index));
+                },
+                else => return RuntimeError.InvalidSpirV,
             };
         }
 
@@ -685,11 +719,25 @@ fn BitEngine(comptime T: PrimitiveType, comptime Op: BitOp) type {
 
                         if (comptime isUnaryOp()) break :blk try operationUnary(TT, a);
 
-                        const b = try Value.readLane(T, bits, ops[1].?, 0);
-
-                        if (comptime isBinaryOp()) break :blk try operationBinary(TT, a, b);
-                        if (comptime isTernaryOp()) break :blk try operationTernary(TT, a, b, ops[2].?);
-                        if (comptime isQuaternaryOp()) break :blk try operationQuaternary(TT, a, b, ops[2].?, ops[3].?);
+                        if (comptime isBinaryOp()) {
+                            if (comptime Op == .ShiftLeft or Op == .ShiftRight or Op == .ShiftRightArithmetic) {
+                                const amount = try readIntegerLaneAsU64(ops[1].?, 0);
+                                break :blk try operationShift(TT, a, amount);
+                            }
+                            const b = try Value.readLane(T, bits, ops[1].?, 0);
+                            break :blk try operationBinary(TT, a, b);
+                        }
+                        if (comptime isTernaryOp()) {
+                            const offset = try readIntegerLaneAsU64(ops[1].?, 0);
+                            const count = try readIntegerLaneAsU64(ops[2].?, 0);
+                            break :blk try operationTernary(TT, a, offset, count);
+                        }
+                        if (comptime isQuaternaryOp()) {
+                            const b = try Value.readLane(T, bits, ops[1].?, 0);
+                            const offset = try readIntegerLaneAsU64(ops[2].?, 0);
+                            const count = try readIntegerLaneAsU64(ops[3].?, 0);
+                            break :blk try operationQuaternary(TT, a, b, offset, count);
+                        }
                     };
 
                     try Value.writeLane(T, bits, dst, 0, out);
@@ -711,11 +759,25 @@ fn BitEngine(comptime T: PrimitiveType, comptime Op: BitOp) type {
 
                             if (comptime isUnaryOp()) break :blk try operationUnary(TT, a);
 
-                            const b = try Value.readLane(T, bits, ops[1].?, if (ops[1].?.isVector()) i else 0);
-
-                            if (comptime isBinaryOp()) break :blk try operationBinary(TT, a, b);
-                            if (comptime isTernaryOp()) break :blk try operationTernary(TT, a, b, ops[2].?);
-                            if (comptime isQuaternaryOp()) break :blk try operationQuaternary(TT, a, b, ops[2].?, ops[3].?);
+                            if (comptime isBinaryOp()) {
+                                if (comptime Op == .ShiftLeft or Op == .ShiftRight or Op == .ShiftRightArithmetic) {
+                                    const amount = try readIntegerLaneAsU64(ops[1].?, if (ops[1].?.isVector()) i else 0);
+                                    break :blk try operationShift(TT, a, amount);
+                                }
+                                const b = try Value.readLane(T, bits, ops[1].?, if (ops[1].?.isVector()) i else 0);
+                                break :blk try operationBinary(TT, a, b);
+                            }
+                            if (comptime isTernaryOp()) {
+                                const offset = try readIntegerLaneAsU64(ops[1].?, if (ops[1].?.isVector()) i else 0);
+                                const count = try readIntegerLaneAsU64(ops[2].?, if (ops[2].?.isVector()) i else 0);
+                                break :blk try operationTernary(TT, a, offset, count);
+                            }
+                            if (comptime isQuaternaryOp()) {
+                                const b = try Value.readLane(T, bits, ops[1].?, if (ops[1].?.isVector()) i else 0);
+                                const offset = try readIntegerLaneAsU64(ops[2].?, if (ops[2].?.isVector()) i else 0);
+                                const count = try readIntegerLaneAsU64(ops[3].?, if (ops[3].?.isVector()) i else 0);
+                                break :blk try operationQuaternary(TT, a, b, offset, count);
+                            }
                         };
 
                         try Value.writeLane(T, bits, dst, i, out);
@@ -809,18 +871,36 @@ fn CondEngine(comptime T: PrimitiveType, comptime Op: CondOp) type {
         }
 
         fn applyScalarBits(bit_count: SpvWord, dst_bool: *Value, a_v: *const Value, b_v: ?*const Value) RuntimeError!void {
+            if (comptime T == .Bool) {
+                const a = switch (a_v.*) {
+                    .Bool => |value| value,
+                    else => return RuntimeError.InvalidSpirV,
+                };
+                if (comptime isUnaryOp()) {
+                    dst_bool.Bool = try operationUnary(bool, a);
+                } else {
+                    const b_ptr = b_v orelse return RuntimeError.InvalidSpirV;
+                    const b = switch (b_ptr.*) {
+                        .Bool => |value| value,
+                        else => return RuntimeError.InvalidSpirV,
+                    };
+                    dst_bool.Bool = try operationBinary(bool, a, b);
+                }
+                return;
+            }
+
             switch (bit_count) {
                 inline 8, 16, 32, 64 => |bits| {
                     if (bits == 8 and T == .Float) return RuntimeError.InvalidSpirV;
 
                     const TT = Value.getPrimitiveFieldType(T, bits);
-                    const a = (try Value.getPrimitiveField(T, bits, @constCast(a_v))).*;
+                    const a = try Value.readLane(T, bits, a_v, 0);
 
                     if (comptime isUnaryOp()) {
                         dst_bool.Bool = try operationUnary(TT, a);
                     } else {
                         const b_ptr = b_v orelse return RuntimeError.InvalidSpirV;
-                        const b = (try Value.getPrimitiveField(T, bits, @constCast(b_ptr))).*;
+                        const b = try Value.readLane(T, bits, b_ptr, 0);
                         dst_bool.Bool = try operationBinary(TT, a, b);
                     }
                 },
@@ -912,57 +992,20 @@ fn CondEngine(comptime T: PrimitiveType, comptime Op: CondOp) type {
                 .Bool => try applyScalarBits(lane_bits, dst, op1_value, op2_value),
 
                 .Vector => |dst_vec| {
-                    switch (op1_value.*) {
-                        .Vector => |op1_vec| for (dst_vec, op1_vec, 0..) |*d_lane, a_lane, i| {
-                            const b_ptr = laneRhsPtr(op2_value, i);
-                            try applyScalarBits(lane_bits, d_lane, &a_lane, b_ptr);
+                    switch (lane_bits) {
+                        inline 8, 16, 32, 64 => |bits| {
+                            if (bits == 8 and T == .Float) return RuntimeError.InvalidSpirV;
+                            const TT = Value.getPrimitiveFieldType(T, bits);
+                            for (dst_vec, 0..) |*d_lane, i| {
+                                const a = try Value.readLane(T, bits, op1_value, i);
+                                d_lane.Bool = if (comptime isUnaryOp()) blk: {
+                                    break :blk try operationUnary(TT, a);
+                                } else blk: {
+                                    const b = try Value.readLane(T, bits, op2_value.?, i);
+                                    break :blk try operationBinary(TT, a, b);
+                                };
+                            }
                         },
-
-                        .Vector4f32 => |*op1_vec| if (comptime isUnaryOp())
-                            try applyFixedVectorUnary(f32, 4, dst_vec, op1_vec)
-                        else
-                            try applyFixedVectorBinary(f32, 4, dst_vec, op1_vec, op2_value.?),
-
-                        .Vector3f32 => |*op1_vec| if (comptime isUnaryOp())
-                            try applyFixedVectorUnary(f32, 3, dst_vec, op1_vec)
-                        else
-                            try applyFixedVectorBinary(f32, 3, dst_vec, op1_vec, op2_value.?),
-
-                        .Vector2f32 => |*op1_vec| if (comptime isUnaryOp())
-                            try applyFixedVectorUnary(f32, 2, dst_vec, op1_vec)
-                        else
-                            try applyFixedVectorBinary(f32, 2, dst_vec, op1_vec, op2_value.?),
-
-                        .Vector4i32 => |*op1_vec| if (comptime isUnaryOp())
-                            try applyFixedVectorUnary(i32, 4, dst_vec, op1_vec)
-                        else
-                            try applyFixedVectorBinary(i32, 4, dst_vec, op1_vec, op2_value.?),
-
-                        .Vector3i32 => |*op1_vec| if (comptime isUnaryOp())
-                            try applyFixedVectorUnary(i32, 3, dst_vec, op1_vec)
-                        else
-                            try applyFixedVectorBinary(i32, 3, dst_vec, op1_vec, op2_value.?),
-
-                        .Vector2i32 => |*op1_vec| if (comptime isUnaryOp())
-                            try applyFixedVectorUnary(i32, 2, dst_vec, op1_vec)
-                        else
-                            try applyFixedVectorBinary(i32, 2, dst_vec, op1_vec, op2_value.?),
-
-                        .Vector4u32 => |*op1_vec| if (comptime isUnaryOp())
-                            try applyFixedVectorUnary(u32, 4, dst_vec, op1_vec)
-                        else
-                            try applyFixedVectorBinary(u32, 4, dst_vec, op1_vec, op2_value.?),
-
-                        .Vector3u32 => |*op1_vec| if (comptime isUnaryOp())
-                            try applyFixedVectorUnary(u32, 3, dst_vec, op1_vec)
-                        else
-                            try applyFixedVectorBinary(u32, 3, dst_vec, op1_vec, op2_value.?),
-
-                        .Vector2u32 => |*op1_vec| if (comptime isUnaryOp())
-                            try applyFixedVectorUnary(u32, 2, dst_vec, op1_vec)
-                        else
-                            try applyFixedVectorBinary(u32, 2, dst_vec, op1_vec, op2_value.?),
-
                         else => return RuntimeError.InvalidSpirV,
                     }
                 },
@@ -980,6 +1023,20 @@ fn ConversionEngine(comptime from_kind: PrimitiveType, comptime to_kind: Primiti
                 inline 8, 16, 32, 64 => |bits| blk: {
                     if (bits == 8 and from_kind == .Float) return RuntimeError.InvalidSpirV; // No f8
                     const v = try Value.readLane(from_kind, bits, from, lane_index);
+                    if (comptime from_kind != .Float and to_kind != .Float) {
+                        const to_bits = @bitSizeOf(ToT);
+                        const FromUInt = std.meta.Int(.unsigned, bits);
+                        const ToUInt = std.meta.Int(.unsigned, to_bits);
+
+                        const src_bits: FromUInt = @bitCast(v);
+                        const dst_bits: ToUInt = if (to_bits < bits)
+                            @truncate(src_bits)
+                        else if (from_kind == .SInt)
+                            @bitCast(@as(std.meta.Int(.signed, to_bits), @intCast(v)))
+                        else
+                            @intCast(src_bits);
+                        break :blk @bitCast(dst_bits);
+                    }
                     break :blk std.math.lossyCast(ToT, v);
                 },
                 else => return RuntimeError.InvalidSpirV,
@@ -1001,11 +1058,9 @@ fn ConversionEngine(comptime from_kind: PrimitiveType, comptime to_kind: Primiti
             const target_type = (try rt.results[try rt.it.next()].getVariant()).Type;
             const dst_value = try rt.results[try rt.it.next()].getValue();
 
-            const src_result = &rt.results[try rt.it.next()];
-            const src_type_word = try src_result.getValueTypeWord();
-            const src_value = try src_result.getValue();
+            const src_value = try rt.results[try rt.it.next()].getValue();
 
-            const from_bits = try Result.resolveLaneBitWidth((try rt.results[src_type_word].getVariant()).Type, rt);
+            const from_bits = try src_value.resolveLaneBitWidth();
             const to_bits = try Result.resolveLaneBitWidth(target_type, rt);
 
             const dst_lane_count = try dst_value.resolveLaneCount();
@@ -1730,6 +1785,10 @@ fn ImageEngine(comptime Op: ImageOp) type {
             defer dy.deinit(allocator);
 
             const result_type = (try rt.results[result_type_word].getVariant()).Type;
+            if (!try typeHasFloatLanes(rt, result_type)) {
+                rt.clearDerivative(allocator, result_id);
+                return;
+            }
             const lane_bits = try Result.resolveLaneBitWidth(result_type, rt);
             const lane_count = try Result.resolveLaneCount(result_type);
 
@@ -1747,6 +1806,19 @@ fn ImageEngine(comptime Op: ImageOp) type {
             }
 
             try rt.setDerivative(allocator, result_id, &dx, &dy);
+        }
+
+        fn typeHasFloatLanes(rt: *Runtime, target_type: Result.TypeData) RuntimeError!bool {
+            return switch (target_type) {
+                .Float,
+                .Vector2f32,
+                .Vector3f32,
+                .Vector4f32,
+                => true,
+                .Vector => |v| typeHasFloatLanes(rt, (try rt.results[v.components_type_word].getVariant()).Type),
+                .Matrix => |m| typeHasFloatLanes(rt, (try rt.results[m.column_type_word].getVariant()).Type),
+                else => false,
+            };
         }
 
         fn sampleImageExplicitLod(rt: *Runtime, dst: *Value, driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32, lod: ?f32, offset: Runtime.ImageOffset) RuntimeError!void {
@@ -3078,6 +3150,44 @@ fn autoSetupConstant(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) Run
     _ = try setupConstant(allocator, rt);
 }
 
+fn setupAtomic(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
+    rt.mod.reflection_infos.has_atomics = true;
+    try autoSetupConstant(allocator, word_count, rt);
+}
+
+fn setupAtomicStore(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    rt.mod.reflection_infos.has_atomics = true;
+}
+
+fn opArrayLength(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    _ = try rt.it.next(); // result type
+    const id = try rt.it.next();
+    const structure = try rt.results[try rt.it.next()].getValue();
+    const member_index = try rt.it.next();
+
+    const structure_value = switch (structure.*) {
+        .Pointer => |p| switch (p.ptr) {
+            .common => |value| value,
+            else => return RuntimeError.InvalidValueType,
+        },
+        else => structure,
+    };
+
+    const length: u32 = switch (structure_value.*) {
+        .Structure => |s| blk: {
+            if (member_index >= s.values.len) return RuntimeError.OutOfBounds;
+            break :blk switch (s.values[member_index]) {
+                .RuntimeArray => |arr| @as(u32, @intCast(arr.getLen())),
+                else => return RuntimeError.InvalidValueType,
+            };
+        },
+        .RuntimeArray => |arr| @intCast(arr.getLen()),
+        else => return RuntimeError.InvalidValueType,
+    };
+
+    try Value.writeLane(.UInt, 32, try rt.results[id].getValue(), 0, length);
+}
+
 fn setupAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
     const var_type = try rt.it.next();
     const id = try rt.it.next();
@@ -3264,26 +3374,53 @@ fn copyValue(dst: *Value, src: *const Value) RuntimeError!void {
 
     switch (src.*) {
         .Vector, .Matrix => |src_slice| {
-            const dst_slice = helpers.getDstSlice(dst);
-            try helpers.copySlice(dst_slice.?, src_slice);
+            if (dst.* == .RuntimeArray) {
+                const size = try src.getPlainMemorySize();
+                if (size > dst.RuntimeArray.data.len) return RuntimeError.OutOfBounds;
+                _ = try src.read(dst.RuntimeArray.data[0..size]);
+                return;
+            }
+            const dst_slice = helpers.getDstSlice(dst) orelse return RuntimeError.InvalidSpirV;
+            try helpers.copySlice(dst_slice, src_slice);
         },
         .Array => |a| {
-            const dst_slice = helpers.getDstSlice(dst);
-            try helpers.copySlice(dst_slice.?, a.values);
+            if (dst.* == .RuntimeArray) {
+                const size = try src.getPlainMemorySize();
+                if (size > dst.RuntimeArray.data.len) return RuntimeError.OutOfBounds;
+                _ = try src.read(dst.RuntimeArray.data[0..size]);
+                return;
+            }
+            const dst_slice = helpers.getDstSlice(dst) orelse return RuntimeError.InvalidSpirV;
+            try helpers.copySlice(dst_slice, a.values);
         },
         .Structure => |s| {
+            if (s.external_data) |src_data| {
+                if (dst.* == .Structure) {
+                    if (dst.Structure.external_data) |dst_data| {
+                        if (src_data.len > dst_data.len) return RuntimeError.OutOfBounds;
+                        @memcpy(dst_data[0..src_data.len], src_data);
+                        _ = try dst.write(dst_data[0..src_data.len]);
+                        return;
+                    }
+                }
+            }
+            if (dst.* == .RuntimeArray) {
+                const size = try src.getPlainMemorySize();
+                if (size > dst.RuntimeArray.data.len) return RuntimeError.OutOfBounds;
+                _ = try src.read(dst.RuntimeArray.data[0..size]);
+                return;
+            }
             if (dst.* == .Structure) {
                 @memcpy(@constCast(dst.Structure.offsets), s.offsets);
                 @memcpy(@constCast(dst.Structure.matrix_strides), s.matrix_strides);
                 @memcpy(@constCast(dst.Structure.row_major), s.row_major);
             }
-            const dst_slice = helpers.getDstSlice(dst);
-            try helpers.copySlice(dst_slice.?, s.values);
+            const dst_slice = helpers.getDstSlice(dst) orelse return RuntimeError.InvalidSpirV;
+            try helpers.copySlice(dst_slice, s.values);
         },
         .Pointer => |ptr| switch (ptr.ptr) {
             .common => |src_val_ptr| {
                 if (ptr.uniform_slice_window) |window| {
-                    try copyValue(dst, src_val_ptr);
                     try helpers.readWindow(dst, window, ptr.matrix_stride, ptr.matrix_row_major);
                 } else {
                     try copyValue(dst, src_val_ptr);
@@ -3312,6 +3449,11 @@ fn copyValue(dst: *Value, src: *const Value) RuntimeError!void {
             },
         },
         .RuntimeArray => |src_arr| switch (dst.*) {
+            .Array => {
+                const size = try dst.getPlainMemorySize();
+                if (size > src_arr.data.len) return RuntimeError.OutOfBounds;
+                _ = try dst.write(src_arr.data[0..size]);
+            },
             .RuntimeArray => |dst_arr| @memcpy(dst_arr.data, src_arr.data),
             .Pointer => |dst_ptr| switch (dst_ptr.ptr) {
                 .common => |dst_ptr_ptr| switch (dst_ptr_ptr.*) {
@@ -3324,6 +3466,16 @@ fn copyValue(dst: *Value, src: *const Value) RuntimeError!void {
         },
         else => dst.* = src.*,
     }
+}
+
+fn intValueToIndex(i: @TypeOf(@as(Value, undefined).Int)) RuntimeError!usize {
+    return switch (i.bit_count) {
+        8 => if (i.is_signed) std.math.cast(usize, i.value.sint8) orelse RuntimeError.OutOfBounds else @as(usize, i.value.uint8),
+        16 => if (i.is_signed) std.math.cast(usize, i.value.sint16) orelse RuntimeError.OutOfBounds else @as(usize, i.value.uint16),
+        32 => if (i.is_signed) std.math.cast(usize, i.value.sint32) orelse RuntimeError.OutOfBounds else @as(usize, i.value.uint32),
+        64 => if (i.is_signed) std.math.cast(usize, i.value.sint64) orelse RuntimeError.OutOfBounds else std.math.cast(usize, i.value.uint64) orelse RuntimeError.OutOfBounds,
+        else => RuntimeError.InvalidSpirV,
+    };
 }
 
 fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
@@ -3433,7 +3585,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                 }
                             }
 
-                            const component_index: usize = @intCast(i.value.uint32);
+                            const component_index = try intValueToIndex(i);
 
                             switch (value_ptr.*) {
                                 .Vector, .Matrix => |v| {
@@ -3465,7 +3617,8 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                     }
                                 },
                                 .Array => |a| {
-                                    if (component_index >= a.values.len) return RuntimeError.OutOfBounds;
+                                    if (component_index >= a.values.len)
+                                        return RuntimeError.OutOfBounds;
                                     uniform_slice_window = try helpers.advanceWindow(uniform_slice_window, component_index * a.stride);
                                     value_ptr = &a.values[component_index];
                                     switch (value_ptr.*) {
@@ -3494,6 +3647,15 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                     value_ptr = &s.values[component_index];
                                     matrix_stride = s.matrix_strides[component_index];
                                     matrix_row_major = s.row_major[component_index];
+                                    if (uniform_slice_window) |window| {
+                                        if (value_ptr.* == .RuntimeArray) {
+                                            value_ptr.RuntimeArray.data = window;
+                                            if (matrix_stride) |stride| {
+                                                value_ptr.RuntimeArray.matrix_stride = stride;
+                                                value_ptr.RuntimeArray.row_major = matrix_row_major;
+                                            }
+                                        }
+                                    }
                                 },
                                 .RuntimeArray => |*arr| {
                                     if (component_index >= arr.getLen()) return RuntimeError.OutOfBounds;
@@ -3703,8 +3865,9 @@ fn opBitcast(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeErro
     _ = try to_value.write(bytes);
 }
 
-fn opBranch(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+fn opBranch(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     const id = try rt.it.next();
+    try rt.snapshotPhiValues(allocator);
     rt.previous_label = rt.current_label;
     _ = rt.it.jumpToSourceLocation(switch ((try rt.results[id].getVariant()).*) {
         .Label => |l| l.source_location,
@@ -3712,7 +3875,7 @@ fn opBranch(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     });
 }
 
-fn opBranchConditional(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+fn opBranchConditional(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     const cond_value = try rt.results[try rt.it.next()].getValue();
     const true_branch = switch ((try rt.results[try rt.it.next()].getVariant()).*) {
         .Label => |l| l.source_location,
@@ -3722,6 +3885,7 @@ fn opBranchConditional(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeEr
         .Label => |l| l.source_location,
         else => return RuntimeError.InvalidSpirV,
     };
+    try rt.snapshotPhiValues(allocator);
     rt.previous_label = rt.current_label;
     if (cond_value.Bool) {
         _ = rt.it.jumpToSourceLocation(true_branch);
@@ -3872,7 +4036,7 @@ fn opCompositeExtract(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Ru
                 else => return RuntimeError.InvalidSpirV,
             },
             .value = blk: {
-                var composite = (try rt.results[composite_id].getVariant()).Constant.value;
+                var composite = (try rt.results[composite_id].getValue()).*;
                 for (0..index_count) |_| {
                     const member_id = try rt.it.next();
                     if (composite.getCompositeDataOrNull()) |v| {
@@ -4047,6 +4211,36 @@ fn opConstantTrue(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) Runtim
         .Bool => |*b| b.* = true,
         else => return RuntimeError.InvalidSpirV,
     }
+}
+
+fn zeroValue(value: *Value) RuntimeError!void {
+    switch (value.*) {
+        .Void => {},
+        .Bool => |*b| b.* = false,
+        .Int => |*i| i.value.uint64 = 0,
+        .Float => |*f| f.value.float64 = 0,
+        .Vector => |lanes| for (lanes) |*lane| try zeroValue(lane),
+        .Vector4f32 => |*v| v.* = .{ 0, 0, 0, 0 },
+        .Vector3f32 => |*v| v.* = .{ 0, 0, 0 },
+        .Vector2f32 => |*v| v.* = .{ 0, 0 },
+        .Vector4i32 => |*v| v.* = .{ 0, 0, 0, 0 },
+        .Vector3i32 => |*v| v.* = .{ 0, 0, 0 },
+        .Vector2i32 => |*v| v.* = .{ 0, 0 },
+        .Vector4u32 => |*v| v.* = .{ 0, 0, 0, 0 },
+        .Vector3u32 => |*v| v.* = .{ 0, 0, 0 },
+        .Vector2u32 => |*v| v.* = .{ 0, 0 },
+        .Matrix => |columns| for (columns) |*column| try zeroValue(column),
+        .Array => |*a| for (a.values) |*element| try zeroValue(element),
+        .RuntimeArray => |*arr| @memset(arr.data, 0),
+        .Structure => |*s| for (s.values) |*field| try zeroValue(field),
+        .Image, .Sampler, .SampledImage, .Pointer => {},
+        .Function => unreachable,
+    }
+}
+
+fn opConstantNull(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    const target = try setupConstant(allocator, rt);
+    try zeroValue(&target.variant.?.Constant.value);
 }
 
 fn opConstant(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
@@ -4937,6 +5131,20 @@ fn opCopyMemory(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!voi
     try copyValue(try rt.results[target].getValue(), try rt.results[source].getValue());
 }
 
+fn opCopyObject(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    _ = try rt.it.next(); // result type
+    const target = try rt.it.next();
+    const source = try rt.it.next();
+    const target_value = try rt.results[target].getValue();
+    const source_value = try rt.results[source].getValue();
+    if (source_value.* == .Pointer) {
+        target_value.* = source_value.*;
+        target_value.Pointer.owns_uniform_backing_value = false;
+        return;
+    }
+    try copyValue(target_value, source_value);
+}
+
 fn opDecorate(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     const target = try rt.it.next();
     const decoration_type = try rt.it.nextAs(spv.SpvDecoration);
@@ -5118,6 +5326,7 @@ fn opExecutionMode(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!
         .OutputLineStrip,
         .OutputTriangleStrip,
         => rt.mod.reflection_infos.geometry_output = @intFromEnum(mode),
+        .EarlyFragmentTests => rt.mod.reflection_infos.early_fragment_tests = true,
         else => {},
     }
 }
@@ -5323,7 +5532,8 @@ fn opPhi(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) Runtim
         const parent_label_id = try rt.it.next();
 
         if (parent_label_id == predecessor) {
-            try copyValue(try rt.results[id].getValue(), try rt.results[value_id].getValue());
+            const value = rt.getPhiValueSnapshot(value_id) orelse try rt.results[value_id].getValue();
+            try copyValue(try rt.results[id].getValue(), value);
             try rt.copyDerivative(allocator, id, value_id);
             return;
         }
@@ -5332,12 +5542,12 @@ fn opPhi(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) Runtim
 }
 
 fn quantizeF32ToF16(value: f32) f32 {
-    const rounded = @as(f32, @floatCast(@as(f16, @floatCast(value))));
-    if (@abs(rounded) != 0.0 and @abs(rounded) < @as(f32, 0x1p-14)) {
-        const sign = @as(u32, @bitCast(value)) & 0x80000000;
-        return @bitCast(sign);
+    const quantized = @as(f32, @floatCast(@as(f16, @floatCast(value))));
+    if (quantized != 0.0 and @abs(quantized) < 0x1.0p-14) {
+        const sign = @as(u32, @bitCast(quantized)) & 0x8000_0000;
+        return @as(f32, @bitCast(sign));
     }
-    return rounded;
+    return quantized;
 }
 
 fn quantizeToF16Value(target_type: Result.TypeData, rt: *Runtime, dst: *Value, src: *const Value) RuntimeError!void {
@@ -5410,13 +5620,13 @@ fn opSelect(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     const obj2_val = try rt.results[obj2].getValue();
 
     if (target_val.getCompositeDataOrNull()) |*targets| {
-        for (
-            targets.*,
-            cond_val.getCompositeDataOrNull().?,
-            obj1_val.getCompositeDataOrNull().?,
-            obj2_val.getCompositeDataOrNull().?,
-        ) |*t, c, o1, o2| {
-            try copyValue(t, if (c.Bool) &o1 else &o2);
+        for (targets.*, 0..) |*t, lane_index| {
+            const condition = try readVectorLaneAsValue(cond_val, lane_index);
+            if (condition != .Bool)
+                return RuntimeError.InvalidValueType;
+
+            const selected = try readVectorLaneAsValue(if (condition.Bool) obj1_val else obj2_val, lane_index);
+            try copyValue(t, &selected);
         }
         return;
     }
@@ -5518,6 +5728,7 @@ fn opTypeArray(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void
     var target = &rt.results[id];
     const components_type_word = try rt.it.next();
     const components_type_data = &((try rt.results[components_type_word].getVariant()).*).Type;
+    const length_word = try rt.it.next();
     target.variant = .{
         .Type = .{
             .Array = .{
@@ -5526,16 +5737,7 @@ fn opTypeArray(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void
                     .Type => |t| @as(Result.Type, t),
                     else => return RuntimeError.InvalidSpirV,
                 },
-                .member_count = switch ((try rt.results[try rt.it.next()].getValue()).*) {
-                    .Int => |i| if (!i.is_signed) @intCast(i.value.uint64) else switch (i.bit_count) {
-                        8 => @intCast(i.value.sint8),
-                        16 => @intCast(i.value.sint8),
-                        32 => @intCast(i.value.sint8),
-                        64 => @intCast(i.value.sint8),
-                        else => return RuntimeError.InvalidSpirV,
-                    },
-                    else => return RuntimeError.InvalidSpirV,
-                },
+                .member_count = try arrayMemberCount(rt, length_word),
                 .stride = blk: {
                     for (target.decorations.items) |decoration| {
                         if (decoration.rtype == .ArrayStride)
@@ -5545,6 +5747,31 @@ fn opTypeArray(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void
                 },
             },
         },
+    };
+}
+
+fn arrayMemberCount(rt: *Runtime, length_word: SpvWord) RuntimeError!SpvWord {
+    for (rt.results[length_word].decorations.items) |decoration| {
+        if (decoration.rtype != .SpecId)
+            continue;
+
+        if (rt.specialization_constants.get(decoration.literal_1)) |data| {
+            if (data.len < @sizeOf(u32))
+                return RuntimeError.OutOfBounds;
+
+            return @intCast(std.mem.bytesToValue(u32, data[0..@sizeOf(u32)]));
+        }
+    }
+
+    return switch ((try rt.results[length_word].getValue()).*) {
+        .Int => |i| if (!i.is_signed) @intCast(i.value.uint64) else switch (i.bit_count) {
+            8 => @intCast(i.value.sint8),
+            16 => @intCast(i.value.sint16),
+            32 => @intCast(i.value.sint32),
+            64 => @intCast(i.value.sint64),
+            else => return RuntimeError.InvalidSpirV,
+        },
+        else => return RuntimeError.InvalidSpirV,
     };
 }
 
@@ -5838,20 +6065,31 @@ fn opVariable(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) R
         .Uniform,
         .StorageBuffer,
         .PushConstant,
+        .Workgroup,
     };
 
     const is_externally_visible = std.mem.containsAtLeastScalar(spv.SpvStorageClass, &externally_visible_data_storages, 1, storage_class);
+    const use_external_storage = is_externally_visible and (storage_class == .Workgroup or resolved_type != .Array);
+
+    if (target.variant) |*variant| {
+        switch (variant.*) {
+            .Variable => |*variable| variable.value.deinit(allocator),
+            else => {},
+        }
+    }
 
     target.variant = .{
         .Variable = .{
             .storage_class = storage_class,
             .type_word = resolved_word,
             .type = resolved_type,
-            .value = try Value.init(allocator, rt.results, resolved_word, is_externally_visible and resolved_type != .Array),
+            .value = try Value.init(allocator, rt.results, resolved_word, use_external_storage),
         },
     };
 
-    _ = initializer;
+    if (initializer) |initializer_id| {
+        try copyValue(try target.getValue(), try rt.results[initializer_id].getValue());
+    }
 }
 
 fn readDynamicVectorIndex(index_value: *const Value) RuntimeError!usize {

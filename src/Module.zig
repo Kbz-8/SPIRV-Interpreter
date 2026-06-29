@@ -54,6 +54,8 @@ pub const ReflectionInfos = struct {
 
     needs_derivatives: bool,
     has_control_barriers: bool,
+    has_atomics: bool,
+    early_fragment_tests: bool,
 };
 
 options: ModuleOptions,

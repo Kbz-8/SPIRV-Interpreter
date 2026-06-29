@@ -258,10 +258,25 @@ fn readIntegralLaneAsI32(src: *const Value, lane_index: usize) RuntimeError!i32 
     const lane_bits = try src.resolveLaneBitWidth();
     const sign = try src.resolveSign();
     return switch (lane_bits) {
-        inline 8, 16, 32, 64 => |bits| if (sign == .signed)
-            @intCast(try Value.readLane(.SInt, bits, src, lane_index))
-        else
-            @intCast(try Value.readLane(.UInt, bits, src, lane_index)),
+        inline 8, 16, 32, 64 => |bits| blk: {
+            if (sign == .signed) {
+                const value = try Value.readLane(.SInt, bits, src, lane_index);
+                if (bits > 32) {
+                    break :blk std.math.cast(i32, value) orelse if (value < 0)
+                        std.math.minInt(i32)
+                    else
+                        std.math.maxInt(i32);
+                }
+                break :blk @intCast(value);
+            } else {
+                const value = try Value.readLane(.UInt, bits, src, lane_index);
+                const bits32: u32 = if (bits > 32)
+                    std.math.cast(u32, value) orelse std.math.maxInt(u32)
+                else
+                    @intCast(value);
+                break :blk @bitCast(bits32);
+            }
+        },
         else => RuntimeError.InvalidSpirV,
     };
 }

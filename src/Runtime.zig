@@ -47,6 +47,11 @@ pub const SpecializationEntry = struct {
     size: usize,
 };
 
+pub const WorkgroupMemory = struct {
+    result: SpvWord,
+    bytes: []u8,
+};
+
 pub const Derivative = struct {
     dx: Value,
     dy: Value,
@@ -118,14 +123,16 @@ function_stack: std.ArrayList(Function),
 
 current_label: ?SpvWord,
 previous_label: ?SpvWord,
+active_entry_point: ?SpvWord,
 
 specialization_constants: std.AutoHashMapUnmanaged(u32, []const u8),
 derivatives: std.AutoHashMapUnmanaged(SpvWord, Derivative),
+phi_values: std.AutoHashMapUnmanaged(SpvWord, Value),
 
 image_api: ImageAPI,
 
 pub fn init(allocator: std.mem.Allocator, module: *Module, image_api: ImageAPI) RuntimeError!Self {
-    return .{
+    var self: Self = .{
         .mod = module,
         .it = module.it,
         .results = blk: {
@@ -150,10 +157,15 @@ pub fn init(allocator: std.mem.Allocator, module: *Module, image_api: ImageAPI) 
         .function_stack = .empty,
         .current_label = null,
         .previous_label = null,
+        .active_entry_point = null,
         .specialization_constants = .empty,
         .derivatives = .empty,
+        .phi_values = .empty,
         .image_api = image_api,
     };
+    errdefer self.deinit(allocator);
+    try self.refreshValueLayouts();
+    return self;
 }
 
 pub fn initFrom(allocator: std.mem.Allocator, other: *const Self, image_api: ImageAPI) RuntimeError!Self {
@@ -180,13 +192,16 @@ pub fn initFrom(allocator: std.mem.Allocator, other: *const Self, image_api: Ima
         .function_stack = .empty,
         .current_label = null,
         .previous_label = null,
+        .active_entry_point = other.active_entry_point,
         .specialization_constants = .empty,
         .derivatives = .empty,
+        .phi_values = .empty,
         .image_api = image_api,
     };
     errdefer self.deinit(allocator);
 
     try self.copySpecializationConstantsFrom(allocator, other);
+    try self.refreshValueLayouts();
     return self;
 }
 
@@ -207,6 +222,9 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
         entry.value_ptr.deinit(allocator);
     }
     self.derivatives.deinit(allocator);
+
+    self.clearPhiValues(allocator);
+    self.phi_values.deinit(allocator);
 }
 
 pub fn addSpecializationInfo(self: *Self, allocator: std.mem.Allocator, entry: SpecializationEntry, data: []const u8) RuntimeError!void {
@@ -223,6 +241,169 @@ pub fn copySpecializationConstantsFrom(self: *Self, allocator: std.mem.Allocator
             return RuntimeError.OutOfMemory;
         };
     }
+}
+
+fn applyValueLayout(results: []Result, value: *Value, type_word: SpvWord) RuntimeError!void {
+    const resolved_type_word = results[type_word].resolveTypeWordOrNull() orelse type_word;
+    const type_data = (try results[resolved_type_word].getConstVariant()).Type;
+
+    switch (value.*) {
+        .Structure => |*structure| switch (type_data) {
+            .Structure => |type_structure| {
+                @memcpy(@constCast(structure.offsets), type_structure.members_offsets);
+                @memcpy(@constCast(structure.matrix_strides), type_structure.members_matrix_strides);
+                @memcpy(@constCast(structure.row_major), type_structure.members_row_major);
+                for (structure.values, type_structure.members_type_word, 0..) |*member_value, member_type_word, member_index| {
+                    if (member_value.* == .RuntimeArray) {
+                        member_value.RuntimeArray.matrix_stride = type_structure.members_matrix_strides[member_index];
+                        member_value.RuntimeArray.row_major = type_structure.members_row_major[member_index];
+                    }
+                    try applyValueLayout(results, member_value, member_type_word);
+                }
+            },
+            else => {},
+        },
+        .Array => |array| switch (type_data) {
+            .Array => |type_array| for (array.values) |*element| {
+                try applyValueLayout(results, element, type_array.components_type_word);
+            },
+            else => {},
+        },
+        .Matrix => |columns| switch (type_data) {
+            .Matrix => |type_matrix| for (columns) |*column| {
+                try applyValueLayout(results, column, type_matrix.column_type_word);
+            },
+            else => {},
+        },
+        .Vector => |elements| switch (type_data) {
+            .Vector => |type_vector| for (elements) |*element| {
+                try applyValueLayout(results, element, type_vector.components_type_word);
+            },
+            else => {},
+        },
+        else => {},
+    }
+}
+
+fn refreshValueLayouts(self: *Self) RuntimeError!void {
+    for (self.results) |*result| {
+        if (result.variant) |*variant| switch (variant.*) {
+            .Variable => |*v| switch (v.storage_class) {
+                .StorageBuffer,
+                .Uniform,
+                .PushConstant,
+                .Workgroup,
+                => try applyValueLayout(self.results, &v.value, v.type_word),
+                else => {},
+            },
+            else => {},
+        };
+    }
+}
+
+fn typePlainMemorySize(self: *const Self, type_word: SpvWord) RuntimeError!usize {
+    const resolved_word = self.results[type_word].resolveTypeWordOrNull() orelse type_word;
+    const target_type = (try self.results[resolved_word].getConstVariant()).Type;
+
+    return switch (target_type) {
+        .Array => |a| blk: {
+            const stride: usize = if (a.stride != 0)
+                @intCast(a.stride)
+            else
+                try self.typePlainMemorySize(a.components_type_word);
+            break :blk stride * @as(usize, @intCast(a.member_count));
+        },
+        .RuntimeArray => return RuntimeError.InvalidValueType,
+        .Structure => |s| blk: {
+            var size: usize = 0;
+            for (s.members_type_word, 0..) |member_type_word, i| {
+                const member_offset: usize = @intCast(s.members_offsets[i] orelse size);
+                size = @max(size, member_offset + try self.typePlainMemorySize(member_type_word));
+            }
+            break :blk size;
+        },
+        else => target_type.getSize(self.results),
+    };
+}
+
+pub fn createWorkgroupMemory(self: *Self, allocator: std.mem.Allocator) RuntimeError![]WorkgroupMemory {
+    var count: usize = 0;
+    for (self.results) |result| {
+        if (result.variant) |variant| switch (variant) {
+            .Variable => |v| {
+                if (v.storage_class == .Workgroup) count += 1;
+            },
+            else => {},
+        };
+    }
+
+    const memories = allocator.alloc(WorkgroupMemory, count) catch return RuntimeError.OutOfMemory;
+    errdefer allocator.free(memories);
+
+    var index: usize = 0;
+    for (self.results, 0..) |result, result_id| {
+        if (result.variant) |variant| switch (variant) {
+            .Variable => |v| {
+                if (v.storage_class == .Workgroup) {
+                    const size = try self.typePlainMemorySize(v.type_word);
+                    const bytes = allocator.alloc(u8, size) catch return RuntimeError.OutOfMemory;
+                    @memset(bytes, 0);
+                    memories[index] = .{
+                        .result = @intCast(result_id),
+                        .bytes = bytes,
+                    };
+                    index += 1;
+                }
+            },
+            else => {},
+        };
+    }
+
+    return memories;
+}
+
+pub fn destroyWorkgroupMemory(_: *Self, allocator: std.mem.Allocator, memories: []WorkgroupMemory) void {
+    for (memories) |memory| allocator.free(memory.bytes);
+    allocator.free(memories);
+}
+
+pub fn bindWorkgroupMemory(self: *Self, memories: []const WorkgroupMemory) RuntimeError!void {
+    for (memories) |memory| {
+        _ = try (try self.results[memory.result].getValue()).write(memory.bytes);
+    }
+}
+
+fn clearPhiValues(self: *Self, allocator: std.mem.Allocator) void {
+    var it = self.phi_values.iterator();
+    while (it.next()) |entry| {
+        entry.value_ptr.deinit(allocator);
+    }
+    self.phi_values.clearRetainingCapacity();
+}
+
+pub fn snapshotPhiValues(self: *Self, allocator: std.mem.Allocator) RuntimeError!void {
+    self.clearPhiValues(allocator);
+
+    for (self.results, 0..) |*result, result_id| {
+        const value = switch (result.variant orelse continue) {
+            .Constant => |*constant| &constant.value,
+            .FunctionParameter => |*parameter| parameter.value_ptr orelse continue,
+            else => continue,
+        };
+        if (std.meta.activeTag(value.*) == .Pointer) continue;
+        const snapshot = try value.dupe(allocator);
+        const gop = self.phi_values.getOrPut(allocator, @intCast(result_id)) catch {
+            var tmp = snapshot;
+            tmp.deinit(allocator);
+            return RuntimeError.OutOfMemory;
+        };
+        if (gop.found_existing) gop.value_ptr.deinit(allocator);
+        gop.value_ptr.* = snapshot;
+    }
+}
+
+pub fn getPhiValueSnapshot(self: *Self, id: SpvWord) ?*const Value {
+    return self.phi_values.getPtr(id);
 }
 
 pub fn setDerivative(self: *Self, allocator: std.mem.Allocator, result: SpvWord, dx: *const Value, dy: *const Value) RuntimeError!void {
@@ -283,31 +464,68 @@ pub fn copyDerivative(self: *Self, allocator: std.mem.Allocator, dst: SpvWord, s
 
 pub fn applySpecializationLayout(self: *Self, allocator: std.mem.Allocator) RuntimeError!void {
     self.reset();
+    try self.applySpecializationConstants(allocator);
+    try self.applySpecializationDependentLayout(allocator);
+}
+
+pub fn applySpecializationInvocationLayout(self: *Self, allocator: std.mem.Allocator) RuntimeError!void {
+    self.reset();
+    if (self.specialization_constants.count() != 0)
+        try self.applySpecializationConstants(allocator);
+    try self.applySpecializationDependentLayout(allocator);
+}
+
+fn applySpecializationConstants(self: *Self, allocator: std.mem.Allocator) RuntimeError!void {
     try self.pass(allocator, .initMany(&.{
         .SpecConstantTrue,
         .SpecConstantFalse,
         .SpecConstantComposite,
+        .ConstantNull,
         .SpecConstant,
         .SpecConstantOp,
+    }));
+}
+
+fn applySpecializationDependentLayout(self: *Self, allocator: std.mem.Allocator) RuntimeError!void {
+    try self.pass(allocator, .initMany(&.{
         .TypeArray,
         .Variable,
     }));
 }
 
 pub fn getEntryPointByName(self: *const Self, name: []const u8) RuntimeError!SpvWord {
+    if (self.active_entry_point) |entry_point| {
+        if (entryPointNameMatches(self.mod.entry_points.items[entry_point].name, name))
+            return entry_point;
+    }
+
     for (self.mod.entry_points.items, 0..) |entry_point, i| {
-        if (blk: {
-            // Not using std.mem.eql as entry point names may have longer size than their content
-            for (0..@min(name.len, entry_point.name.len)) |j| {
-                if (name[j] != entry_point.name[j])
-                    break :blk false;
-            }
-            if (entry_point.name.len != name.len and entry_point.name[name.len] != 0)
-                break :blk false;
-            break :blk true;
-        }) return @intCast(i);
+        if (entryPointNameMatches(entry_point.name, name)) return @intCast(i);
     }
     return RuntimeError.NotFound;
+}
+
+pub fn getEntryPointByNameAndExecutionModel(self: *const Self, name: []const u8, execution_model: spv.SpvExecutionModel) RuntimeError!SpvWord {
+    for (self.mod.entry_points.items, 0..) |entry_point, i| {
+        if (entry_point.exec_model == execution_model and entryPointNameMatches(entry_point.name, name))
+            return @intCast(i);
+    }
+    return RuntimeError.NotFound;
+}
+
+fn entryPointNameMatches(entry_point_name: []const u8, name: []const u8) bool {
+    // Not using std.mem.eql as entry point names may have longer size than their content.
+    for (0..@min(name.len, entry_point_name.len)) |j| {
+        if (name[j] != entry_point_name[j])
+            return false;
+    }
+    return entry_point_name.len == name.len or entry_point_name[name.len] == 0;
+}
+
+pub fn selectEntryPoint(self: *Self, entry_point_index: SpvWord) RuntimeError!void {
+    if (entry_point_index >= self.mod.entry_points.items.len)
+        return RuntimeError.InvalidEntryPoint;
+    self.active_entry_point = entry_point_index;
 }
 
 pub fn getResultByName(self: *const Self, name: []const u8) RuntimeError!SpvWord {
@@ -332,15 +550,74 @@ pub inline fn getResultByLocation(self: *const Self, location: SpvWord, kind: Lo
 }
 
 pub fn getResultByLocationComponent(self: *const Self, location: SpvWord, component: SpvWord, kind: LocationKind) RuntimeError!SpvWord {
-    switch (kind) {
-        .input => if (location < self.mod.input_locations.len and component < 4 and self.mod.input_locations[location][component] != 0) {
-            return self.mod.input_locations[location][component];
-        },
-        .output => if (location < self.mod.output_locations.len and component < 4 and self.mod.output_locations[location][component] != 0) {
-            return self.mod.output_locations[location][component];
-        },
+    const locations = switch (kind) {
+        .input => &self.mod.input_locations,
+        .output => &self.mod.output_locations,
+    };
+    if (location >= locations.len or component >= 4)
+        return RuntimeError.NotFound;
+
+    const result = locations[location][component];
+    if (result != 0 and self.resultIsInActiveInterface(result))
+        return result;
+
+    if (self.active_entry_point) |entry_point_index| {
+        const entry_point = self.mod.entry_points.items[entry_point_index];
+        for (entry_point.globals) |global| {
+            if (global >= self.results.len)
+                continue;
+
+            const variant = self.results[global].variant orelse continue;
+            const variable = switch (variant) {
+                .Variable => |v| v,
+                else => continue,
+            };
+            const storage_class_matches = switch (kind) {
+                .input => variable.storage_class == .Input,
+                .output => variable.storage_class == .Output,
+            };
+            if (!storage_class_matches)
+                continue;
+
+            for (self.results[global].decorations.items) |decoration| {
+                if (decoration.rtype == .Location and
+                    decoration.literal_1 == location and
+                    self.resultComponent(global) == component)
+                {
+                    return global;
+                }
+            }
+        }
     }
     return RuntimeError.NotFound;
+}
+
+fn resultIsInActiveInterface(self: *const Self, result: SpvWord) bool {
+    const entry_point_index = self.active_entry_point orelse return true;
+    const global = self.resultGlobal(result) orelse return false;
+    return std.mem.indexOfScalar(SpvWord, self.mod.entry_points.items[entry_point_index].globals, global) != null;
+}
+
+fn resultGlobal(self: *const Self, result: SpvWord) ?SpvWord {
+    if (result >= self.results.len)
+        return null;
+
+    const variant = self.results[result].variant orelse return result;
+    return switch (variant) {
+        .AccessChain => |access_chain| access_chain.base,
+        else => result,
+    };
+}
+
+fn resultComponent(self: *const Self, result: SpvWord) SpvWord {
+    if (result >= self.results.len)
+        return 0;
+
+    for (self.results[result].decorations.items) |decoration| {
+        if (decoration.rtype == .Component)
+            return decoration.literal_1;
+    }
+    return 0;
 }
 
 pub fn getResultPrimitiveType(self: *const Self, result: SpvWord) RuntimeError!PrimitiveType {
@@ -354,6 +631,7 @@ pub fn getWorkgroupSize(self: *Self, allocator: std.mem.Allocator) RuntimeError!
         .SpecConstantTrue,
         .SpecConstantFalse,
         .SpecConstantComposite,
+        .ConstantNull,
         .SpecConstant,
         .SpecConstantOp,
     }));
@@ -410,13 +688,8 @@ pub fn beginEntryPoint(self: *Self, allocator: std.mem.Allocator, entry_point_in
         return RuntimeError.InvalidEntryPoint;
 
     // Spec constants pass
-    try self.pass(allocator, .initMany(&.{
-        .SpecConstantTrue,
-        .SpecConstantFalse,
-        .SpecConstantComposite,
-        .SpecConstant,
-        .SpecConstantOp,
-    }));
+    if (self.specialization_constants.count() != 0)
+        try self.applySpecializationConstants(allocator);
 
     {
         const entry_point_desc = &self.mod.entry_points.items[entry_point_index];
@@ -681,20 +954,22 @@ const InputLocationTarget = struct {
 };
 
 fn resolveInputLocationTarget(self: *const Self, location: SpvWord) RuntimeError!InputLocationTarget {
-    if (location < self.mod.input_locations.len and
-        self.mod.input_locations[location][0] != 0 and
-        self.results[self.mod.input_locations[location][0]].variant != null)
-    {
-        const result = self.mod.input_locations[location][0];
+    if (self.getResultByLocationComponent(location, 0, .input)) |result| {
+        if (self.results[result].variant == null)
+            return RuntimeError.NotFound;
+
         const value = try self.results[result].getConstValue();
         switch (value.*) {
             .Array => |arr| {
                 if (arr.values.len == 0) return RuntimeError.OutOfBounds;
-                return .{ .result = result, .array_element = 0 };
+                return .{ .result = result };
             },
             .Matrix => return .{ .result = result, .matrix_column = 0 },
             else => return .{ .result = result },
         }
+    } else |err| switch (err) {
+        RuntimeError.NotFound => {},
+        else => return err,
     }
 
     for (self.results, 0..) |*result, id| {
@@ -736,11 +1011,10 @@ fn resolveInputLocationTarget(self: *const Self, location: SpvWord) RuntimeError
     while (base_location > 0) {
         base_location -= 1;
 
-        const result = if (base_location < self.mod.input_locations.len)
-            self.mod.input_locations[base_location][0]
-        else
-            0;
-        if (result == 0) continue;
+        const result = self.getResultByLocationComponent(base_location, 0, .input) catch |err| switch (err) {
+            RuntimeError.NotFound => continue,
+            else => return err,
+        };
 
         const location_offset: usize = @intCast(location - base_location);
         const value = try self.results[result].getConstValue();
@@ -830,7 +1104,7 @@ pub fn readOutput(self: *const Self, output: []u8, result: SpvWord) RuntimeError
 }
 
 pub fn readBuiltIn(self: *const Self, output: []u8, builtin: spv.SpvBuiltIn) RuntimeError!void {
-    if (self.mod.builtins.get(builtin)) |result| {
+    if (self.getBuiltinResult(builtin)) |result| {
         try self.readResultValue(output, result);
     } else {
         return RuntimeError.NotFound;
@@ -865,11 +1139,32 @@ pub fn writeInputLocation(self: *const Self, input: []const u8, location: SpvWor
 }
 
 pub fn writeBuiltIn(self: *const Self, allocator: std.mem.Allocator, input: []const u8, builtin: spv.SpvBuiltIn) RuntimeError!void {
-    if (self.mod.builtins.get(builtin)) |result| {
+    if (self.getBuiltinResult(builtin)) |result| {
         try self.writeResultValue(allocator, input, result);
     } else {
         return RuntimeError.NotFound;
     }
+}
+
+fn getBuiltinResult(self: *const Self, builtin: spv.SpvBuiltIn) ?SpvWord {
+    if (self.mod.builtins.get(builtin)) |result| {
+        if (self.resultIsInActiveInterface(result))
+            return result;
+    }
+
+    const entry_point_index = self.active_entry_point orelse return null;
+    const entry_point = self.mod.entry_points.items[entry_point_index];
+    for (entry_point.globals) |global| {
+        if (global >= self.results.len)
+            continue;
+
+        for (self.results[global].decorations.items) |decoration| {
+            if (decoration.rtype == .BuiltIn and decoration.literal_1 == @intFromEnum(builtin))
+                return global;
+        }
+    }
+
+    return null;
 }
 
 pub fn flushDescriptorSets(self: *const Self, allocator: std.mem.Allocator) RuntimeError!void {
@@ -902,12 +1197,48 @@ pub fn hasResultDecoration(self: *const Self, result: SpvWord, decoration: spv.S
     return false;
 }
 
+pub fn hasResultOrMemberDecoration(self: *const Self, result: SpvWord, decoration: spv.SpvDecoration) bool {
+    if (self.hasResultDecoration(result, decoration))
+        return true;
+
+    if (result >= self.results.len)
+        return false;
+
+    const type_word = switch ((self.results[result].variant orelse return false)) {
+        .Variable => |variable| variable.type_word,
+        else => return false,
+    };
+    const target_type_word = switch ((self.results[type_word].variant orelse return false)) {
+        .Type => |t| switch (t) {
+            .Pointer => |ptr| ptr.target,
+            else => type_word,
+        },
+        else => return false,
+    };
+    const target_type = self.results[target_type_word].variant orelse return false;
+    switch (target_type) {
+        .Type => |t| switch (t) {
+            .Structure => {
+                for (self.results[target_type_word].decorations.items) |member_decoration| {
+                    if (member_decoration.rtype == decoration)
+                        return true;
+                }
+            },
+            else => {},
+        },
+        else => {},
+    }
+
+    return false;
+}
+
 pub fn resetInvocation(self: *Self, allocator: std.mem.Allocator) void {
     var derivatives = self.derivatives.iterator();
     while (derivatives.next()) |entry| {
         entry.value_ptr.deinit(allocator);
     }
     self.derivatives.clearRetainingCapacity();
+    self.clearPhiValues(allocator);
 
     for (self.results) |*result| {
         if (result.variant) |*variant| {

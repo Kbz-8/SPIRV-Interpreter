@@ -264,19 +264,6 @@ pub const Value = union(Type) {
                     break :blk self;
                 },
                 .Array => |a| blk: {
-                    // If an array is in externally visible storage we treat it as a runtime array
-                    if (is_externally_visible) {
-                        break :blk .{
-                            .RuntimeArray = .{
-                                .type_word = a.components_type_word,
-                                .stride = a.stride,
-                                .data = &.{},
-                                .matrix_stride = null,
-                                .row_major = false,
-                            },
-                        };
-                    }
-
                     const self: Self = .{
                         .Array = .{
                             .stride = a.stride,
@@ -389,6 +376,17 @@ pub const Value = union(Type) {
                     };
                 },
             },
+            .Pointer => |p| .{
+                .Pointer = .{
+                    .ptr = p.ptr,
+                    .image_texel = p.image_texel,
+                    .uniform_slice_window = p.uniform_slice_window,
+                    .uniform_backing_value = p.uniform_backing_value,
+                    .owns_uniform_backing_value = false,
+                    .matrix_stride = p.matrix_stride,
+                    .matrix_row_major = p.matrix_row_major,
+                },
+            },
             else => self.*,
         };
     }
@@ -479,7 +477,7 @@ pub const Value = union(Type) {
                 var offset: usize = 0;
                 for (arr.values) |v| {
                     _ = try v.read(output[offset..]);
-                    offset += arr.stride;
+                    offset += if (arr.stride != 0) arr.stride else try v.getPlainMemorySize();
                 }
                 return offset;
             },
@@ -488,10 +486,15 @@ pub const Value = union(Type) {
                 for (s.values, 0..) |v, i| {
                     const member_offset: usize = @intCast(s.offsets[i] orelse end_offset);
                     if (member_offset > output.len) return RuntimeError.OutOfBounds;
+                    const member_output = if (v == .RuntimeArray and i + 1 < s.values.len and s.offsets[i + 1] != null) blk: {
+                        const next_offset: usize = @intCast(s.offsets[i + 1].?);
+                        if (next_offset < member_offset or next_offset > output.len) return RuntimeError.OutOfBounds;
+                        break :blk output[member_offset..next_offset];
+                    } else output[member_offset..];
                     const read_size = if (s.matrix_strides[i]) |matrix_stride|
-                        try v.readWithMatrixLayout(output[member_offset..], matrix_stride, s.row_major[i])
+                        try v.readWithMatrixLayout(member_output, matrix_stride, s.row_major[i])
                     else
-                        try v.read(output[member_offset..]);
+                        try v.read(member_output);
                     end_offset = @max(end_offset, member_offset + read_size);
                 }
                 return end_offset;
@@ -624,7 +627,7 @@ pub const Value = union(Type) {
                 var offset: usize = 0;
                 for (arr.values) |*value| {
                     _ = try value.readWithMatrixLayout(output[offset..], matrix_stride, row_major);
-                    offset += arr.stride;
+                    offset += if (arr.stride != 0) arr.stride else try value.getPlainMemorySize();
                 }
                 break :blk offset;
             },
@@ -671,7 +674,7 @@ pub const Value = union(Type) {
                 var offset: usize = 0;
                 for (arr.values) |*value| {
                     _ = try value.writeWithMatrixLayout(input[offset..], matrix_stride, row_major);
-                    offset += arr.stride;
+                    offset += if (arr.stride != 0) arr.stride else try value.getPlainMemorySize();
                 }
                 break :blk offset;
             },
@@ -771,7 +774,7 @@ pub const Value = union(Type) {
                 var offset: usize = 0;
                 for (arr.values) |*v| {
                     _ = try v.write(input[offset..]);
-                    offset += arr.stride;
+                    offset += if (arr.stride != 0) arr.stride else try v.getPlainMemorySize();
                 }
                 return offset;
             },
@@ -780,17 +783,25 @@ pub const Value = union(Type) {
                 for (s.values, 0..) |*v, i| {
                     const member_offset: usize = @intCast(s.offsets[i] orelse end_offset);
                     if (member_offset > input.len) return RuntimeError.OutOfBounds;
+                    const member_input = if (v.* == .RuntimeArray and i + 1 < s.values.len and s.offsets[i + 1] != null) blk: {
+                        const next_offset: usize = @intCast(s.offsets[i + 1].?);
+                        if (next_offset < member_offset or next_offset > input.len) return RuntimeError.OutOfBounds;
+                        break :blk input[member_offset..next_offset];
+                    } else input[member_offset..];
                     const write_size = if (s.matrix_strides[i]) |matrix_stride|
-                        try v.writeWithMatrixLayout(input[member_offset..], matrix_stride, s.row_major[i])
+                        try v.writeWithMatrixLayout(member_input, matrix_stride, s.row_major[i])
                     else
-                        try v.write(input[member_offset..]);
+                        try v.write(member_input);
                     end_offset = @max(end_offset, member_offset + write_size);
                 }
                 if (end_offset > input.len) return RuntimeError.OutOfBounds;
                 s.external_data = @constCast(input[0..end_offset]);
                 return end_offset;
             },
-            .RuntimeArray => |*arr| arr.data = @constCast(input[0..]),
+            .RuntimeArray => |*arr| {
+                arr.data = @constCast(input[0..]);
+                return input.len;
+            },
             .Image => |*img| {
                 if (input.len < @sizeOf(usize)) return RuntimeError.OutOfBounds;
                 img.driver_image = @ptrFromInt(std.mem.bytesToValue(usize, input[0..@sizeOf(usize)]));
@@ -840,7 +851,13 @@ pub const Value = union(Type) {
                 }
                 break :blk size;
             },
-            .Array => |arr| arr.stride * arr.values.len,
+            .Array => |arr| blk: {
+                var size: usize = 0;
+                for (arr.values) |v| {
+                    size += if (arr.stride != 0) arr.stride else try v.getPlainMemorySize();
+                }
+                break :blk size;
+            },
             .Structure => |s| blk: {
                 var size: usize = 0;
                 for (s.values, 0..) |v, i| {
@@ -959,14 +976,54 @@ pub const Value = union(Type) {
         }
     }
 
+    fn readScalarLane(comptime T: PrimitiveType, comptime bits: u32, v: *const Value) RuntimeError!getPrimitiveFieldType(T, bits) {
+        const TT = getPrimitiveFieldType(T, bits);
+
+        return switch (v.*) {
+            .Bool => |b| blk: {
+                if (T != .Bool or bits != 8) return RuntimeError.InvalidSpirV;
+                break :blk @as(TT, b);
+            },
+            .Int => |i| blk: {
+                if (i.bit_count != bits) return RuntimeError.InvalidSpirV;
+                break :blk switch (T) {
+                    .SInt => switch (bits) {
+                        8 => @as(TT, if (i.is_signed) i.value.sint8 else @bitCast(i.value.uint8)),
+                        16 => @as(TT, if (i.is_signed) i.value.sint16 else @bitCast(i.value.uint16)),
+                        32 => @as(TT, if (i.is_signed) i.value.sint32 else @bitCast(i.value.uint32)),
+                        64 => @as(TT, if (i.is_signed) i.value.sint64 else @bitCast(i.value.uint64)),
+                        else => return RuntimeError.InvalidSpirV,
+                    },
+                    .UInt => switch (bits) {
+                        8 => @as(TT, if (i.is_signed) @bitCast(i.value.sint8) else i.value.uint8),
+                        16 => @as(TT, if (i.is_signed) @bitCast(i.value.sint16) else i.value.uint16),
+                        32 => @as(TT, if (i.is_signed) @bitCast(i.value.sint32) else i.value.uint32),
+                        64 => @as(TT, if (i.is_signed) @bitCast(i.value.sint64) else i.value.uint64),
+                        else => return RuntimeError.InvalidSpirV,
+                    },
+                    else => return RuntimeError.InvalidSpirV,
+                };
+            },
+            .Float => |f| blk: {
+                if (T != .Float or f.bit_count != bits) return RuntimeError.InvalidSpirV;
+                break :blk switch (bits) {
+                    16 => @as(TT, f.value.float16),
+                    32 => @as(TT, f.value.float32),
+                    64 => @as(TT, f.value.float64),
+                    else => return RuntimeError.InvalidSpirV,
+                };
+            },
+            else => return RuntimeError.InvalidSpirV,
+        };
+    }
+
     pub inline fn readLane(comptime T: PrimitiveType, comptime bits: u32, v: *const Value, lane_index: usize) RuntimeError!getPrimitiveFieldType(T, bits) {
         const TT = getPrimitiveFieldType(T, bits);
 
         return switch (v.*) {
-            .Int => (try getPrimitiveField(T, bits, @constCast(v))).*,
-            .Float => (try getPrimitiveField(T, bits, @constCast(v))).*,
+            .Bool, .Int, .Float => try readScalarLane(T, bits, v),
 
-            .Vector => |lanes| (try getPrimitiveField(T, bits, &lanes[lane_index])).*,
+            .Vector => |lanes| try readScalarLane(T, bits, &lanes[lane_index]),
 
             .Vector2f32 => |*vec| switch (lane_index) {
                 inline 0...1 => |i| blk: {
@@ -1001,7 +1058,7 @@ pub const Value = union(Type) {
 
             .Vector2i32 => |*vec| switch (lane_index) {
                 inline 0...1 => |i| blk: {
-                    if (bits == 32) {
+                    if (comptime (T == .SInt or T == .UInt) and bits == 32) {
                         break :blk @as(TT, @bitCast(vec[i]));
                     } else {
                         return RuntimeError.InvalidSpirV;
@@ -1011,7 +1068,7 @@ pub const Value = union(Type) {
             },
             .Vector3i32 => |*vec| switch (lane_index) {
                 inline 0...2 => |i| blk: {
-                    if (bits == 32) {
+                    if (comptime (T == .SInt or T == .UInt) and bits == 32) {
                         break :blk @as(TT, @bitCast(vec[i]));
                     } else {
                         return RuntimeError.InvalidSpirV;
@@ -1021,7 +1078,7 @@ pub const Value = union(Type) {
             },
             .Vector4i32 => |*vec| switch (lane_index) {
                 inline 0...3 => |i| blk: {
-                    if (bits == 32) {
+                    if (comptime (T == .SInt or T == .UInt) and bits == 32) {
                         break :blk @as(TT, @bitCast(vec[i]));
                     } else {
                         return RuntimeError.InvalidSpirV;
@@ -1032,7 +1089,7 @@ pub const Value = union(Type) {
 
             .Vector2u32 => |*vec| switch (lane_index) {
                 inline 0...1 => |i| blk: {
-                    if (bits == 32) {
+                    if (comptime (T == .SInt or T == .UInt) and bits == 32) {
                         break :blk @as(TT, @bitCast(vec[i]));
                     } else {
                         return RuntimeError.InvalidSpirV;
@@ -1042,7 +1099,7 @@ pub const Value = union(Type) {
             },
             .Vector3u32 => |*vec| switch (lane_index) {
                 inline 0...2 => |i| blk: {
-                    if (bits == 32) {
+                    if (comptime (T == .SInt or T == .UInt) and bits == 32) {
                         break :blk @as(TT, @bitCast(vec[i]));
                     } else {
                         return RuntimeError.InvalidSpirV;
@@ -1052,7 +1109,7 @@ pub const Value = union(Type) {
             },
             .Vector4u32 => |*vec| switch (lane_index) {
                 inline 0...3 => |i| blk: {
-                    if (bits == 32) {
+                    if (comptime (T == .SInt or T == .UInt) and bits == 32) {
                         break :blk @as(TT, @bitCast(vec[i]));
                     } else {
                         return RuntimeError.InvalidSpirV;
@@ -1185,7 +1242,7 @@ pub const Value = union(Type) {
                             else => unreachable,
                         },
                     } },
-                    else => return RuntimeError.InvalidSpirV,
+                    .Bool => .{ .Bool = v },
                 };
             },
             else => return RuntimeError.InvalidSpirV,
