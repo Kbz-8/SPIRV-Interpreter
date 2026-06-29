@@ -1849,9 +1849,21 @@ fn ImageEngine(comptime Op: ImageOp) type {
             }
         }
 
-        fn explicitSampleLod(rt: *Runtime, driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, parsed: ParsedImageOperands) RuntimeError!?f32 {
+        fn explicitSampleLod(rt: *Runtime, driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32, parsed: ParsedImageOperands) RuntimeError!?f32 {
             if (parsed.grad) |derivatives| {
-                const lod = try rt.image_api.queryImageLod(driver_image, driver_sampler, dim, derivatives);
+                const lod_dim, const lod_derivatives = if (dim == .Cube) blk: {
+                    const center = cubeFaceCoord(x, y, z);
+                    const dx = cubeFaceCoordForFace(center.face, x + derivatives.dx.x, y + derivatives.dx.y, z + derivatives.dx.z);
+                    const dy = cubeFaceCoordForFace(center.face, x + derivatives.dy.x, y + derivatives.dy.y, z + derivatives.dy.z);
+                    break :blk .{
+                        spv.SpvDim.@"2D",
+                        Runtime.ImageDerivatives{
+                            .dx = .{ .x = dx.u - center.u, .y = dx.v - center.v, .z = 0.0, .w = 0.0 },
+                            .dy = .{ .x = dy.u - center.u, .y = dy.v - center.v, .z = 0.0, .w = 0.0 },
+                        },
+                    };
+                } else .{ dim, derivatives };
+                const lod = try rt.image_api.queryImageLod(driver_image, driver_sampler, lod_dim, lod_derivatives);
                 return lod.y;
             }
             return parsed.lod;
@@ -2054,20 +2066,49 @@ fn ImageEngine(comptime Op: ImageOp) type {
 
         fn queryImageLod(rt: *Runtime, dst: *Value, coordinate_id: SpvWord, image_operand: SampledImageOperand) RuntimeError!void {
             const coord_derivative = rt.derivatives.get(coordinate_id) orelse return RuntimeError.InvalidValueType;
-            const lod = try rt.image_api.queryImageLod(image_operand.driver_image, image_operand.driver_sampler, image_operand.dim, .{
-                .dx = .{
-                    .x = try readSampleCoordLane(&coord_derivative.dx, 0),
-                    .y = readSampleCoordLane(&coord_derivative.dx, 1) catch 0.0,
-                    .z = readSampleCoordLane(&coord_derivative.dx, 2) catch 0.0,
-                    .w = readSampleCoordLane(&coord_derivative.dx, 3) catch 0.0,
+            const coord = try rt.results[coordinate_id].getValue();
+            const dim, const derivatives = if (image_operand.dim == .Cube) blk: {
+                const x = try readSampleCoordLane(coord, 0);
+                const y = try readSampleCoordLane(coord, 1);
+                const z = try readSampleCoordLane(coord, 2);
+                const center = cubeFaceCoord(x, y, z);
+                const dx = cubeFaceCoordForFace(
+                    center.face,
+                    x + try readSampleCoordLane(&coord_derivative.dx, 0),
+                    y + (readSampleCoordLane(&coord_derivative.dx, 1) catch 0.0),
+                    z + (readSampleCoordLane(&coord_derivative.dx, 2) catch 0.0),
+                );
+                const dy = cubeFaceCoordForFace(
+                    center.face,
+                    x + try readSampleCoordLane(&coord_derivative.dy, 0),
+                    y + (readSampleCoordLane(&coord_derivative.dy, 1) catch 0.0),
+                    z + (readSampleCoordLane(&coord_derivative.dy, 2) catch 0.0),
+                );
+                break :blk .{
+                    spv.SpvDim.@"2D",
+                    Runtime.ImageDerivatives{
+                        .dx = .{ .x = dx.u - center.u, .y = dx.v - center.v, .z = 0.0, .w = 0.0 },
+                        .dy = .{ .x = dy.u - center.u, .y = dy.v - center.v, .z = 0.0, .w = 0.0 },
+                    },
+                };
+            } else .{
+                image_operand.dim,
+                Runtime.ImageDerivatives{
+                    .dx = .{
+                        .x = try readSampleCoordLane(&coord_derivative.dx, 0),
+                        .y = readSampleCoordLane(&coord_derivative.dx, 1) catch 0.0,
+                        .z = readSampleCoordLane(&coord_derivative.dx, 2) catch 0.0,
+                        .w = readSampleCoordLane(&coord_derivative.dx, 3) catch 0.0,
+                    },
+                    .dy = .{
+                        .x = try readSampleCoordLane(&coord_derivative.dy, 0),
+                        .y = readSampleCoordLane(&coord_derivative.dy, 1) catch 0.0,
+                        .z = readSampleCoordLane(&coord_derivative.dy, 2) catch 0.0,
+                        .w = readSampleCoordLane(&coord_derivative.dy, 3) catch 0.0,
+                    },
                 },
-                .dy = .{
-                    .x = try readSampleCoordLane(&coord_derivative.dy, 0),
-                    .y = readSampleCoordLane(&coord_derivative.dy, 1) catch 0.0,
-                    .z = readSampleCoordLane(&coord_derivative.dy, 2) catch 0.0,
-                    .w = readSampleCoordLane(&coord_derivative.dy, 3) catch 0.0,
-                },
-            });
+            };
+            const lod = try rt.image_api.queryImageLod(image_operand.driver_image, image_operand.driver_sampler, dim, derivatives);
 
             switch (dst.*) {
                 .Vector2f32 => |*v| v.* = .{ lod.x, lod.y },
@@ -2302,6 +2343,9 @@ fn ImageEngine(comptime Op: ImageOp) type {
                             sampled_image_operand.driver_image,
                             sampled_image_operand.driver_sampler,
                             sampled_image_operand.dim,
+                            coords.x,
+                            coords.y,
+                            coords.z,
                             parsed_operands,
                         ),
                         parsed_operands.offset,
@@ -2345,6 +2389,9 @@ fn ImageEngine(comptime Op: ImageOp) type {
                             sampled_image_operand.driver_image,
                             sampled_image_operand.driver_sampler,
                             sampled_image_operand.dim,
+                            coords.x,
+                            coords.y,
+                            coords.z,
                             parsed_operands,
                         ),
                         parsed_operands.offset,
@@ -2695,6 +2742,30 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
         fn operation(comptime TT: type, op1: TT, op2: TT) RuntimeError!TT {
             const is_int = @typeInfo(TT) == .int or (@typeInfo(TT) == .vector and @typeInfo(std.meta.Child(TT)) == .int);
             const op2_is_zero = if (@typeInfo(TT) == .vector) std.simd.countElementsWithValue(op2, 0) != 0 else op2 == 0;
+            const zero: TT = switch (@typeInfo(TT)) {
+                .vector => @splat(0),
+                else => 0,
+            };
+
+            if (@typeInfo(TT) == .vector) {
+                switch (Op) {
+                    .Div, .Mod, .Rem => {
+                        var result: TT = undefined;
+                        inline for (0..@typeInfo(TT).vector.len) |i| {
+                            result[i] = if (op2[i] == 0)
+                                0
+                            else switch (Op) {
+                                .Div => if (comptime is_int) @divTrunc(op1[i], op2[i]) else op1[i] / op2[i],
+                                .Mod => @mod(op1[i], op2[i]),
+                                .Rem => @rem(op1[i], op2[i]),
+                                else => unreachable,
+                            };
+                        }
+                        return result;
+                    },
+                    else => {},
+                }
+            }
 
             return switch (Op) {
                 .Add => if (comptime is_int) @addWithOverflow(op1, op2)[0] else op1 + op2,
@@ -2707,12 +2778,12 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
                 => if (comptime is_int) @mulWithOverflow(op1, op2)[0] else op1 * op2,
                 .Div => blk: {
                     if (comptime is_int) {
-                        if (op2_is_zero) return RuntimeError.DivisionByZero;
+                        if (op2_is_zero) return zero;
                     }
                     break :blk if (comptime is_int) @divTrunc(op1, op2) else op1 / op2;
                 },
-                .Mod => if (op2_is_zero) return RuntimeError.DivisionByZero else @mod(op1, op2),
-                .Rem => if (op2_is_zero) return RuntimeError.DivisionByZero else @rem(op1, op2),
+                .Mod => if (op2_is_zero) zero else @mod(op1, op2),
+                .Rem => if (op2_is_zero) zero else @rem(op1, op2),
                 else => return RuntimeError.InvalidSpirV,
             };
         }

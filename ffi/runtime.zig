@@ -75,6 +75,7 @@ const SampleImageInfo = extern struct {
     x: f32,
     y: f32,
     z: f32,
+    w: f32,
     lod: f32,
     has_lod: ffi.SpvCBool,
     offset: ImageOffset,
@@ -124,7 +125,6 @@ const ImageAPI = extern struct {
 fn toCResult(err: spv.Runtime.RuntimeError) ffi.Result {
     return switch (err) {
         spv.Runtime.RuntimeError.Barrier => ffi.Result.Barrier,
-        spv.Runtime.RuntimeError.DivisionByZero => ffi.Result.DivisionByZero,
         spv.Runtime.RuntimeError.InvalidEntryPoint => ffi.Result.InvalidEntryPoint,
         spv.Runtime.RuntimeError.InvalidSpirV => ffi.Result.InvalidSpirV,
         spv.Runtime.RuntimeError.InvalidValueType => ffi.Result.InvalidValueType,
@@ -143,7 +143,6 @@ fn toCResult(err: spv.Runtime.RuntimeError) ffi.Result {
 fn fromCResult(res: ffi.Result) spv.Runtime.RuntimeError!void {
     return switch (res) {
         ffi.Result.Barrier => spv.Runtime.RuntimeError.Barrier,
-        ffi.Result.DivisionByZero => spv.Runtime.RuntimeError.DivisionByZero,
         ffi.Result.InvalidEntryPoint => spv.Runtime.RuntimeError.InvalidEntryPoint,
         ffi.Result.InvalidSpirV => spv.Runtime.RuntimeError.InvalidSpirV,
         ffi.Result.InvalidValueType => spv.Runtime.RuntimeError.InvalidValueType,
@@ -205,7 +204,7 @@ const ImageAPIBridge = struct {
         };
     }
 
-    fn sampleImageInfo(driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.spv.SpvDim, x: f32, y: f32, z: f32, lod: ?f32, offset: spv.Runtime.ImageOffset) SampleImageInfo {
+    fn sampleImageInfo(driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.spv.SpvDim, x: f32, y: f32, z: f32, w: f32, lod: ?f32, offset: spv.Runtime.ImageOffset) SampleImageInfo {
         return .{
             .driver_image = driver_image,
             .driver_sampler = driver_sampler,
@@ -213,6 +212,7 @@ const ImageAPIBridge = struct {
             .x = x,
             .y = y,
             .z = z,
+            .w = w,
             .lod = lod orelse 0.0,
             .has_lod = if (lod == null) 0 else 1,
             .offset = toCImageOffset(offset),
@@ -279,7 +279,7 @@ const ImageAPIBridge = struct {
         const image_api = try getImageAPI();
 
         var dst: Vec4f = undefined;
-        const result = image_api.sampleImageFloat4(sampleImageInfo(driver_image, driver_sampler, dim, x, y, z, lod, offset), &dst);
+        const result = image_api.sampleImageFloat4(sampleImageInfo(driver_image, driver_sampler, dim, x, y, z, 1.0, lod, offset), &dst);
 
         try fromCResult(result);
 
@@ -295,7 +295,7 @@ const ImageAPIBridge = struct {
         const image_api = try getImageAPI();
 
         var dst: Vec4u = undefined;
-        const result = image_api.sampleImageInt4(sampleImageInfo(driver_image, driver_sampler, dim, x, y, z, lod, offset), &dst);
+        const result = image_api.sampleImageInt4(sampleImageInfo(driver_image, driver_sampler, dim, x, y, z, 1.0, lod, offset), &dst);
 
         try fromCResult(result);
 
@@ -307,11 +307,11 @@ const ImageAPIBridge = struct {
         };
     }
 
-    fn sampleImageDref(driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.spv.SpvDim, x: f32, y: f32, z: f32, dref: f32, lod: ?f32, offset: spv.Runtime.ImageOffset) spv.Runtime.RuntimeError!f32 {
+    fn sampleImageDref(driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.spv.SpvDim, x: f32, y: f32, z: f32, w: f32, dref: f32, lod: ?f32, offset: spv.Runtime.ImageOffset) spv.Runtime.RuntimeError!f32 {
         const image_api = try getImageAPI();
 
         var dst: f32 = undefined;
-        const result = image_api.sampleImageDref(sampleImageInfo(driver_image, driver_sampler, dim, x, y, z, lod, offset), dref, &dst);
+        const result = image_api.sampleImageDref(sampleImageInfo(driver_image, driver_sampler, dim, x, y, z, w, lod, offset), dref, &dst);
 
         try fromCResult(result);
 

@@ -48,7 +48,7 @@ fn sampleImageInt4(_: *anyopaque, _: *anyopaque, _: spv.spv.SpvDim, _: f32, _: f
     return spv.Runtime.RuntimeError.UnsupportedSpirV;
 }
 
-fn sampleImageDref(driver_image: *anyopaque, driver_sampler: *anyopaque, _: spv.spv.SpvDim, x: f32, y: f32, z: f32, dref: f32, lod: ?f32, offset: spv.Runtime.ImageOffset) spv.Runtime.RuntimeError!f32 {
+fn sampleImageDref(driver_image: *anyopaque, driver_sampler: *anyopaque, _: spv.spv.SpvDim, x: f32, y: f32, z: f32, _: f32, dref: f32, lod: ?f32, offset: spv.Runtime.ImageOffset) spv.Runtime.RuntimeError!f32 {
     const state: *ImageState = @ptrCast(@alignCast(driver_image));
     if (state.expected_sampler != driver_sampler) return spv.Runtime.RuntimeError.InvalidSpirV;
     state.dref_calls += 1;

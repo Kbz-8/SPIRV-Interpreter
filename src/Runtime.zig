@@ -21,7 +21,6 @@ const Self = @This();
 
 pub const RuntimeError = error{
     Barrier,
-    DivisionByZero,
     InvalidEntryPoint,
     InvalidSpirV,
     InvalidValueType,
@@ -428,6 +427,8 @@ pub fn setDerivativeFromMemory(self: *Self, allocator: std.mem.Allocator, result
 
     var dx_value = try Value.init(allocator, self.results, target_type, false);
     defer dx_value.deinit(allocator);
+    const memory_size = try dx_value.getPlainMemorySize();
+    if (dx.len < memory_size or dy.len < memory_size) return RuntimeError.OutOfBounds;
     _ = try dx_value.write(dx);
 
     var dy_value = try Value.init(allocator, self.results, target_type, false);

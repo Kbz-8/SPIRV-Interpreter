@@ -889,11 +889,8 @@ fn opModfStruct(_: std.mem.Allocator, _: SpvWord, id: SpvWord, _: SpvWord, rt: *
 }
 
 fn frexpScalar(comptime T: type, x: T) struct { sig: T, exp: i32 } {
-    if (x == 0.0)
-        return .{ .sig = 0.0, .exp = 0 };
-
-    const exp = @as(i32, @intFromFloat(@floor(@log2(@abs(x))))) + 1;
-    return .{ .sig = x / @exp2(@as(T, @floatFromInt(exp))), .exp = exp };
+    const result = std.math.frexp(x);
+    return .{ .sig = result.significand, .exp = result.exponent };
 }
 
 fn opFrexp(_: std.mem.Allocator, target_type_id: SpvWord, id: SpvWord, _: SpvWord, rt: *Runtime) RuntimeError!void {
@@ -951,8 +948,9 @@ fn opLdexp(_: std.mem.Allocator, target_type_id: SpvWord, id: SpvWord, _: SpvWor
         inline 16, 32, 64 => |bits| for (0..lane_count) |lane_index| {
             const exp_lane = if (exp_lane_count == 1) 0 else lane_index;
             const exponent = try readIntegralLaneAsI32(exp_value, exp_lane);
-            const scale = @exp2(@as(std.meta.Float(bits), @floatFromInt(exponent)));
-            try writeFloatLane(bits, dst, lane_index, try Value.readLane(.Float, bits, x, lane_index) * scale);
+            const value = try Value.readLane(.Float, bits, x, lane_index);
+            const result = if (value == 0.0) value else std.math.ldexp(value, exponent);
+            try writeFloatLane(bits, dst, lane_index, result);
         },
         else => return RuntimeError.InvalidSpirV,
     }
@@ -1121,7 +1119,51 @@ fn matrixSize(matrix: *const Value) RuntimeError!usize {
     };
 }
 
+fn determinant3Values(comptime T: type, a00: T, a01: T, a02: T, a10: T, a11: T, a12: T, a20: T, a21: T, a22: T) T {
+    return a00 * ((a11 * a22) - (a12 * a21)) -
+        a01 * ((a10 * a22) - (a12 * a20)) +
+        a02 * ((a10 * a21) - (a11 * a20));
+}
+
 fn determinant(comptime bits: u32, src: *const Value, n: usize) RuntimeError!std.meta.Float(bits) {
+    const FloatT = std.meta.Float(bits);
+    if (n == 2) {
+        const a00 = try readMatrixElement(bits, src, 0, 0);
+        const a01 = try readMatrixElement(bits, src, 0, 1);
+        const a10 = try readMatrixElement(bits, src, 1, 0);
+        const a11 = try readMatrixElement(bits, src, 1, 1);
+        return (a00 * a11) - (a10 * a01);
+    }
+
+    if (n == 3) {
+        return determinant3Values(
+            FloatT,
+            try readMatrixElement(bits, src, 0, 0),
+            try readMatrixElement(bits, src, 0, 1),
+            try readMatrixElement(bits, src, 0, 2),
+            try readMatrixElement(bits, src, 1, 0),
+            try readMatrixElement(bits, src, 1, 1),
+            try readMatrixElement(bits, src, 1, 2),
+            try readMatrixElement(bits, src, 2, 0),
+            try readMatrixElement(bits, src, 2, 1),
+            try readMatrixElement(bits, src, 2, 2),
+        );
+    }
+
+    if (n == 4) {
+        var m: [4][4]FloatT = undefined;
+        for (0..4) |row| {
+            for (0..4) |col| {
+                m[row][col] = try readMatrixElement(bits, src, row, col);
+            }
+        }
+
+        return m[0][0] * determinant3Values(FloatT, m[1][1], m[1][2], m[1][3], m[2][1], m[2][2], m[2][3], m[3][1], m[3][2], m[3][3]) -
+            m[0][1] * determinant3Values(FloatT, m[1][0], m[1][2], m[1][3], m[2][0], m[2][2], m[2][3], m[3][0], m[3][2], m[3][3]) +
+            m[0][2] * determinant3Values(FloatT, m[1][0], m[1][1], m[1][3], m[2][0], m[2][1], m[2][3], m[3][0], m[3][1], m[3][3]) -
+            m[0][3] * determinant3Values(FloatT, m[1][0], m[1][1], m[1][2], m[2][0], m[2][1], m[2][2], m[3][0], m[3][1], m[3][2]);
+    }
+
     var m: [16]std.meta.Float(bits) = undefined;
     for (0..n) |row| {
         for (0..n) |col| {
@@ -1186,6 +1228,19 @@ fn opMatrixInverse(_: std.mem.Allocator, target_type_id: SpvWord, id: SpvWord, _
 
     switch (lane_bits) {
         inline 16, 32, 64 => |bits| {
+            if (n == 2) {
+                const a00 = try readMatrixElement(bits, src, 0, 0);
+                const a01 = try readMatrixElement(bits, src, 0, 1);
+                const a10 = try readMatrixElement(bits, src, 1, 0);
+                const a11 = try readMatrixElement(bits, src, 1, 1);
+                const inv_det = 1.0 / ((a00 * a11) - (a10 * a01));
+                try writeMatrixElement(bits, dst, 0, 0, a11 * inv_det);
+                try writeMatrixElement(bits, dst, 0, 1, -a01 * inv_det);
+                try writeMatrixElement(bits, dst, 1, 0, -a10 * inv_det);
+                try writeMatrixElement(bits, dst, 1, 1, a00 * inv_det);
+                return;
+            }
+
             var aug: [32]std.meta.Float(bits) = undefined;
             const width = n * 2;
             for (0..n) |row| {
