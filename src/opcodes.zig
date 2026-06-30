@@ -461,6 +461,7 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.UMod)]                   = MathEngine(.UInt, .Mod, false).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.UMulExtended)]           = opUMulExtended;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Unreachable)]            = opUnreachable;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.Variable)]               = opVariable;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorExtractDynamic)]   = opVectorExtractDynamic;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorInsertDynamic)]    = opVectorInsertDynamic;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.VectorShuffle)]          = opVectorShuffle;
@@ -701,7 +702,8 @@ fn BitEngine(comptime T: PrimitiveType, comptime Op: BitOp) type {
                 inline 8, 16, 32, 64 => |bits| blk: {
                     if (sign == .signed) {
                         const lane = try Value.readLane(.SInt, bits, value, lane_index);
-                        break :blk std.math.cast(u64, lane) orelse return RuntimeError.OutOfBounds;
+                        const U = std.meta.Int(.unsigned, bits);
+                        break :blk @as(u64, @as(U, @bitCast(lane)));
                     }
                     break :blk @intCast(try Value.readLane(.UInt, bits, value, lane_index));
                 },
@@ -3690,6 +3692,10 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                 var matrix_row_major = false;
                 var descriptor_backed = false;
 
+                if (index_count == 0 and std.meta.activeTag(value_ptr.*) == .Pointer) {
+                    break :blk try value_ptr.dupe(allocator);
+                }
+
                 if (std.meta.activeTag(value_ptr.*) == .Pointer) {
                     const ptr = value_ptr.Pointer;
                     uniform_slice_window = ptr.uniform_slice_window;
@@ -5440,11 +5446,29 @@ fn opFwidth(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError
 fn DerivativeEngine(comptime axis: enum { x, y }) type {
     return struct {
         fn op(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
-            _ = try rt.it.next(); // result type
+            const result_type_word = try rt.it.next();
             const id = try rt.it.next();
             const operand = try rt.it.next();
 
-            const derivative = rt.derivatives.get(operand) orelse return RuntimeError.UnsupportedSpirV;
+            const derivative = rt.derivatives.get(operand) orelse {
+                const target_type = (try rt.results[result_type_word].getVariant()).Type;
+                const lane_bits = try Result.resolveLaneBitWidth(target_type, rt);
+                const lane_count = try Result.resolveLaneCount(target_type);
+                const dst = try rt.results[id].getValue();
+
+                switch (lane_bits) {
+                    inline 16, 32, 64 => |bits| {
+                        const FloatT = Value.getPrimitiveFieldType(.Float, bits);
+                        for (0..lane_count) |lane_index| {
+                            try Value.writeLane(.Float, bits, dst, lane_index, @as(FloatT, 0));
+                        }
+                    },
+                    else => return RuntimeError.InvalidSpirV,
+                }
+
+                rt.clearDerivative(allocator, id);
+                return;
+            };
             const src = switch (axis) {
                 .x => &derivative.dx,
                 .y => &derivative.dy,
@@ -6240,9 +6264,22 @@ fn opVariable(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) R
     const is_externally_visible = std.mem.containsAtLeastScalar(spv.SpvStorageClass, &externally_visible_data_storages, 1, storage_class);
     const use_external_storage = is_externally_visible and (storage_class == .Workgroup or resolved_type != .Array);
 
+    var initial_value = try Value.init(allocator, rt.results, resolved_word, use_external_storage);
+    errdefer initial_value.deinit(allocator);
+    if (initializer) |initializer_id| {
+        try copyValue(&initial_value, try rt.results[initializer_id].getValue());
+    }
+
     if (target.variant) |*variant| {
         switch (variant.*) {
-            .Variable => |*variable| variable.value.deinit(allocator),
+            .Variable => |*variable| {
+                variable.storage_class = storage_class;
+                variable.type_word = resolved_word;
+                variable.type = resolved_type;
+                try copyValue(&variable.value, &initial_value);
+                initial_value.deinit(allocator);
+                return;
+            },
             else => {},
         }
     }
@@ -6252,13 +6289,9 @@ fn opVariable(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) R
             .storage_class = storage_class,
             .type_word = resolved_word,
             .type = resolved_type,
-            .value = try Value.init(allocator, rt.results, resolved_word, use_external_storage),
+            .value = initial_value,
         },
     };
-
-    if (initializer) |initializer_id| {
-        try copyValue(try target.getValue(), try rt.results[initializer_id].getValue());
-    }
 }
 
 fn readDynamicVectorIndex(index_value: *const Value) RuntimeError!usize {
