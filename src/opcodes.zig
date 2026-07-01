@@ -406,6 +406,7 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageTexelPointer)]      = opImageTexelPointer;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.ImageWrite)]             = ImageEngine(.Write).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.InBoundsAccessChain)]    = opAccessChain;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.IsHelperInvocationEXT)]   = opIsHelperInvocationEXT;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.IsFinite)]               = CondEngine(.Float, .IsNan).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.IsInf)]                  = CondEngine(.Float, .IsInf).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.IsNan)]                  = CondEngine(.Float, .IsNan).op;
@@ -451,6 +452,7 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Store)]                  = opStore;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Switch)]                 = opSwitch;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.TerminateInvocation)]    = opKill;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.DemoteToHelperInvocation)] = opDemoteToHelperInvocation;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Transpose)]              = opTranspose;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.UConvert)]               = ConversionEngine(.UInt, .UInt).op;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.UDiv)]                   = MathEngine(.UInt, .Div, false).op;
@@ -1056,11 +1058,13 @@ fn ConversionEngine(comptime from_kind: PrimitiveType, comptime to_kind: Primiti
             }
         }
 
-        fn op(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+        fn op(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
             const target_type = (try rt.results[try rt.it.next()].getVariant()).Type;
-            const dst_value = try rt.results[try rt.it.next()].getValue();
+            const dst_id = try rt.it.next();
+            const dst_value = try rt.results[dst_id].getValue();
 
-            const src_value = try rt.results[try rt.it.next()].getValue();
+            const src_id = try rt.it.next();
+            const src_value = try rt.results[src_id].getValue();
 
             const from_bits = try src_value.resolveLaneBitWidth();
             const to_bits = try Result.resolveLaneBitWidth(target_type, rt);
@@ -1072,6 +1076,7 @@ fn ConversionEngine(comptime from_kind: PrimitiveType, comptime to_kind: Primiti
             for (0..dst_lane_count) |lane_index| {
                 try applyLane(from_bits, to_bits, dst_value, src_value, lane_index);
             }
+            try rt.copyDerivative(allocator, dst_id, src_id);
         }
     };
 }
@@ -2150,6 +2155,8 @@ fn ImageEngine(comptime Op: ImageOp) type {
                 const image = &rt.results[try rt.it.next()];
                 const coordinate = try rt.results[try rt.it.next()].getValue();
                 const texel = try rt.results[try rt.it.next()].getValue();
+                if (rt.helper_invocation)
+                    return;
 
                 const image_operand = try resolveImage(image, rt);
                 const x = try readStorageCoordLane(coordinate, 0);
@@ -2658,10 +2665,13 @@ fn AtomicEngine(comptime Op: AtomicOp) type {
 
             const old = try readU32(ptr);
             const new = apply(old, value, comparator);
-            try writeU32(ptr, new);
+            if (!rt.helper_invocation)
+                try writeU32(ptr, new);
             try writeU32(dst, old);
-            try writeImageTexelPointer(rt, ptr);
-            try ptr.flushPtr(allocator);
+            if (!rt.helper_invocation) {
+                try writeImageTexelPointer(rt, ptr);
+                try ptr.flushPtr(allocator);
+            }
         }
     };
 }
@@ -3425,8 +3435,23 @@ fn copyValue(dst: *Value, src: *const Value) RuntimeError!void {
             .common => |dst_val_ptr| {
                 switch (src.*) {
                     .Pointer => |src_ptr| switch (src_ptr.ptr) {
-                        .common => |src_val_ptr| try copyValue(dst_val_ptr, src_val_ptr),
-                        else => dst_val_ptr.* = src.*,
+                        .common => |src_val_ptr| {
+                            if (src_ptr.uniform_slice_window) |window| {
+                                try helpers.readWindow(dst_val_ptr, window, src_ptr.matrix_stride, src_ptr.matrix_row_major);
+                            } else {
+                                try copyValue(dst_val_ptr, src_val_ptr);
+                            }
+                        },
+                        .f32_ptr,
+                        .i32_ptr,
+                        .u32_ptr,
+                        => {
+                            if (src_ptr.uniform_slice_window) |window| {
+                                try helpers.readWindow(dst_val_ptr, window, src_ptr.matrix_stride, src_ptr.matrix_row_major);
+                            } else {
+                                dst_val_ptr.* = src.*;
+                            }
+                        },
                     },
                     else => try copyValue(dst_val_ptr, src),
                 }
@@ -3511,6 +3536,11 @@ fn copyValue(dst: *Value, src: *const Value) RuntimeError!void {
             }
             const dst_slice = helpers.getDstSlice(dst) orelse return RuntimeError.InvalidSpirV;
             try helpers.copySlice(dst_slice, s.values);
+            if (dst.* == .Structure) {
+                if (dst.Structure.external_data) |dst_data| {
+                    _ = try dst.read(dst_data);
+                }
+            }
         },
         .Pointer => |ptr| switch (ptr.ptr) {
             .common => |src_val_ptr| {
@@ -3588,11 +3618,17 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
             var old_variant = variant;
             switch (old_variant) {
                 .AccessChain => |*a| {
-                    if (a.indexes.len != index_count)
-                        return RuntimeError.InvalidSpirV;
                     try a.value.flushPtr(allocator);
                     a.value.deinit(allocator);
-                    break :blk .{ a.indexes, false };
+                    if (a.indexes.len == index_count)
+                        break :blk .{ a.indexes, false };
+                    allocator.free(a.indexes);
+                },
+                .Constant => |*constant| {
+                    constant.value.deinit(allocator);
+                },
+                .Variable => |*variable| {
+                    variable.value.deinit(allocator);
                 },
                 else => {},
             }
@@ -4008,6 +4044,8 @@ fn opAtomicStore(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!vo
     _ = rt.it.skip(); // scope
     _ = rt.it.skip(); // semantic
     const val_id = try rt.it.next();
+    if (rt.helper_invocation)
+        return;
     try copyValue(try rt.results[ptr_id].getValue(), try rt.results[val_id].getValue());
 }
 
@@ -4082,6 +4120,7 @@ fn opCompositeConstruct(allocator: std.mem.Allocator, word_count: SpvWord, rt: *
         operand_id.* = try rt.it.next();
     }
 
+    try rt.refreshResultValueLayout(id);
     const value = &(try rt.results[id].getVariant()).Constant.value;
     if (value.getCompositeDataOrNull()) |target| {
         for (target[0..index_count], operand_ids) |*elem, operand_id| {
@@ -5300,10 +5339,11 @@ fn opSpecConstantOp(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runt
     }
 }
 
-fn opCopyMemory(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+fn opCopyMemory(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     const target = try rt.it.next();
     const source = try rt.it.next();
     try copyValue(try rt.results[target].getValue(), try rt.results[source].getValue());
+    try rt.copyDerivative(allocator, target, source);
 }
 
 fn opCopyObject(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
@@ -5558,13 +5598,17 @@ fn opFunction(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeErr
     const function_type_id = try rt.it.next();
 
     const source_location = rt.it.emitSourceLocation();
+    const existing_params = if (rt.results[id].variant) |variant| switch (variant) {
+        .Function => |function| function.params,
+        else => return RuntimeError.InvalidSpirV,
+    } else null;
 
     rt.results[id].variant = .{
         .Function = .{
             .source_location = source_location,
             .return_type = return_type,
             .function_type = function_type_id,
-            .params = params: {
+            .params = existing_params orelse params: {
                 if (rt.results[function_type_id].variant) |variant| {
                     const params_count = switch (variant) {
                         .Type => |t| switch (t) {
@@ -5607,6 +5651,7 @@ fn opFunctionCall(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) Runtim
         .previous_label = null,
     }) catch return RuntimeError.OutOfMemory;
     if (!rt.it.jumpToSourceLocation(source_location)) return RuntimeError.InvalidSpirV;
+    rt.current_function = func;
     rt.current_parameter_index = 0;
 }
 
@@ -5619,6 +5664,22 @@ fn opFunctionParameter(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeEr
     const id = try rt.it.next();
 
     const target = &rt.results[id];
+    if (rt.function_stack.items.len != 0) {
+        if (target.variant) |*variant| switch (variant.*) {
+            .FunctionParameter => |parameter| {
+                if (parameter.value_ptr != null) {
+                    (try (rt.current_function orelse return RuntimeError.InvalidSpirV).getVariant()).Function.params[rt.current_parameter_index] = id;
+                    rt.current_parameter_index += 1;
+                    return;
+                }
+            },
+            else => {},
+        };
+    }
+    const value_ptr = if (target.variant) |*variant| switch (variant.*) {
+        .FunctionParameter => |parameter| parameter.value_ptr,
+        else => null,
+    } else null;
 
     const resolved = rt.results[var_type].resolveType(rt.results);
     target.variant = .{
@@ -5628,7 +5689,7 @@ fn opFunctionParameter(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeEr
                 .Type => |t| @as(Result.Type, t),
                 else => return RuntimeError.InvalidSpirV,
             },
-            .value_ptr = null,
+            .value_ptr = value_ptr,
         },
     };
     (try (rt.current_function orelse return RuntimeError.InvalidSpirV).getVariant()).Function.params[rt.current_parameter_index] = id;
@@ -5654,10 +5715,30 @@ fn opKill(_: std.mem.Allocator, _: SpvWord, _: *Runtime) RuntimeError!void {
     return RuntimeError.Killed;
 }
 
+fn opDemoteToHelperInvocation(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    rt.helper_invocation = true;
+    const helper_invocation = true;
+    rt.writeBuiltIn(allocator, std.mem.asBytes(&helper_invocation), .HelperInvocation) catch |err| switch (err) {
+        RuntimeError.NotFound => {},
+        else => return err,
+    };
+}
+
+fn opIsHelperInvocationEXT(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+    _ = try rt.it.next();
+    const id = try rt.it.next();
+    const value = try rt.results[id].getValue();
+    switch (value.*) {
+        .Bool => |*b| b.* = rt.helper_invocation,
+        else => return RuntimeError.InvalidSpirV,
+    }
+}
+
 fn opLoad(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     _ = rt.it.skip();
     const id = try rt.it.next();
     const ptr_id = try rt.it.next();
+    try rt.refreshResultValueLayout(id);
     try copyValue(try rt.results[id].getValue(), try rt.results[ptr_id].getValue());
     try rt.copyDerivative(allocator, id, ptr_id);
 }
@@ -5912,6 +5993,8 @@ fn opSourceExtension(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Run
 fn opStore(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     const ptr_id = try rt.it.next();
     const val_id = try rt.it.next();
+    if (rt.helper_invocation)
+        return;
     try copyValue(try rt.results[ptr_id].getValue(), try rt.results[val_id].getValue());
     try rt.copyDerivative(allocator, ptr_id, val_id);
 }

@@ -127,6 +127,7 @@ active_entry_point: ?SpvWord,
 specialization_constants: std.AutoHashMapUnmanaged(u32, []const u8),
 derivatives: std.AutoHashMapUnmanaged(SpvWord, Derivative),
 phi_values: std.AutoHashMapUnmanaged(SpvWord, Value),
+helper_invocation: bool,
 
 image_api: ImageAPI,
 
@@ -160,6 +161,7 @@ pub fn init(allocator: std.mem.Allocator, module: *Module, image_api: ImageAPI) 
         .specialization_constants = .empty,
         .derivatives = .empty,
         .phi_values = .empty,
+        .helper_invocation = false,
         .image_api = image_api,
     };
     errdefer self.deinit(allocator);
@@ -195,6 +197,7 @@ pub fn initFrom(allocator: std.mem.Allocator, other: *const Self, image_api: Ima
         .specialization_constants = .empty,
         .derivatives = .empty,
         .phi_values = .empty,
+        .helper_invocation = other.helper_invocation,
         .image_api = image_api,
     };
     errdefer self.deinit(allocator);
@@ -298,6 +301,11 @@ fn refreshValueLayouts(self: *Self) RuntimeError!void {
             else => {},
         };
     }
+}
+
+pub fn refreshResultValueLayout(self: *Self, result: SpvWord) RuntimeError!void {
+    const type_word = try self.results[result].getValueTypeWord();
+    try applyValueLayout(self.results, try self.results[result].getValue(), type_word);
 }
 
 fn typePlainMemorySize(self: *const Self, type_word: SpvWord) RuntimeError!usize {
@@ -769,7 +777,10 @@ pub fn populatePushConstants(self: *Self, blob: []const u8) RuntimeError!void {
 
 pub fn writeDescriptorSet(self: *const Self, input: []const u8, set: SpvWord, binding: SpvWord, descriptor_index: SpvWord) RuntimeError!void {
     const result = self.mod.getBindingResult(set, binding) orelse return RuntimeError.NotFound;
-    const value = &(self.results[result].variant orelse return).Variable.value;
+    const value = if (self.results[result].variant) |*variant| switch (variant.*) {
+        .Variable => |*variable| &variable.value,
+        else => return RuntimeError.InvalidSpirV,
+    } else return;
     switch (value.*) {
         .Array => |arr| {
             if (descriptor_index >= arr.values.len)
@@ -1271,4 +1282,5 @@ fn reset(self: *Self) void {
     self.current_function = null;
     self.current_label = null;
     self.previous_label = null;
+    self.helper_invocation = false;
 }

@@ -789,14 +789,14 @@ pub const Value = union(Type) {
             .Vector => |*values| {
                 var offset: usize = 0;
                 for (values.*) |*v| {
-                    offset += try v.write(input[offset..]);
+                    offset += try v.write(input[@min(offset, input.len)..]);
                 }
                 return offset;
             },
             .Matrix => |*values| {
                 var offset: usize = 0;
                 for (values.*) |*v| {
-                    offset += try v.write(input[offset..]);
+                    offset += try v.write(input[@min(offset, input.len)..]);
                 }
                 return offset;
             },
