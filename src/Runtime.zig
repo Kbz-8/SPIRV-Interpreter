@@ -1158,7 +1158,7 @@ pub fn writeBuiltIn(self: *const Self, allocator: std.mem.Allocator, input: []co
     }
 }
 
-fn getBuiltinResult(self: *const Self, builtin: spv.SpvBuiltIn) ?SpvWord {
+pub fn getBuiltinResult(self: *const Self, builtin: spv.SpvBuiltIn) ?SpvWord {
     if (self.mod.builtins.get(builtin)) |result| {
         if (self.resultIsInActiveInterface(result))
             return result;

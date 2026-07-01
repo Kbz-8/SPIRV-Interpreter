@@ -1058,8 +1058,49 @@ fn ConversionEngine(comptime from_kind: PrimitiveType, comptime to_kind: Primiti
             }
         }
 
+        fn applyDerivativeLane(from_bit_count: SpvWord, to_bit_count: SpvWord, dst: *Value, from: *const Value, derivative: *const Value, lane_index: usize) RuntimeError!void {
+            @setEvalBranchQuota(10_000);
+            switch (from_bit_count) {
+                inline 8, 16, 32, 64 => |from_bits| {
+                    if (from_bits == 8 and from_kind == .Float) return RuntimeError.InvalidSpirV;
+                    switch (to_bit_count) {
+                        inline 8, 16, 32, 64 => |to_bits| {
+                            if (to_bits == 8 and to_kind == .Float) return RuntimeError.InvalidSpirV;
+
+                            const ToT = Value.getPrimitiveFieldType(to_kind, to_bits);
+                            const base_from = try Value.readLane(from_kind, from_bits, from, lane_index);
+                            const delta_from = try Value.readLane(from_kind, from_bits, derivative, lane_index);
+                            const base_to = try castLane(ToT, from_bit_count, from, lane_index);
+
+                            var shifted_from = from.*;
+                            try Value.writeLane(from_kind, from_bits, &shifted_from, lane_index, addDerivativeDelta(@TypeOf(base_from), base_from, delta_from));
+                            const shifted_to = try castLane(ToT, from_bit_count, &shifted_from, lane_index);
+                            try Value.writeLane(to_kind, to_bits, dst, lane_index, subDerivativeDelta(ToT, shifted_to, base_to));
+                        },
+                        else => return RuntimeError.InvalidSpirV,
+                    }
+                },
+                else => return RuntimeError.InvalidSpirV,
+            }
+        }
+
+        fn addDerivativeDelta(comptime T: type, lhs: T, rhs: T) T {
+            return switch (@typeInfo(T)) {
+                .int => @addWithOverflow(lhs, rhs)[0],
+                else => lhs + rhs,
+            };
+        }
+
+        fn subDerivativeDelta(comptime T: type, lhs: T, rhs: T) T {
+            return switch (@typeInfo(T)) {
+                .int => @subWithOverflow(lhs, rhs)[0],
+                else => lhs - rhs,
+            };
+        }
+
         fn op(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
-            const target_type = (try rt.results[try rt.it.next()].getVariant()).Type;
+            const target_type_word = try rt.it.next();
+            const target_type = (try rt.results[target_type_word].getVariant()).Type;
             const dst_id = try rt.it.next();
             const dst_value = try rt.results[dst_id].getValue();
 
@@ -1076,7 +1117,20 @@ fn ConversionEngine(comptime from_kind: PrimitiveType, comptime to_kind: Primiti
             for (0..dst_lane_count) |lane_index| {
                 try applyLane(from_bits, to_bits, dst_value, src_value, lane_index);
             }
-            try rt.copyDerivative(allocator, dst_id, src_id);
+
+            const src_derivative = rt.derivatives.get(src_id) orelse {
+                rt.clearDerivative(allocator, dst_id);
+                return;
+            };
+            var dx = try Value.init(allocator, rt.results, target_type_word, false);
+            defer dx.deinit(allocator);
+            var dy = try Value.init(allocator, rt.results, target_type_word, false);
+            defer dy.deinit(allocator);
+            for (0..dst_lane_count) |lane_index| {
+                try applyDerivativeLane(from_bits, to_bits, &dx, src_value, &src_derivative.dx, lane_index);
+                try applyDerivativeLane(from_bits, to_bits, &dy, src_value, &src_derivative.dy, lane_index);
+            }
+            try rt.setDerivative(allocator, dst_id, &dx, &dy);
         }
     };
 }
@@ -1505,6 +1559,35 @@ fn ImageEngine(comptime Op: ImageOp) type {
             }
         }
 
+        fn derivativeDelta(comptime T: type, shifted: T, center: T) T {
+            return switch (@typeInfo(T)) {
+                .int => @subWithOverflow(shifted, center)[0],
+                else => shifted - center,
+            };
+        }
+
+        fn writeValueDelta(rt: *Runtime, target_type_word: SpvWord, dst: *Value, shifted: *const Value, center: *const Value) RuntimeError!void {
+            const target_type = (try rt.results[target_type_word].getVariant()).Type;
+            const primitive_type = try center.resolvePrimitiveType();
+            const lane_bits = try Result.resolveLaneBitWidth(target_type, rt);
+            const lane_count = try Result.resolveLaneCount(target_type);
+
+            switch (primitive_type) {
+                inline .Float, .SInt, .UInt => |primitive| switch (lane_bits) {
+                    inline 16, 32, 64 => |bits| {
+                        const LaneT = Value.getPrimitiveFieldType(primitive, bits);
+                        for (0..lane_count) |lane_index| {
+                            const shifted_lane = try Value.readLane(primitive, bits, shifted, lane_index);
+                            const center_lane = try Value.readLane(primitive, bits, center, lane_index);
+                            try Value.writeLane(primitive, bits, dst, lane_index, derivativeDelta(LaneT, shifted_lane, center_lane));
+                        }
+                    },
+                    else => return RuntimeError.UnsupportedSpirV,
+                },
+                else => return RuntimeError.InvalidValueType,
+            }
+        }
+
         fn writeFloatScalar(dst: *Value, value: f32) RuntimeError!void {
             switch (dst.*) {
                 .Float => |*f| f.value.float32 = value,
@@ -1517,6 +1600,39 @@ fn ImageEngine(comptime Op: ImageOp) type {
                 },
                 else => return RuntimeError.InvalidValueType,
             }
+        }
+
+        fn setImageReadDerivative(allocator: std.mem.Allocator, rt: *Runtime, result_type_word: SpvWord, result_id: SpvWord, coordinate_id: SpvWord, dst: *const Value, driver_image: *anyopaque, dim: spv.SpvDim, x: i32, y: i32, z: i32, lod: ?i32) RuntimeError!void {
+            const coord_derivatives = sampleDerivativesFromRuntime(rt, coordinate_id) catch {
+                rt.clearDerivative(allocator, result_id);
+                return;
+            } orelse {
+                rt.clearDerivative(allocator, result_id);
+                return;
+            };
+
+            var dx_read = try Value.init(allocator, rt.results, result_type_word, false);
+            defer dx_read.deinit(allocator);
+            var dy_read = try Value.init(allocator, rt.results, result_type_word, false);
+            defer dy_read.deinit(allocator);
+
+            const dx_x: i32 = @intFromFloat(coord_derivatives.dx.x);
+            const dx_y: i32 = @intFromFloat(coord_derivatives.dx.y);
+            const dx_z: i32 = @intFromFloat(coord_derivatives.dx.z);
+            const dy_x: i32 = @intFromFloat(coord_derivatives.dy.x);
+            const dy_y: i32 = @intFromFloat(coord_derivatives.dy.y);
+            const dy_z: i32 = @intFromFloat(coord_derivatives.dy.z);
+
+            try readImage(rt, &dx_read, driver_image, dim, x + dx_x, y + dx_y, z + dx_z, lod);
+            try readImage(rt, &dy_read, driver_image, dim, x + dy_x, y + dy_y, z + dy_z, lod);
+
+            var dx = try Value.init(allocator, rt.results, result_type_word, false);
+            defer dx.deinit(allocator);
+            var dy = try Value.init(allocator, rt.results, result_type_word, false);
+            defer dy.deinit(allocator);
+            try writeValueDelta(rt, result_type_word, &dx, &dx_read, dst);
+            try writeValueDelta(rt, result_type_word, &dy, &dy_read, dst);
+            try rt.setDerivative(allocator, result_id, &dx, &dy);
         }
 
         fn readImage(rt: *Runtime, dst: *Value, driver_image: *anyopaque, dim: spv.SpvDim, x: i32, y: i32, z: i32, lod: ?i32) RuntimeError!void {
@@ -1792,26 +1908,8 @@ fn ImageEngine(comptime Op: ImageOp) type {
             var dy = try Value.init(allocator, rt.results, result_type_word, false);
             defer dy.deinit(allocator);
 
-            const result_type = (try rt.results[result_type_word].getVariant()).Type;
-            if (!try typeHasFloatLanes(rt, result_type)) {
-                rt.clearDerivative(allocator, result_id);
-                return;
-            }
-            const lane_bits = try Result.resolveLaneBitWidth(result_type, rt);
-            const lane_count = try Result.resolveLaneCount(result_type);
-
-            switch (lane_bits) {
-                inline 16, 32, 64 => |bits| {
-                    for (0..lane_count) |lane_index| {
-                        const center = try Value.readLane(.Float, bits, dst, lane_index);
-                        const dx_lane = try Value.readLane(.Float, bits, &dx_sample, lane_index);
-                        const dy_lane = try Value.readLane(.Float, bits, &dy_sample, lane_index);
-                        try Value.writeLane(.Float, bits, &dx, lane_index, dx_lane - center);
-                        try Value.writeLane(.Float, bits, &dy, lane_index, dy_lane - center);
-                    }
-                },
-                else => return RuntimeError.UnsupportedSpirV,
-            }
+            try writeValueDelta(rt, result_type_word, &dx, &dx_sample, dst);
+            try writeValueDelta(rt, result_type_word, &dy, &dy_sample, dst);
 
             try rt.setDerivative(allocator, result_id, &dx, &dy);
         }
@@ -2207,6 +2305,7 @@ fn ImageEngine(comptime Op: ImageOp) type {
 
                     const read_z = if (image_operand.arrayed) z else parsed_operands.sample orelse z;
                     try readImage(rt, dst, image_operand.driver_image, image_operand.dim, x, y, read_z, parsed_operands.image_lod);
+                    try setImageReadDerivative(allocator, rt, result_type_word, result_id, coordinate_id, dst, image_operand.driver_image, image_operand.dim, x, y, read_z, parsed_operands.image_lod);
                 },
 
                 .SampleImplicitLod,
@@ -2982,6 +3081,20 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
             }
         }
 
+        fn derivativeAdd(comptime ScalarT: type, lhs: ScalarT, rhs: ScalarT) ScalarT {
+            return switch (@typeInfo(ScalarT)) {
+                .int => @addWithOverflow(lhs, rhs)[0],
+                else => lhs + rhs,
+            };
+        }
+
+        fn derivativeSub(comptime ScalarT: type, lhs: ScalarT, rhs: ScalarT) ScalarT {
+            return switch (@typeInfo(ScalarT)) {
+                .int => @subWithOverflow(lhs, rhs)[0],
+                else => lhs - rhs,
+            };
+        }
+
         inline fn applySIMDVectorSingle(comptime ElemT: type, comptime N: usize, d: *@Vector(N, ElemT), v: *const @Vector(N, ElemT)) RuntimeError!void {
             inline for (0..N) |i| {
                 d[i] = try operationSingle(ElemT, v[i]);
@@ -2999,13 +3112,8 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
             lhs: *const Value,
             rhs: *const Value,
         ) RuntimeError!void {
-            if (comptime T != .Float) {
-                rt.clearDerivative(allocator, dst_id);
-                return;
-            }
-
             switch (comptime Op) {
-                .Add, .Sub, .Mul, .Div, .VectorTimesScalar => {},
+                .Add, .Sub, .Mul, .Div, .Mod, .VectorTimesScalar => {},
                 else => {
                     rt.clearDerivative(allocator, dst_id);
                     return;
@@ -3029,45 +3137,34 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
 
             switch (lane_bits) {
                 inline 16, 32, 64 => |bits| {
-                    const FloatT = Value.getPrimitiveFieldType(.Float, bits);
+                    const ScalarT = Value.getPrimitiveFieldType(T, bits);
                     for (0..lane_count) |lane_index| {
-                        const l = try Value.readLane(.Float, bits, lhs, lane_index);
-                        const r = try Value.readLane(.Float, bits, rhs, lane_index);
+                        const l = try Value.readLane(T, bits, lhs, lane_index);
+                        const r = try Value.readLane(T, bits, rhs, lane_index);
 
-                        const ldx: FloatT = if (lhs_derivative) |derivative|
-                            try Value.readLane(.Float, bits, &derivative.dx, lane_index)
+                        const ldx: ScalarT = if (lhs_derivative) |derivative|
+                            try Value.readLane(T, bits, &derivative.dx, lane_index)
                         else
-                            @as(FloatT, 0);
-                        const ldy: FloatT = if (lhs_derivative) |derivative|
-                            try Value.readLane(.Float, bits, &derivative.dy, lane_index)
+                            @as(ScalarT, 0);
+                        const ldy: ScalarT = if (lhs_derivative) |derivative|
+                            try Value.readLane(T, bits, &derivative.dy, lane_index)
                         else
-                            @as(FloatT, 0);
-                        const rdx: FloatT = if (rhs_derivative) |derivative|
-                            try Value.readLane(.Float, bits, &derivative.dx, lane_index)
+                            @as(ScalarT, 0);
+                        const rdy: ScalarT = if (rhs_derivative) |derivative|
+                            try Value.readLane(T, bits, &derivative.dy, lane_index)
                         else
-                            @as(FloatT, 0);
-                        const rdy: FloatT = if (rhs_derivative) |derivative|
-                            try Value.readLane(.Float, bits, &derivative.dy, lane_index)
+                            @as(ScalarT, 0);
+                        const rdx: ScalarT = if (rhs_derivative) |derivative|
+                            try Value.readLane(T, bits, &derivative.dx, lane_index)
                         else
-                            @as(FloatT, 0);
+                            @as(ScalarT, 0);
 
-                        const dx_lane = switch (comptime Op) {
-                            .Add => ldx + rdx,
-                            .Sub => ldx - rdx,
-                            .Mul, .VectorTimesScalar => (ldx * r) + (l * rdx),
-                            .Div => ((ldx * r) - (l * rdx)) / (r * r),
-                            else => unreachable,
-                        };
-                        const dy_lane = switch (comptime Op) {
-                            .Add => ldy + rdy,
-                            .Sub => ldy - rdy,
-                            .Mul, .VectorTimesScalar => (ldy * r) + (l * rdy),
-                            .Div => ((ldy * r) - (l * rdy)) / (r * r),
-                            else => unreachable,
-                        };
+                        const base = try operation(ScalarT, l, r);
+                        const dx_lane = derivativeSub(ScalarT, try operation(ScalarT, derivativeAdd(ScalarT, l, ldx), derivativeAdd(ScalarT, r, rdx)), base);
+                        const dy_lane = derivativeSub(ScalarT, try operation(ScalarT, derivativeAdd(ScalarT, l, ldy), derivativeAdd(ScalarT, r, rdy)), base);
 
-                        try Value.writeLane(.Float, bits, &dx, lane_index, dx_lane);
-                        try Value.writeLane(.Float, bits, &dy, lane_index, dy_lane);
+                        try Value.writeLane(T, bits, &dx, lane_index, dx_lane);
+                        try Value.writeLane(T, bits, &dy, lane_index, dy_lane);
                     }
                 },
                 else => return RuntimeError.UnsupportedSpirV,
@@ -3722,6 +3819,8 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                 };
 
                 var uniform_slice_window: ?[]u8 = null;
+                var uniform_root_window: ?[]u8 = null;
+                var uniform_window_offset: usize = 0;
                 var uniform_backing_value: ?*Value = null;
                 var owns_uniform_backing_value = false;
                 var matrix_stride: ?SpvWord = null;
@@ -3735,6 +3834,8 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                 if (std.meta.activeTag(value_ptr.*) == .Pointer) {
                     const ptr = value_ptr.Pointer;
                     uniform_slice_window = ptr.uniform_slice_window;
+                    uniform_root_window = ptr.uniform_root_window orelse ptr.uniform_slice_window;
+                    uniform_window_offset = ptr.uniform_window_offset;
                     uniform_backing_value = ptr.uniform_backing_value;
                     owns_uniform_backing_value = false;
                     matrix_stride = ptr.matrix_stride;
@@ -3762,6 +3863,8 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                             if (std.meta.activeTag(value_ptr.*) == .Pointer) {
                                 const ptr = value_ptr.Pointer;
                                 uniform_slice_window = ptr.uniform_slice_window;
+                                uniform_root_window = ptr.uniform_root_window orelse ptr.uniform_slice_window;
+                                uniform_window_offset = ptr.uniform_window_offset;
                                 uniform_backing_value = ptr.uniform_backing_value;
                                 owns_uniform_backing_value = false;
                                 matrix_stride = ptr.matrix_stride;
@@ -3796,6 +3899,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                         break :plain_offset_blk plain_offset;
                                     };
                                     uniform_slice_window = try helpers.advanceWindow(uniform_slice_window, offset);
+                                    uniform_window_offset += offset;
                                     value_ptr = &v[component_index];
                                     if (is_matrix and matrix_row_major) {
                                         // Keep stride for the selected column vector; its lanes are separated by MatrixStride.
@@ -3807,7 +3911,9 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                 .Array => |a| {
                                     if (component_index >= a.values.len)
                                         return RuntimeError.OutOfBounds;
-                                    uniform_slice_window = try helpers.advanceWindow(uniform_slice_window, component_index * a.stride);
+                                    const element_offset = component_index * a.stride;
+                                    uniform_slice_window = try helpers.advanceWindow(uniform_slice_window, element_offset);
+                                    uniform_window_offset += element_offset;
                                     value_ptr = &a.values[component_index];
                                     switch (value_ptr.*) {
                                         .Array, .Matrix => {},
@@ -3829,9 +3935,12 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                     if (uniform_slice_window != null) {
                                         descriptor_backed = true;
                                         uniform_slice_window = try helpers.advanceWindow(uniform_slice_window, member_offset);
+                                        uniform_window_offset += member_offset;
                                     } else if (s.external_data) |data| {
                                         descriptor_backed = true;
                                         uniform_slice_window = try helpers.advanceWindow(data, member_offset);
+                                        uniform_root_window = data;
+                                        uniform_window_offset = member_offset;
                                     }
 
                                     value_ptr = &s.values[component_index];
@@ -3863,10 +3972,13 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                     uniform_backing_value = backing;
                                     owns_uniform_backing_value = true;
                                     descriptor_backed = true;
-                                    uniform_slice_window = if (arr.getRobustOffsetOfIndex(component_index)) |element_offset|
-                                        arr.data[element_offset..]
-                                    else
-                                        null;
+                                    if (arr.getRobustOffsetOfIndex(component_index)) |element_offset| {
+                                        uniform_slice_window = arr.data[element_offset..];
+                                        uniform_root_window = arr.data;
+                                        uniform_window_offset = element_offset;
+                                    } else {
+                                        uniform_slice_window = null;
+                                    }
                                     if (arr.matrix_stride) |stride| {
                                         matrix_stride = stride;
                                         matrix_row_major = arr.row_major;
@@ -3988,6 +4100,8 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                     .Pointer = .{
                         .ptr = .{ .common = value_ptr },
                         .uniform_slice_window = uniform_slice_window,
+                        .uniform_root_window = uniform_root_window,
+                        .uniform_window_offset = uniform_window_offset,
                         .uniform_backing_value = uniform_backing_value,
                         .owns_uniform_backing_value = owns_uniform_backing_value,
                         .matrix_stride = matrix_stride,
@@ -4004,13 +4118,17 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
             return;
         };
         const index_value = switch ((try rt.results[indexes[0]].getVariant()).*) {
-            .Constant => |c| c.value,
+            .Constant => |c| &c.value,
+            .Variable => |v| &v.value,
+            .FunctionParameter => |p| p.value_ptr orelse return RuntimeError.InvalidSpirV,
             else => return RuntimeError.InvalidSpirV,
         };
-        const lane_index: usize = switch (index_value) {
+        const lane_index: usize = switch (index_value.*) {
             .Int => |int| @intCast(int.value.uint32),
             else => return RuntimeError.InvalidSpirV,
         };
+        const base_value = try base.getValue();
+        const base_lane_count = try base_value.resolveLaneCount();
         const target_type_word = switch ((try rt.results[var_type].getVariant()).*) {
             .Type => |t| switch (t) {
                 .Pointer => |p| p.target,
@@ -4026,10 +4144,45 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
         var dy = try Value.init(allocator, rt.results, target_type_word, false);
         defer dy.deinit(allocator);
 
+        const index_derivative = rt.derivatives.get(indexes[0]);
         switch (lane_bits) {
             inline 16, 32, 64 => |bits| {
-                try Value.writeLane(.Float, bits, &dx, 0, try Value.readLane(.Float, bits, &base_derivative.dx, lane_index));
-                try Value.writeLane(.Float, bits, &dy, 0, try Value.readLane(.Float, bits, &base_derivative.dy, lane_index));
+                const writeAxis = struct {
+                    fn run(
+                        comptime primitive: PrimitiveType,
+                        dst: *Value,
+                        base_v: *const Value,
+                        derivative_axis: *const Value,
+                        index_derivative_axis: ?*const Value,
+                        center_lane_index: usize,
+                        source_lane_count: usize,
+                    ) RuntimeError!void {
+                        const LaneT = Value.getPrimitiveFieldType(primitive, bits);
+                        const index_delta = if (index_derivative_axis) |idx_deriv|
+                            try readIndexDelta(idx_deriv)
+                        else
+                            0;
+                        const shifted_lane_index_signed = @as(isize, @intCast(center_lane_index)) + index_delta;
+                        if (shifted_lane_index_signed < 0 or shifted_lane_index_signed >= @as(isize, @intCast(source_lane_count))) {
+                            try Value.writeLane(primitive, bits, dst, 0, @as(LaneT, 0));
+                            return;
+                        }
+                        const shifted_lane_index: usize = @intCast(shifted_lane_index_signed);
+                        const shifted_base = try Value.readLane(primitive, bits, base_v, shifted_lane_index);
+                        const shifted_derivative = try Value.readLane(primitive, bits, derivative_axis, shifted_lane_index);
+                        const shifted = addFiniteDifferenceDelta(LaneT, shifted_base, shifted_derivative);
+                        const center = try Value.readLane(primitive, bits, base_v, center_lane_index);
+                        try Value.writeLane(primitive, bits, dst, 0, finiteDifferenceDelta(LaneT, shifted, center));
+                    }
+                }.run;
+
+                switch (try base_value.resolvePrimitiveType()) {
+                    inline .Float, .SInt, .UInt => |primitive| {
+                        try writeAxis(primitive, &dx, base_value, &base_derivative.dx, if (index_derivative) |d| &d.dx else null, lane_index, base_lane_count);
+                        try writeAxis(primitive, &dy, base_value, &base_derivative.dy, if (index_derivative) |d| &d.dy else null, lane_index, base_lane_count);
+                    },
+                    else => return RuntimeError.InvalidValueType,
+                }
             },
             else => return RuntimeError.UnsupportedSpirV,
         }
@@ -4051,8 +4204,10 @@ fn opAtomicStore(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!vo
 
 fn opBitcast(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     _ = rt.it.skip();
-    const to_value = try rt.results[try rt.it.next()].getValue();
-    const from_value = try rt.results[try rt.it.next()].getValue();
+    const to_id = try rt.it.next();
+    const to_value = try rt.results[to_id].getValue();
+    const from_id = try rt.it.next();
+    const from_value = try rt.results[from_id].getValue();
 
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
@@ -4062,6 +4217,7 @@ fn opBitcast(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeErro
     const bytes = local_allocator.alloc(u8, size) catch return RuntimeError.OutOfMemory;
     _ = try from_value.read(bytes);
     _ = try to_value.write(bytes);
+    try rt.copyDerivative(allocator, to_id, from_id);
 }
 
 fn opBranch(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
@@ -4109,6 +4265,7 @@ fn opControlBarrier(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError
 }
 
 fn opCompositeConstruct(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
+    @setEvalBranchQuota(10_000);
     const target_type_word = try rt.it.next();
     const target_type = (try rt.results[target_type_word].getVariant()).Type;
     const id = try rt.it.next();
@@ -4140,15 +4297,9 @@ fn opCompositeConstruct(allocator: std.mem.Allocator, word_count: SpvWord, rt: *
     const lane_bits = try Result.resolveLaneBitWidth(target_type, rt);
     const target_lane_count = try value.resolveLaneCount();
 
-    var dx: ?Value = if (primitive_type == .Float)
-        try Value.init(allocator, rt.results, target_type_word, false)
-    else
-        null;
+    var dx: ?Value = try Value.init(allocator, rt.results, target_type_word, false);
     defer if (dx) |*dx_value| dx_value.deinit(allocator);
-    var dy: ?Value = if (primitive_type == .Float)
-        try Value.init(allocator, rt.results, target_type_word, false)
-    else
-        null;
+    var dy: ?Value = try Value.init(allocator, rt.results, target_type_word, false);
     defer if (dy) |*dy_value| dy_value.deinit(allocator);
 
     var has_derivative = false;
@@ -4188,6 +4339,18 @@ fn opCompositeConstruct(allocator: std.mem.Allocator, word_count: SpvWord, rt: *
                         {
                             const lane = try Value.readLane(.SInt, bits, operand_value, operand_lane_index);
                             try Value.writeLane(.SInt, bits, value, target_lane_index, lane);
+
+                            const IntT = Value.getPrimitiveFieldType(.SInt, bits);
+                            const dx_lane: IntT = if (derivative) |d| blk: {
+                                has_derivative = true;
+                                break :blk try Value.readLane(.SInt, bits, &d.dx, operand_lane_index);
+                            } else 0;
+                            const dy_lane: IntT = if (derivative) |d| blk: {
+                                has_derivative = true;
+                                break :blk try Value.readLane(.SInt, bits, &d.dy, operand_lane_index);
+                            } else 0;
+                            try Value.writeLane(.SInt, bits, &dx.?, target_lane_index, dx_lane);
+                            try Value.writeLane(.SInt, bits, &dy.?, target_lane_index, dy_lane);
                         }
                     },
                     else => return RuntimeError.InvalidSpirV,
@@ -4197,6 +4360,18 @@ fn opCompositeConstruct(allocator: std.mem.Allocator, word_count: SpvWord, rt: *
                         {
                             const lane = try Value.readLane(.UInt, bits, operand_value, operand_lane_index);
                             try Value.writeLane(.UInt, bits, value, target_lane_index, lane);
+
+                            const IntT = Value.getPrimitiveFieldType(.UInt, bits);
+                            const dx_lane: IntT = if (derivative) |d| blk: {
+                                has_derivative = true;
+                                break :blk try Value.readLane(.UInt, bits, &d.dx, operand_lane_index);
+                            } else 0;
+                            const dy_lane: IntT = if (derivative) |d| blk: {
+                                has_derivative = true;
+                                break :blk try Value.readLane(.UInt, bits, &d.dy, operand_lane_index);
+                            } else 0;
+                            try Value.writeLane(.UInt, bits, &dx.?, target_lane_index, dx_lane);
+                            try Value.writeLane(.UInt, bits, &dy.?, target_lane_index, dy_lane);
                         }
                     },
                     else => return RuntimeError.InvalidSpirV,
@@ -5715,6 +5890,107 @@ fn opKill(_: std.mem.Allocator, _: SpvWord, _: *Runtime) RuntimeError!void {
     return RuntimeError.Killed;
 }
 
+fn finiteDifferenceDelta(comptime T: type, shifted: T, center: T) T {
+    return switch (@typeInfo(T)) {
+        .int => @subWithOverflow(shifted, center)[0],
+        else => shifted - center,
+    };
+}
+
+fn writeFiniteDifferenceValue(rt: *Runtime, target_type_word: SpvWord, dst: *Value, shifted: *const Value, center: *const Value) RuntimeError!void {
+    const target_type = (try rt.results[target_type_word].getVariant()).Type;
+    const primitive_type = try center.resolvePrimitiveType();
+    const lane_bits = try Result.resolveLaneBitWidth(target_type, rt);
+    const lane_count = try Result.resolveLaneCount(target_type);
+
+    switch (primitive_type) {
+        inline .Float, .SInt, .UInt => |primitive| switch (lane_bits) {
+            inline 16, 32, 64 => |bits| {
+                const LaneT = Value.getPrimitiveFieldType(primitive, bits);
+                for (0..lane_count) |lane_index| {
+                    const shifted_lane = try Value.readLane(primitive, bits, shifted, lane_index);
+                    const center_lane = try Value.readLane(primitive, bits, center, lane_index);
+                    try Value.writeLane(primitive, bits, dst, lane_index, finiteDifferenceDelta(LaneT, shifted_lane, center_lane));
+                }
+            },
+            else => return RuntimeError.UnsupportedSpirV,
+        },
+        else => return RuntimeError.InvalidValueType,
+    }
+}
+
+fn readIndexDelta(value: *const Value) RuntimeError!isize {
+    return switch (value.*) {
+        .Int => |int| switch (int.bit_count) {
+            8 => if (int.is_signed) int.value.sint8 else @as(i8, @bitCast(int.value.uint8)),
+            16 => if (int.is_signed) int.value.sint16 else @as(i16, @bitCast(int.value.uint16)),
+            32 => if (int.is_signed) int.value.sint32 else @as(i32, @bitCast(int.value.uint32)),
+            64 => if (int.is_signed) std.math.cast(isize, int.value.sint64) orelse return RuntimeError.OutOfBounds else std.math.cast(isize, @as(i64, @bitCast(int.value.uint64))) orelse return RuntimeError.OutOfBounds,
+            else => return RuntimeError.InvalidSpirV,
+        },
+        else => return RuntimeError.InvalidValueType,
+    };
+}
+
+fn addFiniteDifferenceDelta(comptime T: type, base_value: T, delta: T) T {
+    return switch (@typeInfo(T)) {
+        .int => @addWithOverflow(base_value, delta)[0],
+        else => base_value + delta,
+    };
+}
+
+fn shiftedWindow(root_window: []const u8, current_offset: usize, stride: usize, delta: isize) ?[]const u8 {
+    const byte_delta = std.math.mul(isize, @as(isize, @intCast(stride)), delta) catch return null;
+    const shifted_offset = @as(isize, @intCast(current_offset)) + byte_delta;
+    if (shifted_offset < 0) return null;
+    const offset: usize = @intCast(shifted_offset);
+    if (offset > root_window.len) return null;
+    return root_window[offset..];
+}
+
+fn setDescriptorLoadDerivative(allocator: std.mem.Allocator, rt: *Runtime, result_type_word: SpvWord, result_id: SpvWord, ptr_id: SpvWord, center: *const Value) RuntimeError!bool {
+    const access_chain = switch ((try rt.results[ptr_id].getConstVariant()).*) {
+        .AccessChain => |a| a,
+        else => return false,
+    };
+    const ptr = switch (access_chain.value) {
+        .Pointer => |p| p,
+        else => return false,
+    };
+    const window = ptr.uniform_slice_window orelse return false;
+    const root_window = ptr.uniform_root_window orelse window;
+    const current_offset = ptr.uniform_window_offset;
+
+    var index_derivative: ?Runtime.Derivative = null;
+    for (access_chain.indexes) |index_id| {
+        if (rt.derivatives.get(index_id)) |derivative|
+            index_derivative = derivative;
+    }
+    const derivative = index_derivative orelse return false;
+
+    const stride = try center.getPlainMemorySize();
+    var dx_shifted = try Value.init(allocator, rt.results, result_type_word, false);
+    defer dx_shifted.deinit(allocator);
+    var dy_shifted = try Value.init(allocator, rt.results, result_type_word, false);
+    defer dy_shifted.deinit(allocator);
+
+    if (shiftedWindow(root_window, current_offset, stride, try readIndexDelta(&derivative.dx))) |dx_window| {
+        _ = try dx_shifted.write(dx_window);
+    }
+    if (shiftedWindow(root_window, current_offset, stride, try readIndexDelta(&derivative.dy))) |dy_window| {
+        _ = try dy_shifted.write(dy_window);
+    }
+
+    var dx = try Value.init(allocator, rt.results, result_type_word, false);
+    defer dx.deinit(allocator);
+    var dy = try Value.init(allocator, rt.results, result_type_word, false);
+    defer dy.deinit(allocator);
+    try writeFiniteDifferenceValue(rt, result_type_word, &dx, &dx_shifted, center);
+    try writeFiniteDifferenceValue(rt, result_type_word, &dy, &dy_shifted, center);
+    try rt.setDerivative(allocator, result_id, &dx, &dy);
+    return true;
+}
+
 fn opDemoteToHelperInvocation(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     rt.helper_invocation = true;
     const helper_invocation = true;
@@ -5735,11 +6011,14 @@ fn opIsHelperInvocationEXT(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) Runti
 }
 
 fn opLoad(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
-    _ = rt.it.skip();
+    const result_type_word = try rt.it.next();
     const id = try rt.it.next();
     const ptr_id = try rt.it.next();
     try rt.refreshResultValueLayout(id);
-    try copyValue(try rt.results[id].getValue(), try rt.results[ptr_id].getValue());
+    const dst = try rt.results[id].getValue();
+    try copyValue(dst, try rt.results[ptr_id].getValue());
+    if (try setDescriptorLoadDerivative(allocator, rt, result_type_word, id, ptr_id, dst))
+        return;
     try rt.copyDerivative(allocator, id, ptr_id);
 }
 

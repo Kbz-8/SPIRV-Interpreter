@@ -192,6 +192,8 @@ pub const Value = union(Type) {
         /// corresponds to this pointer. For a pointer to struct member N this
         /// starts at the member offset, not at the containing struct.
         uniform_slice_window: ?[]u8 = null,
+        uniform_root_window: ?[]u8 = null,
+        uniform_window_offset: usize = 0,
 
         /// Heap-owned value that backs a pointer into a materialized runtime
         /// array element. This may differ from ptr.common when the pointer is
@@ -411,6 +413,8 @@ pub const Value = union(Type) {
                     .ptr = p.ptr,
                     .image_texel = p.image_texel,
                     .uniform_slice_window = p.uniform_slice_window,
+                    .uniform_root_window = p.uniform_root_window,
+                    .uniform_window_offset = p.uniform_window_offset,
                     .uniform_backing_value = p.uniform_backing_value,
                     .owns_uniform_backing_value = false,
                     .matrix_stride = p.matrix_stride,
