@@ -448,7 +448,13 @@ pub fn setDerivativeFromMemory(self: *Self, allocator: std.mem.Allocator, result
 
 fn getResultTargetTypeWord(self: *const Self, result: SpvWord) RuntimeError!SpvWord {
     return switch ((try self.results[result].getConstVariant()).*) {
-        .Variable => |v| v.type_word,
+        .Variable => |v| switch ((try self.results[v.type_word].getConstVariant()).*) {
+            .Type => |t| switch (t) {
+                .Pointer => |p| p.target,
+                else => v.type_word,
+            },
+            else => return RuntimeError.InvalidSpirV,
+        },
         .Constant => |c| c.type_word,
         .FunctionParameter => |p| p.type_word,
         .AccessChain => |a| a.target,

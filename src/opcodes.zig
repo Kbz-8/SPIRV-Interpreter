@@ -2885,6 +2885,7 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
                 .MatrixTimesMatrix,
                 .MatrixTimesScalar,
                 .MatrixTimesVector,
+                .VectorTimesScalar,
                 .VectorTimesMatrix,
                 => if (comptime is_int) @mulWithOverflow(op1, op2)[0] else op1 * op2,
                 .Div => blk: {
@@ -3253,7 +3254,6 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
 
                 else => try vectorRoutines(dst, lhs, rhs, lane_bits),
             }
-
             if (comptime IsAtomic) {
                 try copyValue(lhs, dst);
                 try copyValue(dst, &lhs_save.?);
