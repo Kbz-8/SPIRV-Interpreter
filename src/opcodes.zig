@@ -2865,6 +2865,11 @@ fn opTranspose(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void
 
 fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic: bool) type {
     return struct {
+        fn floatMod(comptime FloatT: type, lhs: FloatT, rhs: FloatT) FloatT {
+            @setFloatMode(.strict);
+            return lhs - rhs * @floor(lhs / rhs);
+        }
+
         fn operation(comptime TT: type, op1: TT, op2: TT) RuntimeError!TT {
             const is_int = @typeInfo(TT) == .int or (@typeInfo(TT) == .vector and @typeInfo(std.meta.Child(TT)) == .int);
             const op2_is_zero = if (@typeInfo(TT) == .vector) std.simd.countElementsWithValue(op2, 0) != 0 else op2 == 0;
@@ -2882,7 +2887,7 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
                                 0
                             else switch (Op) {
                                 .Div => if (comptime is_int) @divTrunc(op1[i], op2[i]) else op1[i] / op2[i],
-                                .Mod => @mod(op1[i], op2[i]),
+                                .Mod => if (comptime is_int) @mod(op1[i], op2[i]) else floatMod(@TypeOf(op1[i]), op1[i], op2[i]),
                                 .Rem => @rem(op1[i], op2[i]),
                                 else => unreachable,
                             };
@@ -2909,7 +2914,7 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
                     }
                     break :blk if (comptime is_int) @divTrunc(op1, op2) else op1 / op2;
                 },
-                .Mod => if (op2_is_zero) zero else @mod(op1, op2),
+                .Mod => if (op2_is_zero) zero else if (comptime is_int) @mod(op1, op2) else floatMod(TT, op1, op2),
                 .Rem => if (op2_is_zero) zero else @rem(op1, op2),
                 else => return RuntimeError.InvalidSpirV,
             };
