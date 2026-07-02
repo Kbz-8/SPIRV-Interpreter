@@ -502,6 +502,7 @@ fn applySpecializationConstants(self: *Self, allocator: std.mem.Allocator) Runti
 }
 
 fn applySpecializationDependentLayout(self: *Self, allocator: std.mem.Allocator) RuntimeError!void {
+    self.reset();
     try self.pass(allocator, .initMany(&.{
         .TypeArray,
         .Variable,
@@ -778,6 +779,7 @@ pub fn populatePushConstants(self: *Self, blob: []const u8) RuntimeError!void {
         if (variable.storage_class != .PushConstant)
             continue;
         _ = try variable.value.write(blob);
+        variable.value.clearExternalData();
     }
 }
 
@@ -1282,7 +1284,8 @@ pub fn resetInvocation(self: *Self, allocator: std.mem.Allocator) void {
 }
 
 fn reset(self: *Self) void {
-    self.it = self.mod.it;
+    self.it = WordIterator.init(self.mod.code);
+    self.it.index = 5;
     self.function_stack.clearRetainingCapacity();
     self.current_parameter_index = 0;
     self.current_function = null;

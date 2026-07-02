@@ -449,6 +449,7 @@ pub fn initRuntimeDispatcher() void {
     runtime_dispatcher[@intFromEnum(spv.SpvOp.SpecConstantFalse)]      = opSpecConstantFalse;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.SpecConstantOp)]         = opSpecConstantOp;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.SpecConstantTrue)]       = opSpecConstantTrue;
+    runtime_dispatcher[@intFromEnum(spv.SpvOp.TypeArray)]              = opTypeArray;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Store)]                  = opStore;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.Switch)]                 = opSwitch;
     runtime_dispatcher[@intFromEnum(spv.SpvOp.TerminateInvocation)]    = opKill;
@@ -1623,8 +1624,14 @@ fn ImageEngine(comptime Op: ImageOp) type {
             const dy_y: i32 = @intFromFloat(coord_derivatives.dy.y);
             const dy_z: i32 = @intFromFloat(coord_derivatives.dy.z);
 
-            try readImage(rt, &dx_read, driver_image, dim, x + dx_x, y + dx_y, z + dx_z, lod);
-            try readImage(rt, &dy_read, driver_image, dim, x + dy_x, y + dy_y, z + dy_z, lod);
+            readImage(rt, &dx_read, driver_image, dim, x + dx_x, y + dx_y, z + dx_z, lod) catch {
+                rt.clearDerivative(allocator, result_id);
+                return;
+            };
+            readImage(rt, &dy_read, driver_image, dim, x + dy_x, y + dy_y, z + dy_z, lod) catch {
+                rt.clearDerivative(allocator, result_id);
+                return;
+            };
 
             var dx = try Value.init(allocator, rt.results, result_type_word, false);
             defer dx.deinit(allocator);
@@ -1825,7 +1832,9 @@ fn ImageEngine(comptime Op: ImageOp) type {
         }
 
         fn implicitSampleLod(rt: *Runtime, coordinate_id: SpvWord, coordinate: *const Value, projected: bool, driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32, bias: f32) RuntimeError!?f32 {
-            const fallback_lod = if (bias != 0.0) bias else null;
+            if (bias != 0.0)
+                return bias;
+            const fallback_lod = null;
             const coord_derivatives = if (projected)
                 (try projectedSampleDerivatives(rt, coordinate_id, coordinate)) orelse return fallback_lod
             else
@@ -2303,7 +2312,13 @@ fn ImageEngine(comptime Op: ImageOp) type {
                     const y = (readStorageCoordLane(coordinate, 1) catch 0) + parsed_operands.offset.y;
                     const z = (readStorageCoordLane(coordinate, 2) catch 0) + parsed_operands.offset.z;
 
-                    const read_z = if (image_operand.arrayed) z else parsed_operands.sample orelse z;
+                    const read_z = if (image_operand.arrayed) blk: {
+                        if (parsed_operands.sample) |sample| {
+                            const sample_count: i32 = @intCast(try rt.image_api.queryImageSamples(image_operand.driver_image));
+                            break :blk z * sample_count + sample;
+                        }
+                        break :blk z;
+                    } else parsed_operands.sample orelse z;
                     try readImage(rt, dst, image_operand.driver_image, image_operand.dim, x, y, read_z, parsed_operands.image_lod);
                     try setImageReadDerivative(allocator, rt, result_type_word, result_id, coordinate_id, dst, image_operand.driver_image, image_operand.dim, x, y, read_z, parsed_operands.image_lod);
                 },
@@ -3096,6 +3111,23 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
             };
         }
 
+        fn derivativeBinary(comptime ScalarT: type, lhs: ScalarT, rhs: ScalarT, lhs_d: ScalarT, rhs_d: ScalarT) RuntimeError!ScalarT {
+            return switch (@typeInfo(ScalarT)) {
+                .float => switch (comptime Op) {
+                    .Add => lhs_d + rhs_d,
+                    .Sub => lhs_d - rhs_d,
+                    .Mul, .VectorTimesScalar => lhs_d * rhs + lhs * rhs_d,
+                    .Div => if (rhs == 0.0) 0.0 else ((lhs_d * rhs) - (lhs * rhs_d)) / (rhs * rhs),
+                    .Mod => lhs_d - @floor(lhs / rhs) * rhs_d,
+                    else => return RuntimeError.UnsupportedSpirV,
+                },
+                else => blk: {
+                    const base = try operation(ScalarT, lhs, rhs);
+                    break :blk derivativeSub(ScalarT, try operation(ScalarT, derivativeAdd(ScalarT, lhs, lhs_d), derivativeAdd(ScalarT, rhs, rhs_d)), base);
+                },
+            };
+        }
+
         inline fn applySIMDVectorSingle(comptime ElemT: type, comptime N: usize, d: *@Vector(N, ElemT), v: *const @Vector(N, ElemT)) RuntimeError!void {
             inline for (0..N) |i| {
                 d[i] = try operationSingle(ElemT, v[i]);
@@ -3160,9 +3192,8 @@ fn MathEngine(comptime T: PrimitiveType, comptime Op: MathOp, comptime IsAtomic:
                         else
                             @as(ScalarT, 0);
 
-                        const base = try operation(ScalarT, l, r);
-                        const dx_lane = derivativeSub(ScalarT, try operation(ScalarT, derivativeAdd(ScalarT, l, ldx), derivativeAdd(ScalarT, r, rdx)), base);
-                        const dy_lane = derivativeSub(ScalarT, try operation(ScalarT, derivativeAdd(ScalarT, l, ldy), derivativeAdd(ScalarT, r, rdy)), base);
+                        const dx_lane = try derivativeBinary(ScalarT, l, r, ldx, rdx);
+                        const dy_lane = try derivativeBinary(ScalarT, l, r, ldy, rdy);
 
                         try Value.writeLane(T, bits, &dx, lane_index, dx_lane);
                         try Value.writeLane(T, bits, &dy, lane_index, dy_lane);
@@ -6284,6 +6315,7 @@ fn opTypeArray(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void
     const components_type_word = try rt.it.next();
     const components_type_data = &((try rt.results[components_type_word].getVariant()).*).Type;
     const length_word = try rt.it.next();
+    const member_count = try arrayMemberCount(rt, length_word);
     target.variant = .{
         .Type = .{
             .Array = .{
@@ -6292,7 +6324,7 @@ fn opTypeArray(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void
                     .Type => |t| @as(Result.Type, t),
                     else => return RuntimeError.InvalidSpirV,
                 },
-                .member_count = try arrayMemberCount(rt, length_word),
+                .member_count = member_count,
                 .stride = blk: {
                     for (target.decorations.items) |decoration| {
                         if (decoration.rtype == .ArrayStride)
@@ -6638,8 +6670,14 @@ fn opVariable(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) R
                 variable.storage_class = storage_class;
                 variable.type_word = resolved_word;
                 variable.type = resolved_type;
-                try copyValue(&variable.value, &initial_value);
-                initial_value.deinit(allocator);
+                const old_size = variable.value.getPlainMemorySize() catch 0;
+                const new_size = initial_value.getPlainMemorySize() catch 0;
+                if (std.meta.activeTag(variable.value) == std.meta.activeTag(initial_value) and old_size == new_size) {
+                    try copyValue(&variable.value, &initial_value);
+                    initial_value.deinit(allocator);
+                } else {
+                    variable.value = initial_value;
+                }
                 return;
             },
             else => {},
