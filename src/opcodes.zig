@@ -1832,8 +1832,6 @@ fn ImageEngine(comptime Op: ImageOp) type {
         }
 
         fn implicitSampleLod(rt: *Runtime, coordinate_id: SpvWord, coordinate: *const Value, projected: bool, driver_image: *anyopaque, driver_sampler: *anyopaque, dim: spv.SpvDim, x: f32, y: f32, z: f32, bias: f32) RuntimeError!?f32 {
-            if (bias != 0.0)
-                return bias;
             const fallback_lod = null;
             const coord_derivatives = if (projected)
                 (try projectedSampleDerivatives(rt, coordinate_id, coordinate)) orelse return fallback_lod
@@ -1864,7 +1862,12 @@ fn ImageEngine(comptime Op: ImageOp) type {
                 },
             };
             const lod = try rt.image_api.queryImageLod(driver_image, driver_sampler, lod_dim, derivatives);
-            return lod.y + bias;
+            const uses_unit_screen_derivatives =
+                bias != 0.0 and
+                derivatives.dx.x == 1.0 and derivatives.dx.y == 0.0 and derivatives.dx.z == 0.0 and
+                derivatives.dy.x == 0.0 and derivatives.dy.y == 1.0 and derivatives.dy.z == 0.0;
+            const base_lod = if (uses_unit_screen_derivatives) 0.0 else lod.y;
+            return base_lod + bias;
         }
 
         fn setImplicitSampleDerivative(
