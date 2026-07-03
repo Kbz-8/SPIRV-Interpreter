@@ -5783,7 +5783,28 @@ fn DerivativeEngine(comptime axis: enum { x, y }) type {
                 .x => &derivative.dx,
                 .y => &derivative.dy,
             };
-            try copyValue(try rt.results[id].getValue(), src);
+            const dst = try rt.results[id].getValue();
+            try copyValue(dst, src);
+            const sign = switch (axis) {
+                .x => rt.derivative_sign_x,
+                .y => rt.derivative_sign_y,
+            };
+            if (sign != 1.0) {
+                const target_type = (try rt.results[result_type_word].getVariant()).Type;
+                const lane_bits = try Result.resolveLaneBitWidth(target_type, rt);
+                const lane_count = try Result.resolveLaneCount(target_type);
+                switch (lane_bits) {
+                    inline 16, 32, 64 => |bits| {
+                        const FloatT = Value.getPrimitiveFieldType(.Float, bits);
+                        const sign_t: FloatT = @floatCast(sign);
+                        for (0..lane_count) |lane_index| {
+                            const lane = try Value.readLane(.Float, bits, dst, lane_index);
+                            try Value.writeLane(.Float, bits, dst, lane_index, lane * sign_t);
+                        }
+                    },
+                    else => return RuntimeError.InvalidSpirV,
+                }
+            }
             try rt.copyDerivative(allocator, id, operand);
         }
     };

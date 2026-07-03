@@ -128,6 +128,8 @@ specialization_constants: std.AutoHashMapUnmanaged(u32, []const u8),
 derivatives: std.AutoHashMapUnmanaged(SpvWord, Derivative),
 phi_values: std.AutoHashMapUnmanaged(SpvWord, Value),
 helper_invocation: bool,
+derivative_sign_x: f32,
+derivative_sign_y: f32,
 
 image_api: ImageAPI,
 
@@ -162,6 +164,8 @@ pub fn init(allocator: std.mem.Allocator, module: *Module, image_api: ImageAPI) 
         .derivatives = .empty,
         .phi_values = .empty,
         .helper_invocation = false,
+        .derivative_sign_x = 1.0,
+        .derivative_sign_y = 1.0,
         .image_api = image_api,
     };
     errdefer self.deinit(allocator);
@@ -198,6 +202,8 @@ pub fn initFrom(allocator: std.mem.Allocator, other: *const Self, image_api: Ima
         .derivatives = .empty,
         .phi_values = .empty,
         .helper_invocation = other.helper_invocation,
+        .derivative_sign_x = other.derivative_sign_x,
+        .derivative_sign_y = other.derivative_sign_y,
         .image_api = image_api,
     };
     errdefer self.deinit(allocator);
@@ -1305,6 +1311,9 @@ pub fn hasResultOrMemberDecoration(self: *const Self, result: SpvWord, decoratio
 }
 
 pub fn resetInvocation(self: *Self, allocator: std.mem.Allocator) void {
+    self.derivative_sign_x = 1.0;
+    self.derivative_sign_y = 1.0;
+
     var derivatives = self.derivatives.iterator();
     while (derivatives.next()) |entry| {
         entry.value_ptr.deinit(allocator);
