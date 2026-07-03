@@ -3802,7 +3802,9 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                     }
 
                     fn robustF32Pointer(gpa: std.mem.Allocator, ptr: ?*f32, window: ?[]u8, descriptor_backed: bool, backing: ?*Value, owns_backing: bool) RuntimeError!F32Pointer {
-                        if (window != null or !descriptor_backed) return .{ .ptr = ptr orelse return RuntimeError.InvalidSpirV, .backing = backing, .owns_backing = owns_backing };
+                        _ = descriptor_backed;
+                        if (ptr) |p| return .{ .ptr = p, .backing = backing, .owns_backing = owns_backing };
+                        if (window != null) return RuntimeError.OutOfBounds;
 
                         destroyBacking(gpa, backing, owns_backing);
                         const value = gpa.create(Value) catch return RuntimeError.OutOfMemory;
@@ -3811,7 +3813,9 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                     }
 
                     fn robustI32Pointer(gpa: std.mem.Allocator, ptr: ?*i32, window: ?[]u8, descriptor_backed: bool, backing: ?*Value, owns_backing: bool) RuntimeError!I32Pointer {
-                        if (window != null or !descriptor_backed) return .{ .ptr = ptr orelse return RuntimeError.InvalidSpirV, .backing = backing, .owns_backing = owns_backing };
+                        _ = descriptor_backed;
+                        if (ptr) |p| return .{ .ptr = p, .backing = backing, .owns_backing = owns_backing };
+                        if (window != null) return RuntimeError.OutOfBounds;
 
                         destroyBacking(gpa, backing, owns_backing);
                         const value = gpa.create(Value) catch return RuntimeError.OutOfMemory;
@@ -3820,7 +3824,9 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                     }
 
                     fn robustU32Pointer(gpa: std.mem.Allocator, ptr: ?*u32, window: ?[]u8, descriptor_backed: bool, backing: ?*Value, owns_backing: bool) RuntimeError!U32Pointer {
-                        if (window != null or !descriptor_backed) return .{ .ptr = ptr orelse return RuntimeError.InvalidSpirV, .backing = backing, .owns_backing = owns_backing };
+                        _ = descriptor_backed;
+                        if (ptr) |p| return .{ .ptr = p, .backing = backing, .owns_backing = owns_backing };
+                        if (window != null) return RuntimeError.OutOfBounds;
 
                         destroyBacking(gpa, backing, owns_backing);
                         const value = gpa.create(Value) catch return RuntimeError.OutOfMemory;
@@ -4258,12 +4264,13 @@ fn opBitcast(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeErro
 
 fn opBranch(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     const id = try rt.it.next();
-    try rt.snapshotPhiValues(allocator);
-    rt.previous_label = rt.current_label;
-    _ = rt.it.jumpToSourceLocation(switch ((try rt.results[id].getVariant()).*) {
+    const target = switch ((try rt.results[id].getVariant()).*) {
         .Label => |l| l.source_location,
         else => return RuntimeError.InvalidSpirV,
-    });
+    };
+    try rt.snapshotPhiValuesForBranch(allocator, target);
+    rt.previous_label = rt.current_label;
+    _ = rt.it.jumpToSourceLocation(target);
 }
 
 fn opBranchConditional(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
@@ -4276,11 +4283,12 @@ fn opBranchConditional(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) R
         .Label => |l| l.source_location,
         else => return RuntimeError.InvalidSpirV,
     };
-    try rt.snapshotPhiValues(allocator);
     rt.previous_label = rt.current_label;
     if (cond_value.Bool) {
+        try rt.snapshotPhiValuesForBranch(allocator, true_branch);
         _ = rt.it.jumpToSourceLocation(true_branch);
     } else {
+        try rt.snapshotPhiValuesForBranch(allocator, false_branch);
         _ = rt.it.jumpToSourceLocation(false_branch);
     }
 }
@@ -5019,7 +5027,7 @@ fn opSpecConstantFalse(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) R
     }
 }
 
-fn opSwitch(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
+fn opSwitch(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
     if (word_count < 2)
         return RuntimeError.InvalidSpirV;
 
@@ -5062,11 +5070,13 @@ fn opSwitch(_: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeErro
         remaining -= literal_width + 1;
     }
 
-    rt.previous_label = rt.current_label;
-    _ = rt.it.jumpToSourceLocation(switch ((try rt.results[target].getVariant()).*) {
+    const target_source_location = switch ((try rt.results[target].getVariant()).*) {
         .Label => |l| l.source_location,
         else => return RuntimeError.InvalidSpirV,
-    });
+    };
+    try rt.snapshotPhiValuesForBranch(allocator, target_source_location);
+    rt.previous_label = rt.current_label;
+    _ = rt.it.jumpToSourceLocation(target_source_location);
 }
 
 fn opSpecConstantOp(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) RuntimeError!void {
@@ -5557,7 +5567,7 @@ fn opCopyMemory(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeE
     try rt.copyDerivative(allocator, target, source);
 }
 
-fn opCopyObject(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
+fn opCopyObject(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {
     _ = try rt.it.next(); // result type
     const target = try rt.it.next();
     const source = try rt.it.next();
@@ -5566,9 +5576,11 @@ fn opCopyObject(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!voi
     if (source_value.* == .Pointer) {
         target_value.* = source_value.*;
         target_value.Pointer.owns_uniform_backing_value = false;
+        try rt.copyDerivative(allocator, target, source);
         return;
     }
     try copyValue(target_value, source_value);
+    try rt.copyDerivative(allocator, target, source);
 }
 
 fn opDecorate(allocator: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!void {

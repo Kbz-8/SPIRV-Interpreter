@@ -388,24 +388,74 @@ fn clearPhiValues(self: *Self, allocator: std.mem.Allocator) void {
     self.phi_values.clearRetainingCapacity();
 }
 
-pub fn snapshotPhiValues(self: *Self, allocator: std.mem.Allocator) RuntimeError!void {
+fn snapshotPhiValue(self: *Self, allocator: std.mem.Allocator, result_id: SpvWord) RuntimeError!void {
+    if (result_id >= self.results.len) return RuntimeError.InvalidSpirV;
+
+    const value = switch (self.results[result_id].variant orelse return) {
+        .Constant => |*constant| &constant.value,
+        .FunctionParameter => |*parameter| parameter.value_ptr orelse return,
+        else => return,
+    };
+    if (std.meta.activeTag(value.*) == .Pointer) return;
+
+    const snapshot = try value.dupe(allocator);
+    const gop = self.phi_values.getOrPut(allocator, result_id) catch {
+        var tmp = snapshot;
+        tmp.deinit(allocator);
+        return RuntimeError.OutOfMemory;
+    };
+    if (gop.found_existing) gop.value_ptr.deinit(allocator);
+    gop.value_ptr.* = snapshot;
+}
+
+pub fn snapshotPhiValuesForBranch(self: *Self, allocator: std.mem.Allocator, target_source_location: usize) RuntimeError!void {
     self.clearPhiValues(allocator);
 
-    for (self.results, 0..) |*result, result_id| {
-        const value = switch (result.variant orelse continue) {
-            .Constant => |*constant| &constant.value,
-            .FunctionParameter => |*parameter| parameter.value_ptr orelse continue,
-            else => continue,
-        };
-        if (std.meta.activeTag(value.*) == .Pointer) continue;
-        const snapshot = try value.dupe(allocator);
-        const gop = self.phi_values.getOrPut(allocator, @intCast(result_id)) catch {
-            var tmp = snapshot;
-            tmp.deinit(allocator);
-            return RuntimeError.OutOfMemory;
-        };
-        if (gop.found_existing) gop.value_ptr.deinit(allocator);
-        gop.value_ptr.* = snapshot;
+    const predecessor = self.current_label orelse return;
+
+    var index = target_source_location;
+    if (index >= self.it.buffer.len) return RuntimeError.InvalidSpirV;
+
+    const label_opcode_data = self.it.buffer[index];
+    const label_word_count_with_header = (label_opcode_data & (~spv.SpvOpCodeMask)) >> spv.SpvWordCountShift;
+    if (label_word_count_with_header == 0) return RuntimeError.InvalidSpirV;
+    if ((label_opcode_data & spv.SpvOpCodeMask) != @intFromEnum(spv.SpvOp.Label))
+        return RuntimeError.InvalidSpirV;
+    index += label_word_count_with_header;
+
+    const phi_start = index;
+    var phi_end = phi_start;
+    while (index < self.it.buffer.len) {
+        const opcode_data = self.it.buffer[index];
+        const word_count_with_header = (opcode_data & (~spv.SpvOpCodeMask)) >> spv.SpvWordCountShift;
+        if (word_count_with_header == 0) return RuntimeError.InvalidSpirV;
+        const opcode = opcode_data & spv.SpvOpCodeMask;
+        if (opcode != @intFromEnum(spv.SpvOp.Phi)) break;
+        if (index + word_count_with_header > self.it.buffer.len) return RuntimeError.InvalidSpirV;
+
+        const word_count = word_count_with_header - 1;
+        if (word_count < 2 or ((word_count - 2) % 2) != 0) return RuntimeError.InvalidSpirV;
+
+        index += word_count_with_header;
+        phi_end = index;
+    }
+
+    index = phi_start;
+    while (index < phi_end) {
+        const opcode_data = self.it.buffer[index];
+        const word_count_with_header = (opcode_data & (~spv.SpvOpCodeMask)) >> spv.SpvWordCountShift;
+        var operand_index = index + 3;
+        const operand_end = index + word_count_with_header;
+        while (operand_index < operand_end) : (operand_index += 2) {
+            const value_id = self.it.buffer[operand_index];
+            const parent_label_id = self.it.buffer[operand_index + 1];
+            if (parent_label_id == predecessor) {
+                try self.snapshotPhiValue(allocator, value_id);
+                break;
+            }
+        }
+
+        index += word_count_with_header;
     }
 }
 
@@ -470,6 +520,8 @@ pub fn clearDerivative(self: *Self, allocator: std.mem.Allocator, result: SpvWor
 }
 
 pub fn copyDerivative(self: *Self, allocator: std.mem.Allocator, dst: SpvWord, src: SpvWord) RuntimeError!void {
+    if (self.derivatives.count() == 0) return;
+
     if (self.derivatives.get(src)) |derivative| {
         try self.setDerivative(allocator, dst, &derivative.dx, &derivative.dy);
     } else {

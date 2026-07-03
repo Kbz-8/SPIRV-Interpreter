@@ -78,6 +78,9 @@ test "Maths primitives" {
                 .expected_outputs = &.{
                     std.mem.asBytes(&[_]T{ expected, expected, expected, expected }),
                 },
+                .expected_output_tolerances = if (@typeInfo(T) == .float) &.{
+                    case.FloatTolerance.default(T),
+                } else &.{},
             });
         }
     }
@@ -150,6 +153,9 @@ test "Maths vectors" {
                     .expected_outputs = &.{
                         std.mem.asBytes(&@as([L]T, expected)),
                     },
+                    .expected_output_tolerances = if (@typeInfo(T) == .float) &.{
+                        case.FloatTolerance.default(T),
+                    } else &.{},
                 });
             }
         }
@@ -249,6 +255,9 @@ test "Maths vectors with scalars" {
                     .expected_outputs = &.{
                         std.mem.asBytes(&@as([L]T, expected)),
                     },
+                    .expected_output_tolerances = if (@typeInfo(T) == .float) &.{
+                        case.FloatTolerance.default(T),
+                    } else &.{},
                 });
             }
         }

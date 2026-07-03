@@ -24,8 +24,35 @@ pub const case = struct {
         source: []const u32,
         inputs: []const []const u8 = &.{},
         expected_outputs: []const []const u8 = &.{},
+        expected_output_tolerances: []const ?FloatTolerance = &.{},
         descriptor_sets: []const []const []u8 = &.{},
         expected_descriptor_sets: []const []const []const u8 = &.{},
+    };
+
+    const FloatKind = enum { f32, f64 };
+
+    pub const FloatTolerance = struct {
+        kind: FloatKind,
+        absolute: f64,
+
+        pub fn of(comptime T: type, absolute: f64) FloatTolerance {
+            return .{
+                .kind = switch (T) {
+                    f32 => .f32,
+                    f64 => .f64,
+                    else => @compileError("FloatTolerance only supports f32 and f64"),
+                },
+                .absolute = absolute,
+            };
+        }
+
+        pub fn default(comptime T: type) FloatTolerance {
+            return of(T, switch (T) {
+                f32 => 1e-6,
+                f64 => 1e-12,
+                else => @compileError("FloatTolerance only supports f32 and f64"),
+            });
+        }
     };
 
     pub fn expect(config: Config) !void {
@@ -66,6 +93,12 @@ pub const case = struct {
                 defer allocator.free(output);
 
                 try rt.readOutput(output[0..], module.output_locations[n][0]);
+                if (n < config.expected_output_tolerances.len) {
+                    if (config.expected_output_tolerances[n]) |tolerance| {
+                        try expectApproxBytes(expected, output, tolerance);
+                        continue;
+                    }
+                }
                 try std.testing.expectEqualSlices(u8, expected, output);
             }
 
@@ -75,6 +108,30 @@ pub const case = struct {
                 }
             }
         }
+    }
+
+    fn expectApproxBytes(expected: []const u8, actual: []const u8, tolerance: FloatTolerance) !void {
+        try std.testing.expectEqual(expected.len, actual.len);
+
+        const stride: usize = switch (tolerance.kind) {
+            .f32 => @sizeOf(f32),
+            .f64 => @sizeOf(f64),
+        };
+        try std.testing.expectEqual(@as(usize, 0), expected.len % stride);
+
+        var i: usize = 0;
+        while (i < expected.len) : (i += stride) {
+            const expected_value = readFloat(expected[i .. i + stride], tolerance.kind);
+            const actual_value = readFloat(actual[i .. i + stride], tolerance.kind);
+            try std.testing.expectApproxEqAbs(expected_value, actual_value, tolerance.absolute);
+        }
+    }
+
+    fn readFloat(bytes: []const u8, kind: FloatKind) f64 {
+        return switch (kind) {
+            .f32 => @floatCast(@as(f32, @bitCast(std.mem.readInt(u32, bytes[0..@sizeOf(u32)], .little)))),
+            .f64 => @bitCast(std.mem.readInt(u64, bytes[0..@sizeOf(u64)], .little)),
+        };
     }
 
     pub fn random(comptime T: type) T {
