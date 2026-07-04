@@ -19,13 +19,13 @@ jobs:
     - uses: https://codeberg.org/mlugg/setup-zig@v2
 
     - name: Building
-      run: zig build -Dno-example=true
+      run: zig build
 
     - name: Building FFI
-      run: zig build ffi-c -Dno-example=true
+      run: zig build ffi-c
 
     - name: Generating docs
-      run: zig build docs -Dno-example=true
+      run: zig build docs
 
     - name: Deploying docs
       if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
