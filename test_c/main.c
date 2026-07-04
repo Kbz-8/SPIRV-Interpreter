@@ -146,6 +146,12 @@ int main(void)
 		fprintf(stderr, "Unexpected binding lookup result\n");
 		return -1;
 	}
+	SpvModuleReflectionInfos reflection_infos = SpvModuleGetReflectionInfos(module);
+	if (reflection_infos.has_atomics || reflection_infos.early_fragment_tests)
+	{
+		fprintf(stderr, "Unexpected reflection flags\n");
+		return -1;
+	}
 
 	SpvImageAPI image_api = {
 		.SpvReadImageFloat4 = ReadImageFloat4,
@@ -187,18 +193,55 @@ int main(void)
 
 	SpvWord main_entry_index;
 	CHECK_RESULT(SpvGetEntryPointByName(runtime, "main", &main_entry_index));
+	SpvWord fragment_entry_index;
+	CHECK_RESULT(SpvGetEntryPointByNameAndExecutionModel(runtime, "main", SpvExecutionModelFragment, &fragment_entry_index));
+	if (fragment_entry_index != main_entry_index)
+	{
+		fprintf(stderr, "Unexpected execution-model entry point lookup\n");
+		return -1;
+	}
+	CHECK_RESULT(SpvSelectEntryPoint(runtime, main_entry_index));
+	CHECK_RESULT(SpvApplySpecializationLayout(runtime));
+	CHECK_RESULT(SpvApplySpecializationInvocationLayout(second_runtime));
+	SpvWorkgroupSize workgroup_size;
+	CHECK_RESULT(SpvGetWorkgroupSize(runtime, &workgroup_size));
+	if (workgroup_size.has_size)
+	{
+		fprintf(stderr, "Unexpected workgroup size\n");
+		return -1;
+	}
+	SpvWorkgroupMemory workgroup_memory;
+	CHECK_RESULT(SpvCreateWorkgroupMemory(runtime, &workgroup_memory));
+	if (SpvGetWorkgroupMemoryCount(workgroup_memory) != 0)
+	{
+		fprintf(stderr, "Unexpected workgroup memory count\n");
+		return -1;
+	}
+	SpvWorkgroupMemoryItem workgroup_memory_item;
+	if (SpvGetWorkgroupMemoryItem(workgroup_memory, 0, &workgroup_memory_item) != SPV_RESULT_OUT_OF_BOUNDS)
+	{
+		fprintf(stderr, "Unexpected workgroup memory lookup result\n");
+		return -1;
+	}
+	CHECK_RESULT(SpvBindWorkgroupMemory(runtime, workgroup_memory));
+	SpvDestroyWorkgroupMemory(runtime, workgroup_memory);
 	CHECK_RESULT(SpvCallEntryPoint(runtime, main_entry_index));
 
 	float output[4];
 	SpvWord output_result;
 	CHECK_RESULT(SpvGetResultByName(runtime, "color", &output_result));
+	CHECK_RESULT(SpvRefreshResultValueLayout(runtime, output_result));
 	CHECK_RESULT(SpvReadOutput(runtime, (SpvByte*)output, sizeof(output), output_result));
+	SpvWord builtin_result;
+	if (SpvGetBuiltinResult(runtime, SpvBuiltInWorkgroupId, &builtin_result) != SPV_RESULT_NOT_FOUND)
+	{
+		fprintf(stderr, "Unexpected builtin lookup result\n");
+		return -1;
+	}
 
 	SpvSize output_size = 0;
-	SpvPrimitiveType primitive_type;
 	CHECK_RESULT(SpvGetResultMemorySize(runtime, output_result, &output_size));
-	CHECK_RESULT(SpvGetResultPrimitiveType(runtime, output_result, &primitive_type));
-	if (output_size != sizeof(output) || primitive_type != SPV_PRIMITIVE_FLOAT || primitive_type == SPV_PRIMITIVE_SINT || primitive_type == SPV_PRIMITIVE_UINT)
+	if (output_size != sizeof(output))
 	{
 		fprintf(stderr, "Unexpected output metadata\n");
 		SpvDeinitRuntime(second_runtime);

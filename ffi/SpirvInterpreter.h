@@ -415,6 +415,28 @@ typedef unsigned long SpvSize;
 
 typedef enum
 {
+	SpvExecutionModelVertex = 0,
+	SpvExecutionModelTessellationControl = 1,
+	SpvExecutionModelTessellationEvaluation = 2,
+	SpvExecutionModelGeometry = 3,
+	SpvExecutionModelFragment = 4,
+	SpvExecutionModelGLCompute = 5,
+	SpvExecutionModelKernel = 6,
+	SpvExecutionModelTaskNV = 5267,
+	SpvExecutionModelMeshNV = 5268,
+	SpvExecutionModelRayGeneration = 5313,
+	SpvExecutionModelIntersection = 5314,
+	SpvExecutionModelAnyHit = 5315,
+	SpvExecutionModelClosestHit = 5316,
+	SpvExecutionModelMiss = 5317,
+	SpvExecutionModelCallable = 5318,
+	SpvExecutionModelTaskEXT = 5364,
+	SpvExecutionModelMeshEXT = 5365,
+	SpvExecutionModelMax = 0x7fffffff
+} SpvExecutionModel;
+
+typedef enum
+{
 	SPV_RESULT_SUCCESS = 0,
 	SPV_RESULT_BARRIER = 1,
 	SPV_RESULT_KILLED = 2,
@@ -451,6 +473,8 @@ typedef struct
 
     SpvBool needs_derivatives;
     SpvBool has_control_barriers;
+    SpvBool has_atomics;
+    SpvBool early_fragment_tests;
 } SpvModuleReflectionInfos;
 
 typedef struct
@@ -472,13 +496,20 @@ typedef enum
 	SPV_ENTRY_POINT_BARRIER = 1
 } SpvEntryPointStatus;
 
-typedef enum
+typedef struct
 {
-	SPV_PRIMITIVE_BOOL = 0,
-	SPV_PRIMITIVE_FLOAT = 1,
-	SPV_PRIMITIVE_SINT = 2,
-	SPV_PRIMITIVE_UINT = 3
-} SpvPrimitiveType;
+	SpvBool has_size;
+	SpvWord x;
+	SpvWord y;
+	SpvWord z;
+} SpvWorkgroupSize;
+
+typedef struct
+{
+	SpvWord result;
+	SpvByte* data;
+	SpvSize size;
+} SpvWorkgroupMemoryItem;
 
 typedef struct
 {
@@ -589,6 +620,7 @@ typedef struct
 
 typedef void* SpvModule;
 typedef void* SpvRuntime;
+typedef void* SpvWorkgroupMemory;
 
 SPV_API SpvResult SpvInitModule(SpvModule* module, const SpvWord* source, SpvSize source_len, SpvModuleOptions options);
 SPV_API void SpvDeinitModule(SpvModule module);
@@ -604,20 +636,31 @@ SPV_API SpvResult SpvFlushDescriptorSets(SpvRuntime runtime);
 
 SPV_API SpvResult SpvAddSpecializationInfo(SpvRuntime runtime, SpvRuntimeSpecializationEntry entry, const SpvByte* data, SpvSize data_size);
 SPV_API SpvResult SpvCopySpecializationConstantsFrom(SpvRuntime runtime, SpvRuntime other);
+SPV_API SpvResult SpvApplySpecializationLayout(SpvRuntime runtime);
+SPV_API SpvResult SpvApplySpecializationInvocationLayout(SpvRuntime runtime);
 SPV_API SpvResult SpvSetDerivativeFromMemory(SpvRuntime runtime, SpvWord result, const SpvByte* dx, SpvSize dx_size, const SpvByte* dy, SpvSize dy_size);
 SPV_API void SpvClearDerivative(SpvRuntime runtime, SpvWord result);
 SPV_API SpvResult SpvCopyDerivative(SpvRuntime runtime, SpvWord dst, SpvWord src);
 SPV_API SpvResult SpvPopulatePushConstants(SpvRuntime runtime, const SpvByte* data, SpvSize data_size);
+SPV_API SpvResult SpvRefreshResultValueLayout(SpvRuntime runtime, SpvWord result);
 
 SPV_API SpvResult SpvGetResultByName(SpvRuntime runtime, const char* name, SpvWord* result);
 SPV_API SpvResult SpvGetResultLocation(SpvRuntime runtime, SpvWord location, SpvLocationType type, SpvWord* result);
 SPV_API SpvResult SpvGetResultByLocation(SpvRuntime runtime, SpvWord location, SpvLocationType type, SpvWord* result);
 SPV_API SpvResult SpvGetResultByLocationComponent(SpvRuntime runtime, SpvWord location, SpvWord component, SpvLocationType type, SpvWord* result);
 SPV_API SpvResult SpvGetEntryPointByName(SpvRuntime runtime, const char* name, SpvWord* result);
+SPV_API SpvResult SpvGetEntryPointByNameAndExecutionModel(SpvRuntime runtime, const char* name, SpvExecutionModel execution_model, SpvWord* result);
+SPV_API SpvResult SpvSelectEntryPoint(SpvRuntime runtime, SpvWord entry_point_index);
 SPV_API SpvResult SpvGetResultMemorySize(SpvRuntime runtime, SpvWord result, SpvSize* size);
 SPV_API SpvResult SpvGetInputLocationMemorySize(SpvRuntime runtime, SpvWord location, SpvSize* size);
-SPV_API SpvResult SpvGetResultPrimitiveType(SpvRuntime runtime, SpvWord result, SpvPrimitiveType* primitive_type);
 SPV_API SpvBool SpvHasResultDecoration(SpvRuntime runtime, SpvWord result, SpvDecoration decoration);
+SPV_API SpvResult SpvGetWorkgroupSize(SpvRuntime runtime, SpvWorkgroupSize* size);
+
+SPV_API SpvResult SpvCreateWorkgroupMemory(SpvRuntime runtime, SpvWorkgroupMemory* workgroup_memory);
+SPV_API void SpvDestroyWorkgroupMemory(SpvRuntime runtime, SpvWorkgroupMemory workgroup_memory);
+SPV_API SpvResult SpvBindWorkgroupMemory(SpvRuntime runtime, SpvWorkgroupMemory workgroup_memory);
+SPV_API SpvSize SpvGetWorkgroupMemoryCount(SpvWorkgroupMemory workgroup_memory);
+SPV_API SpvResult SpvGetWorkgroupMemoryItem(SpvWorkgroupMemory workgroup_memory, SpvSize index, SpvWorkgroupMemoryItem* item);
 
 SPV_API SpvResult SpvCallEntryPoint(SpvRuntime runtime, SpvWord entry_point_index);
 SPV_API SpvResult SpvBeginEntryPoint(SpvRuntime runtime, SpvWord entry_point_index, SpvEntryPointStatus* status);
@@ -626,6 +669,7 @@ SPV_API void SpvResetInvocation(SpvRuntime runtime);
 
 SPV_API SpvResult SpvReadOutput(SpvRuntime runtime, SpvByte* output, SpvSize output_size, SpvWord result);
 SPV_API SpvResult SpvReadBuiltIn(SpvRuntime runtime, SpvByte* output, SpvSize output_size, SpvBuiltIn builtin);
+SPV_API SpvResult SpvGetBuiltinResult(SpvRuntime runtime, SpvBuiltIn builtin, SpvWord* result);
 
 SPV_API SpvResult SpvWriteInput(SpvRuntime runtime, const SpvByte* input, SpvSize input_size, SpvWord result);
 SPV_API SpvResult SpvWriteInputLocation(SpvRuntime runtime, const SpvByte* input, SpvSize input_size, SpvWord location);

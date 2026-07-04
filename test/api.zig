@@ -141,7 +141,6 @@ test "Runtime API lifecycle" {
     try std.testing.expectEqual(@as(usize, 16), try rt.getInputLocationMemorySize(0));
     try std.testing.expectEqual(@as(usize, 16), try rt.getResultMemorySize(output_result));
     try std.testing.expectEqual(@as(usize, 16), try rt.getResultMemorySize(output_location_result));
-    try std.testing.expectEqual(.Float, try rt.getResultPrimitiveType(output_result));
     try std.testing.expect(rt.hasResultDecoration(output_result, .Location));
 
     const input = [_]f32{ 10.0, 20.0, 30.0, 40.0 };
@@ -319,7 +318,6 @@ test "Integer output metadata" {
     defer rt.deinit(allocator);
 
     const output_result = try rt.getResultByLocation(0, .output);
-    try std.testing.expectEqual(.UInt, try rt.getResultPrimitiveType(output_result));
     try std.testing.expectEqual(@as(usize, 4), try rt.getResultMemorySize(output_result));
 
     try rt.callEntryPoint(allocator, try rt.getEntryPointByName("main"));

@@ -373,6 +373,41 @@ int main(void)
 }
 ```
 
+## Module reflection from C
+
+`SpvModuleGetReflectionInfos` returns shader-wide metadata collected while parsing the module:
+
+```c
+SpvModuleReflectionInfos infos = SpvModuleGetReflectionInfos(module);
+
+if (infos.needs_derivatives)
+{
+    /* Provide derivative data before executing derivative operations. */
+}
+
+if (infos.has_control_barriers)
+{
+    /* Use SpvBeginEntryPoint/SpvContinueEntryPoint and synchronize invocations. */
+}
+
+if (infos.has_atomics)
+{
+    /* Descriptor or workgroup-backed storage may be modified atomically. */
+}
+
+if (infos.early_fragment_tests)
+{
+    /* Fragment shader requested early fragment tests. */
+}
+```
+
+Compute and geometry execution metadata is also available:
+
+```c
+SpvWord local_x = infos.local_size_x;
+SpvWord geometry_output_count = infos.geometry_output_count;
+```
+
 ## Writing inputs from C
 
 Write by result id:
@@ -424,6 +459,24 @@ For component-qualified locations:
 SpvWord result = 0;
 
 SpvGetResultByLocationComponent(runtime, 0, 1, SPV_LOCATION_OUTPUT, &result);
+```
+
+For built-ins:
+
+```c
+SpvWord workgroup_id_result = 0;
+
+if (SpvGetBuiltinResult(runtime, SpvBuiltInWorkgroupId, &workgroup_id_result) == SPV_RESULT_SUCCESS)
+{
+    unsigned int workgroup_id[3] = {0};
+    SpvReadBuiltIn(runtime, (SpvByte*)workgroup_id, sizeof(workgroup_id), SpvBuiltInWorkgroupId);
+}
+```
+
+If a result's layout depends on specialization constants or runtime-array sizes, refresh it before querying or reading by result id:
+
+```c
+SpvRefreshResultValueLayout(runtime, result);
 ```
 
 ## Push constants from C
@@ -485,10 +538,47 @@ SpvAddSpecializationInfo(runtime, entry, (const SpvByte*)&value, sizeof(value));
 
 Add specialization constants before calling the entry point.
 
+If specialization constants affect array sizes, workgroup size, or other layout-dependent metadata, apply the specialization layout after adding the values:
+
+```c
+SpvApplySpecializationLayout(runtime);
+```
+
+For a fresh invocation layout, use:
+
+```c
+SpvApplySpecializationInvocationLayout(runtime);
+```
+
 To duplicate specialization constants from another runtime:
 
 ```c
 SpvCopySpecializationConstantsFrom(runtime, source_runtime);
+```
+
+## Entry points from C
+
+Entry points can be looked up by name:
+
+```c
+SpvWord entry = 0;
+SpvGetEntryPointByName(runtime, "main", &entry);
+```
+
+When a module has multiple entry points with the same name, include the execution model:
+
+```c
+SpvGetEntryPointByNameAndExecutionModel(
+    runtime,
+    "main",
+    SpvExecutionModelGLCompute,
+    &entry);
+```
+
+Selecting an entry point filters interface lookups such as input and output locations to that entry point:
+
+```c
+SpvSelectEntryPoint(runtime, entry);
 ```
 
 ## Derivatives from C
@@ -531,24 +621,63 @@ while (status == SPV_ENTRY_POINT_BARRIER)
 }
 ```
 
+## Workgroup data from C
+
+Compute shaders may declare a static workgroup size. Query it with:
+
+```c
+SpvWorkgroupSize size;
+
+if (SpvGetWorkgroupSize(runtime, &size) == SPV_RESULT_SUCCESS && size.has_size)
+{
+    printf("workgroup size = %lu, %lu, %lu\n", size.x, size.y, size.z);
+}
+```
+
+Workgroup storage is allocated separately so multiple runtime invocations can bind the same shared memory during barrier-based execution:
+
+```c
+SpvWorkgroupMemory memory;
+
+if (SpvCreateWorkgroupMemory(runtime, &memory) != SPV_RESULT_SUCCESS)
+    return 1;
+
+SpvSize count = SpvGetWorkgroupMemoryCount(memory);
+
+for (SpvSize i = 0; i < count; ++i)
+{
+    SpvWorkgroupMemoryItem item;
+
+    if (SpvGetWorkgroupMemoryItem(memory, i, &item) == SPV_RESULT_SUCCESS)
+    {
+        /* item.result is the Workgroup variable result id.
+           item.data points to item.size bytes owned by memory. */
+    }
+}
+
+SpvBindWorkgroupMemory(runtime, memory);
+
+/* Run one or more invocations that share this workgroup memory. */
+
+SpvDestroyWorkgroupMemory(runtime, memory);
+```
+
 ## Image API from C
 
 Shaders that execute image operations must provide callbacks in `SpvImageAPI`.
 
 ```c
 static SpvResult ReadImageFloat4(
-    void* driver_image,
-    SpvDim dim,
-    int x,
-    int y,
-    int z,
+    SpvReadImageInfo info,
     SpvVec4f* dst)
 {
-    (void)driver_image;
-    (void)dim;
-    (void)x;
-    (void)y;
-    (void)z;
+    (void)info.driver_image;
+    (void)info.dim;
+    (void)info.x;
+    (void)info.y;
+    (void)info.z;
+    (void)info.has_lod;
+    (void)info.lod;
 
     dst->x = 0.0f;
     dst->y = 0.0f;
@@ -563,27 +692,19 @@ Sampling callbacks include an explicit-LOD flag/value and an offset:
 
 ```c
 static SpvResult SampleImageFloat4(
-    void* driver_image,
-    void* driver_sampler,
-    SpvDim dim,
-    float x,
-    float y,
-    float z,
-    SpvBool has_lod,
-    float lod,
-    SpvImageOffset offset,
+    SpvSampleImageInfo info,
     SpvVec4f* dst)
 {
-    (void)driver_image;
-    (void)driver_sampler;
-    (void)dim;
-    (void)has_lod;
-    (void)lod;
-    (void)offset;
+    (void)info.driver_image;
+    (void)info.driver_sampler;
+    (void)info.dim;
+    (void)info.has_lod;
+    (void)info.lod;
+    (void)info.offset;
 
-    dst->x = x;
-    dst->y = y;
-    dst->z = z;
+    dst->x = (float)info.x;
+    dst->y = (float)info.y;
+    dst->z = (float)info.z;
     dst->w = 1.0f;
     return SPV_RESULT_SUCCESS;
 }
@@ -593,27 +714,19 @@ Depth-comparison samplers add `dref` and write one `float`:
 
 ```c
 static SpvResult SampleImageDref(
-    void* driver_image,
-    void* driver_sampler,
-    SpvDim dim,
-    float x,
-    float y,
-    float z,
+    SpvSampleImageInfo info,
     float dref,
-    SpvBool has_lod,
-    float lod,
-    SpvImageOffset offset,
     float* dst)
 {
-    (void)driver_image;
-    (void)driver_sampler;
-    (void)dim;
-    (void)x;
-    (void)y;
-    (void)z;
-    (void)has_lod;
-    (void)lod;
-    (void)offset;
+    (void)info.driver_image;
+    (void)info.driver_sampler;
+    (void)info.dim;
+    (void)info.x;
+    (void)info.y;
+    (void)info.z;
+    (void)info.has_lod;
+    (void)info.lod;
+    (void)info.offset;
 
     *dst = dref;
     return SPV_RESULT_SUCCESS;
@@ -632,6 +745,9 @@ SpvImageAPI image_api = {
     .SpvSampleImageInt4 = SampleImageInt4,
     .SpvSampleImageDref = SampleImageDref,
     .SpvQueryImageSize = QueryImageSize,
+    .SpvQueryImageLevels = QueryImageLevels,
+    .SpvQueryImageSamples = QueryImageSamples,
+    .SpvQueryImageLod = QueryImageLod,
 };
 ```
 

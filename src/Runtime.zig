@@ -465,10 +465,6 @@ pub fn snapshotPhiValuesForBranch(self: *Self, allocator: std.mem.Allocator, tar
     }
 }
 
-pub fn getPhiValueSnapshot(self: *Self, id: SpvWord) ?*const Value {
-    return self.phi_values.getPtr(id);
-}
-
 pub fn setDerivative(self: *Self, allocator: std.mem.Allocator, result: SpvWord, dx: *const Value, dy: *const Value) RuntimeError!void {
     const derivative: Derivative = .{
         .dx = try dx.dupe(allocator),
@@ -692,12 +688,6 @@ fn resultComponent(self: *const Self, result: SpvWord) SpvWord {
             return decoration.literal_1;
     }
     return 0;
-}
-
-pub fn getResultPrimitiveType(self: *const Self, result: SpvWord) RuntimeError!PrimitiveType {
-    if (result >= self.results.len)
-        return RuntimeError.OutOfBounds;
-    return (try self.results[result].getConstValue()).resolvePrimitiveType();
 }
 
 pub fn getWorkgroupSize(self: *Self, allocator: std.mem.Allocator) RuntimeError!?@Vector(3, u32) {
@@ -1272,41 +1262,6 @@ pub fn hasResultDecoration(self: *const Self, result: SpvWord, decoration: spv.S
         if (result_decoration.rtype == decoration)
             return true;
     }
-    return false;
-}
-
-pub fn hasResultOrMemberDecoration(self: *const Self, result: SpvWord, decoration: spv.SpvDecoration) bool {
-    if (self.hasResultDecoration(result, decoration))
-        return true;
-
-    if (result >= self.results.len)
-        return false;
-
-    const type_word = switch ((self.results[result].variant orelse return false)) {
-        .Variable => |variable| variable.type_word,
-        else => return false,
-    };
-    const target_type_word = switch ((self.results[type_word].variant orelse return false)) {
-        .Type => |t| switch (t) {
-            .Pointer => |ptr| ptr.target,
-            else => type_word,
-        },
-        else => return false,
-    };
-    const target_type = self.results[target_type_word].variant orelse return false;
-    switch (target_type) {
-        .Type => |t| switch (t) {
-            .Structure => {
-                for (self.results[target_type_word].decorations.items) |member_decoration| {
-                    if (member_decoration.rtype == decoration)
-                        return true;
-                }
-            },
-            else => {},
-        },
-        else => {},
-    }
-
     return false;
 }
 

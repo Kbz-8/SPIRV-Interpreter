@@ -18,6 +18,8 @@ const ReflectionInfos = extern struct {
 
     needs_derivatives: ffi.SpvCBool,
     has_control_barriers: ffi.SpvCBool,
+    has_atomics: ffi.SpvCBool,
+    early_fragment_tests: ffi.SpvCBool,
 };
 
 fn toCResult(err: spv.Module.ModuleError) ffi.Result {
@@ -66,6 +68,8 @@ export fn SpvModuleGetReflectionInfos(module: *spv.Module) callconv(.c) Reflecti
         .geometry_output = module.reflection_infos.geometry_output,
         .needs_derivatives = if (module.reflection_infos.needs_derivatives) 1 else 0,
         .has_control_barriers = if (module.reflection_infos.has_control_barriers) 1 else 0,
+        .has_atomics = if (module.reflection_infos.has_atomics) 1 else 0,
+        .early_fragment_tests = if (module.reflection_infos.early_fragment_tests) 1 else 0,
     };
 }
 

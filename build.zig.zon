@@ -1,6 +1,6 @@
 .{
     .name = .SPIRV_Interpreter,
-    .version = "0.0.1",
+    .version = "1.0.0",
     .dependencies = .{
         .zmath = .{
             .url = "git+https://github.com/zig-gamedev/zmath.git#3a5955b2b72cd081563fbb084eff05bffd1e3fbb",

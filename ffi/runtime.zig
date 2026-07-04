@@ -18,6 +18,19 @@ const EntryPointStatus = enum(c_int) {
     barrier = 1,
 };
 
+const WorkgroupSize = extern struct {
+    has_size: ffi.SpvCBool,
+    x: ffi.SpvCWord,
+    y: ffi.SpvCWord,
+    z: ffi.SpvCWord,
+};
+
+const WorkgroupMemoryItem = extern struct {
+    result: ffi.SpvCWord,
+    data: ?[*]u8,
+    size: ffi.SpvCSize,
+};
+
 const PrimitiveType = enum(c_int) {
     bool = 0,
     float = 1,
@@ -392,6 +405,10 @@ const RuntimeWrapper = struct {
     image_api: ImageAPI,
 };
 
+const WorkgroupMemoryWrapper = struct {
+    memories: []spv.Runtime.WorkgroupMemory,
+};
+
 export fn SpvInitRuntime(rt: **RuntimeWrapper, module: *spv.Module, image_api: ImageAPI) callconv(.c) ffi.Result {
     const allocator = std.heap.c_allocator;
 
@@ -482,6 +499,18 @@ export fn SpvCopySpecializationConstantsFrom(rt: *RuntimeWrapper, other: *const 
     return .Success;
 }
 
+export fn SpvApplySpecializationLayout(rt: *RuntimeWrapper) callconv(.c) ffi.Result {
+    const allocator = std.heap.c_allocator;
+    rt.rt.applySpecializationLayout(allocator) catch |err| return toCResult(err);
+    return .Success;
+}
+
+export fn SpvApplySpecializationInvocationLayout(rt: *RuntimeWrapper) callconv(.c) ffi.Result {
+    const allocator = std.heap.c_allocator;
+    rt.rt.applySpecializationInvocationLayout(allocator) catch |err| return toCResult(err);
+    return .Success;
+}
+
 export fn SpvSetDerivativeFromMemory(rt: *RuntimeWrapper, result: spv.SpvWord, dx: [*]const u8, dx_size: c_ulong, dy: [*]const u8, dy_size: c_ulong) callconv(.c) ffi.Result {
     const allocator = std.heap.c_allocator;
     rt.rt.setDerivativeFromMemory(allocator, result, dx[0..dx_size], dy[0..dy_size]) catch |err| return toCResult(err);
@@ -504,8 +533,23 @@ export fn SpvPopulatePushConstants(rt: *RuntimeWrapper, data: [*]const u8, data_
     return .Success;
 }
 
+export fn SpvRefreshResultValueLayout(rt: *RuntimeWrapper, result: spv.SpvWord) callconv(.c) ffi.Result {
+    rt.rt.refreshResultValueLayout(result) catch |err| return toCResult(err);
+    return .Success;
+}
+
 export fn SpvGetEntryPointByName(rt: *RuntimeWrapper, name: [*:0]const u8, result: *spv.SpvWord) callconv(.c) ffi.Result {
     result.* = rt.rt.getEntryPointByName(std.mem.span(name)) catch |err| return toCResult(err);
+    return .Success;
+}
+
+export fn SpvGetEntryPointByNameAndExecutionModel(rt: *RuntimeWrapper, name: [*:0]const u8, execution_model: spv.spv.SpvExecutionModel, result: *spv.SpvWord) callconv(.c) ffi.Result {
+    result.* = rt.rt.getEntryPointByNameAndExecutionModel(std.mem.span(name), execution_model) catch |err| return toCResult(err);
+    return .Success;
+}
+
+export fn SpvSelectEntryPoint(rt: *RuntimeWrapper, entry_point: spv.SpvWord) callconv(.c) ffi.Result {
+    rt.rt.selectEntryPoint(entry_point) catch |err| return toCResult(err);
     return .Success;
 }
 
@@ -544,18 +588,64 @@ export fn SpvGetInputLocationMemorySize(rt: *RuntimeWrapper, location: spv.SpvWo
     return .Success;
 }
 
-export fn SpvGetResultPrimitiveType(rt: *RuntimeWrapper, result: spv.SpvWord, primitive_type: *PrimitiveType) callconv(.c) ffi.Result {
-    primitive_type.* = switch (rt.rt.getResultPrimitiveType(result) catch |err| return toCResult(err)) {
-        .Bool => .bool,
-        .Float => .float,
-        .SInt => .sint,
-        .UInt => .uint,
+export fn SpvHasResultDecoration(rt: *RuntimeWrapper, result: spv.SpvWord, decoration: spv.spv.SpvDecoration) callconv(.c) c_int {
+    return if (rt.rt.hasResultDecoration(result, decoration)) 1 else 0;
+}
+
+export fn SpvGetWorkgroupSize(rt: *RuntimeWrapper, size: *WorkgroupSize) callconv(.c) ffi.Result {
+    const allocator = std.heap.c_allocator;
+    if (rt.rt.getWorkgroupSize(allocator) catch |err| return toCResult(err)) |workgroup_size| {
+        size.* = .{
+            .has_size = 1,
+            .x = workgroup_size[0],
+            .y = workgroup_size[1],
+            .z = workgroup_size[2],
+        };
+    } else {
+        size.* = .{
+            .has_size = 0,
+            .x = 0,
+            .y = 0,
+            .z = 0,
+        };
+    }
+    return .Success;
+}
+
+export fn SpvCreateWorkgroupMemory(rt: *RuntimeWrapper, workgroup_memory: **WorkgroupMemoryWrapper) callconv(.c) ffi.Result {
+    const allocator = std.heap.c_allocator;
+    workgroup_memory.* = allocator.create(WorkgroupMemoryWrapper) catch return .OutOfMemory;
+    workgroup_memory.*.memories = rt.rt.createWorkgroupMemory(allocator) catch |err| {
+        allocator.destroy(workgroup_memory.*);
+        return toCResult(err);
     };
     return .Success;
 }
 
-export fn SpvHasResultDecoration(rt: *RuntimeWrapper, result: spv.SpvWord, decoration: spv.spv.SpvDecoration) callconv(.c) c_int {
-    return if (rt.rt.hasResultDecoration(result, decoration)) 1 else 0;
+export fn SpvDestroyWorkgroupMemory(rt: *RuntimeWrapper, workgroup_memory: *WorkgroupMemoryWrapper) callconv(.c) void {
+    const allocator = std.heap.c_allocator;
+    rt.rt.destroyWorkgroupMemory(allocator, workgroup_memory.memories);
+    allocator.destroy(workgroup_memory);
+}
+
+export fn SpvBindWorkgroupMemory(rt: *RuntimeWrapper, workgroup_memory: *const WorkgroupMemoryWrapper) callconv(.c) ffi.Result {
+    rt.rt.bindWorkgroupMemory(workgroup_memory.memories) catch |err| return toCResult(err);
+    return .Success;
+}
+
+export fn SpvGetWorkgroupMemoryCount(workgroup_memory: *const WorkgroupMemoryWrapper) callconv(.c) ffi.SpvCSize {
+    return workgroup_memory.memories.len;
+}
+
+export fn SpvGetWorkgroupMemoryItem(workgroup_memory: *const WorkgroupMemoryWrapper, index: ffi.SpvCSize, item: *WorkgroupMemoryItem) callconv(.c) ffi.Result {
+    if (index >= workgroup_memory.memories.len) return .OutOfBounds;
+    const memory = workgroup_memory.memories[index];
+    item.* = .{
+        .result = memory.result,
+        .data = memory.bytes.ptr,
+        .size = memory.bytes.len,
+    };
+    return .Success;
 }
 
 export fn SpvCallEntryPoint(rt: *RuntimeWrapper, entry_point: spv.SpvWord) callconv(.c) ffi.Result {
@@ -604,6 +694,11 @@ export fn SpvReadOutput(rt: *RuntimeWrapper, output: [*]u8, output_size: c_ulong
 
 export fn SpvReadBuiltIn(rt: *RuntimeWrapper, output: [*]u8, output_size: c_ulong, builtin: spv.spv.SpvBuiltIn) callconv(.c) ffi.Result {
     rt.rt.readBuiltIn(output[0..output_size], builtin) catch |err| return toCResult(err);
+    return .Success;
+}
+
+export fn SpvGetBuiltinResult(rt: *RuntimeWrapper, builtin: spv.spv.SpvBuiltIn, result: *spv.SpvWord) callconv(.c) ffi.Result {
+    result.* = rt.rt.getBuiltinResult(builtin) orelse return .NotFound;
     return .Success;
 }
 

@@ -6201,7 +6201,7 @@ fn opPhi(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) Runtim
         const parent_label_id = try rt.it.next();
 
         if (parent_label_id == predecessor) {
-            const value = rt.getPhiValueSnapshot(value_id) orelse try rt.results[value_id].getValue();
+            const value = rt.phi_values.getPtr(value_id) orelse try rt.results[value_id].getValue();
             try copyValue(try rt.results[id].getValue(), value);
             try rt.copyDerivative(allocator, id, value_id);
             return;
