@@ -1,6 +1,10 @@
 .{
     .name = .SPIRV_Interpreter,
     .version = "1.0.0",
+
+    .fingerprint = 0xd87ec8ab9fa9396a,
+    .minimum_zig_version = "0.16.0",
+
     .dependencies = .{
         .zmath = .{
             .url = "git+https://github.com/zig-gamedev/zmath.git#3a5955b2b72cd081563fbb084eff05bffd1e3fbb",
@@ -11,22 +15,15 @@
             .hash = "NZSL-1.1.5-N0xSVHV7AAB168H2nqMDYY0hjUXtXJ9_eQGNHasSr9r8",
             .lazy = true,
         },
-        .sdl3 = .{
-            .url = "git+https://codeberg.org/7Games/zig-sdl3?ref=v0.2.0#40c2e4b579aa556db37a502c936426aa1c8b5c95",
-            .hash = "sdl3-0.2.0-NmT1Q0mFJwBi9kZmArzh2rfJ_mFshydV0zPGULVlpACc",
-            .lazy = true,
-        },
         .pretty = .{
             .url = "git+https://github.com/Kbz-8/pretty.git#f91d534d033277ca1ae7fcd598a070e8b3ddc532",
             .hash = "pretty-0.10.6-Tm65r7FTAQA5BEL8tcIcF-Wp4XRC7J7BhuRI0KUnFj2X",
         },
     },
-    .minimum_zig_version = "0.16.0",
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "src",
         "LICENSE",
     },
-    .fingerprint = 0xd87ec8ab9fa9396a,
 }
