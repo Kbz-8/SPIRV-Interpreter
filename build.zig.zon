@@ -19,6 +19,10 @@
             .url = "git+https://github.com/Kbz-8/pretty.git#bf764fc7e66b2eccd3d435ac231857536eb4098a",
             .hash = "pretty-0.10.6-Tm65r6RQAQBWby-fPSN0C6Q3h2cFjUkmHYspOT-yx3P0",
         },
+        .SPIRV_Interpreter = .{
+            .url = "git+https://github.com/Kbz-8/SPIRV-Interpreter#28df74a3c61e8a0526d99c06962bf696365b7164",
+            .hash = "SPIRV_Interpreter-1.1.0-ajmpn86JCQAd-kjeSVnZg3JXCxSIIlY1ea5pygt0WFTo",
+        },
     },
     .paths = .{
         "build.zig",
