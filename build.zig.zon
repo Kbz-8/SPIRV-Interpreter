@@ -11,17 +11,13 @@
             .hash = "zmath-0.11.0-dev-wjwivZQtAwDdHC9JGK8bi-SyPdFSK2oqPjTq_de5bHWE",
         },
         .NZSL = .{ // For unit tests
-            .url = "git+https://git.kbz8.me/kbz_8/NZigSL#8ca8339b4de2c765386dc6438f64e9cec48bcdf2",
-            .hash = "NZSL-1.1.6-N0xSVOl7AADYdKpNeDp7nHqBW_j-jgU7kuPt3ypxFSRV",
+            .url = "git+https://git.kbz8.me/kbz_8/NZigSL#8956cd15a47a542d7f254a789669a2ea9dce23cf",
+            .hash = "NZSL-1.1.6-N0xSVMF7AACMg3dOZXE1mlV8C1ggc9OjXJAEzEZ-FOck",
             .lazy = true,
         },
         .pretty = .{
             .url = "git+https://github.com/Kbz-8/pretty.git#bf764fc7e66b2eccd3d435ac231857536eb4098a",
             .hash = "pretty-0.10.6-Tm65r6RQAQBWby-fPSN0C6Q3h2cFjUkmHYspOT-yx3P0",
-        },
-        .SPIRV_Interpreter = .{
-            .url = "git+https://github.com/Kbz-8/SPIRV-Interpreter#28df74a3c61e8a0526d99c06962bf696365b7164",
-            .hash = "SPIRV_Interpreter-1.1.0-ajmpn86JCQAd-kjeSVnZg3JXCxSIIlY1ea5pygt0WFTo",
         },
     },
     .paths = .{
