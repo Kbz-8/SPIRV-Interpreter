@@ -1,23 +1,23 @@
 .{
     .name = .SPIRV_Interpreter,
-    .version = "1.0.0",
+    .version = "1.1.0",
 
     .fingerprint = 0xd87ec8ab9fa9396a,
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
 
     .dependencies = .{
         .zmath = .{
-            .url = "git+https://github.com/zig-gamedev/zmath.git#3a5955b2b72cd081563fbb084eff05bffd1e3fbb",
-            .hash = "zmath-0.11.0-dev-wjwivdMsAwD-xaLj76YHUq3t9JDH-X16xuMTmnDzqbu2",
+            .url = "git+https://github.com/Kbz-8/zmath#5990b6c0772d522d8249d73d31fa57d4a03ac3c4",
+            .hash = "zmath-0.11.0-dev-wjwivZQtAwDdHC9JGK8bi-SyPdFSK2oqPjTq_de5bHWE",
         },
         .NZSL = .{ // For unit tests
-            .url = "git+https://git.kbz8.me/kbz_8/NZigSL#3ab28e423cdab27797f779d352094a69800c0c6b",
-            .hash = "NZSL-1.1.5-N0xSVHV7AAB168H2nqMDYY0hjUXtXJ9_eQGNHasSr9r8",
+            .url = "git+https://git.kbz8.me/kbz_8/NZigSL#8ca8339b4de2c765386dc6438f64e9cec48bcdf2",
+            .hash = "NZSL-1.1.6-N0xSVOl7AADYdKpNeDp7nHqBW_j-jgU7kuPt3ypxFSRV",
             .lazy = true,
         },
         .pretty = .{
-            .url = "git+https://github.com/Kbz-8/pretty.git#f91d534d033277ca1ae7fcd598a070e8b3ddc532",
-            .hash = "pretty-0.10.6-Tm65r7FTAQA5BEL8tcIcF-Wp4XRC7J7BhuRI0KUnFj2X",
+            .url = "git+https://github.com/Kbz-8/pretty.git#bf764fc7e66b2eccd3d435ac231857536eb4098a",
+            .hash = "pretty-0.10.6-Tm65r6RQAQBWby-fPSN0C6Q3h2cFjUkmHYspOT-yx3P0",
         },
     },
     .paths = .{

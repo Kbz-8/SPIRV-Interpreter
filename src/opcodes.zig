@@ -588,7 +588,7 @@ fn BitEngine(comptime T: PrimitiveType, comptime Op: BitOp) type {
             if (info != .int) @compileError("must be an integer type");
 
             const bits: u32 = info.int.bits;
-            const U = std.meta.Int(.unsigned, bits);
+            const U = @Int(.unsigned, bits);
 
             if (count == 0 or offset >= bits) return base;
 
@@ -620,7 +620,7 @@ fn BitEngine(comptime T: PrimitiveType, comptime Op: BitOp) type {
 
             const actual_count: u64 = @min(count, @as(u64, bits) - offset);
 
-            const U = std.meta.Int(.unsigned, bits);
+            const U = @Int(.unsigned, bits);
             const base_u: U = @bitCast(base);
             const shift: std.math.Log2Int(U) = @truncate(offset);
 
@@ -705,7 +705,7 @@ fn BitEngine(comptime T: PrimitiveType, comptime Op: BitOp) type {
                 inline 8, 16, 32, 64 => |bits| blk: {
                     if (sign == .signed) {
                         const lane = try Value.readLane(.SInt, bits, value, lane_index);
-                        const U = std.meta.Int(.unsigned, bits);
+                        const U = @Int(.unsigned, bits);
                         break :blk @as(u64, @as(U, @bitCast(lane)));
                     }
                     break :blk @intCast(try Value.readLane(.UInt, bits, value, lane_index));
@@ -1030,14 +1030,14 @@ fn ConversionEngine(comptime from_kind: PrimitiveType, comptime to_kind: Primiti
                     const v = try Value.readLane(from_kind, bits, from, lane_index);
                     if (comptime from_kind != .Float and to_kind != .Float) {
                         const to_bits = @bitSizeOf(ToT);
-                        const FromUInt = std.meta.Int(.unsigned, bits);
-                        const ToUInt = std.meta.Int(.unsigned, to_bits);
+                        const FromUInt = @Int(.unsigned, bits);
+                        const ToUInt = @Int(.unsigned, to_bits);
 
                         const src_bits: FromUInt = @bitCast(v);
                         const dst_bits: ToUInt = if (to_bits < bits)
                             @truncate(src_bits)
                         else if (from_kind == .SInt)
-                            @bitCast(@as(std.meta.Int(.signed, to_bits), @intCast(v)))
+                            @bitCast(@as(@Int(.signed, to_bits), @intCast(v)))
                         else
                             @intCast(src_bits);
                         break :blk @bitCast(dst_bits);
@@ -1406,7 +1406,7 @@ fn ImageEngine(comptime Op: ImageOp) type {
         }
 
         fn imageOperandPresent(image_operands: SpvWord, mask: spv.SpvImageOperandsMask) bool {
-            return (image_operands & @intFromEnum(mask)) != 0;
+            return (image_operands & @backingInt(mask)) != 0;
         }
 
         fn readImageOffset(rt: *Runtime, offset_id: SpvWord) RuntimeError!Runtime.ImageOffset {
@@ -4083,7 +4083,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                 .Vector4f32 => |*v| switch (component_index_value) {
                                     inline 0...3 => |idx| {
                                         const lane_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(f32)), @sizeOf(f32));
-                                        const ptr = try helpers.robustF32Pointer(allocator, &v[idx], lane_window, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
+                                        const ptr = try helpers.robustF32Pointer(allocator, &@as(*[4]f32, @ptrCast(v))[idx], lane_window, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
                                         break :blk .{ .Pointer = .{ .ptr = .{ .f32_ptr = ptr.ptr }, .uniform_slice_window = lane_window, .uniform_backing_value = ptr.backing, .owns_uniform_backing_value = ptr.owns_backing, .matrix_stride = null } };
                                     },
                                     else => {
@@ -4094,7 +4094,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                 .Vector3f32 => |*v| switch (component_index_value) {
                                     inline 0...2 => |idx| {
                                         const lane_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(f32)), @sizeOf(f32));
-                                        const ptr = try helpers.robustF32Pointer(allocator, &v[idx], lane_window, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
+                                        const ptr = try helpers.robustF32Pointer(allocator, &@as(*[3]f32, @ptrCast(v))[idx], lane_window, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
                                         break :blk .{ .Pointer = .{ .ptr = .{ .f32_ptr = ptr.ptr }, .uniform_slice_window = lane_window, .uniform_backing_value = ptr.backing, .owns_uniform_backing_value = ptr.owns_backing, .matrix_stride = null } };
                                     },
                                     else => {
@@ -4105,7 +4105,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                 .Vector2f32 => |*v| switch (component_index_value) {
                                     inline 0...1 => |idx| {
                                         const lane_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(f32)), @sizeOf(f32));
-                                        const ptr = try helpers.robustF32Pointer(allocator, &v[idx], lane_window, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
+                                        const ptr = try helpers.robustF32Pointer(allocator, &@as(*[2]f32, @ptrCast(v))[idx], lane_window, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
                                         break :blk .{ .Pointer = .{ .ptr = .{ .f32_ptr = ptr.ptr }, .uniform_slice_window = lane_window, .uniform_backing_value = ptr.backing, .owns_uniform_backing_value = ptr.owns_backing, .matrix_stride = null } };
                                     },
                                     else => {
@@ -4116,7 +4116,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                 .Vector4i32 => |*v| switch (component_index_value) {
                                     inline 0...3 => |idx| {
                                         const lane_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(i32)), @sizeOf(i32));
-                                        const ptr = try helpers.robustI32Pointer(allocator, &v[idx], lane_window, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
+                                        const ptr = try helpers.robustI32Pointer(allocator, &@as(*[4]i32, @ptrCast(v))[idx], lane_window, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
                                         break :blk .{ .Pointer = .{ .ptr = .{ .i32_ptr = ptr.ptr }, .uniform_slice_window = lane_window, .uniform_backing_value = ptr.backing, .owns_uniform_backing_value = ptr.owns_backing, .matrix_stride = null } };
                                     },
                                     else => {
@@ -4127,7 +4127,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                 .Vector3i32 => |*v| switch (component_index_value) {
                                     inline 0...2 => |idx| {
                                         const lane_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(i32)), @sizeOf(i32));
-                                        const ptr = try helpers.robustI32Pointer(allocator, &v[idx], lane_window, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
+                                        const ptr = try helpers.robustI32Pointer(allocator, &@as(*[3]i32, @ptrCast(v))[idx], lane_window, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
                                         break :blk .{ .Pointer = .{ .ptr = .{ .i32_ptr = ptr.ptr }, .uniform_slice_window = lane_window, .uniform_backing_value = ptr.backing, .owns_uniform_backing_value = ptr.owns_backing, .matrix_stride = null } };
                                     },
                                     else => {
@@ -4138,7 +4138,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                 .Vector2i32 => |*v| switch (component_index_value) {
                                     inline 0...1 => |idx| {
                                         const lane_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(i32)), @sizeOf(i32));
-                                        const ptr = try helpers.robustI32Pointer(allocator, &v[idx], lane_window, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
+                                        const ptr = try helpers.robustI32Pointer(allocator, &@as(*[2]i32, @ptrCast(v))[idx], lane_window, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
                                         break :blk .{ .Pointer = .{ .ptr = .{ .i32_ptr = ptr.ptr }, .uniform_slice_window = lane_window, .uniform_backing_value = ptr.backing, .owns_uniform_backing_value = ptr.owns_backing, .matrix_stride = null } };
                                     },
                                     else => {
@@ -4149,7 +4149,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                 .Vector4u32 => |*v| switch (component_index_value) {
                                     inline 0...3 => |idx| {
                                         const lane_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(u32)), @sizeOf(u32));
-                                        const ptr = try helpers.robustU32Pointer(allocator, &v[idx], lane_window, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
+                                        const ptr = try helpers.robustU32Pointer(allocator, &@as(*[4]u32, @ptrCast(v))[idx], lane_window, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
                                         break :blk .{ .Pointer = .{ .ptr = .{ .u32_ptr = ptr.ptr }, .uniform_slice_window = lane_window, .uniform_backing_value = ptr.backing, .owns_uniform_backing_value = ptr.owns_backing, .matrix_stride = null } };
                                     },
                                     else => {
@@ -4160,7 +4160,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                 .Vector3u32 => |*v| switch (component_index_value) {
                                     inline 0...2 => |idx| {
                                         const lane_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(u32)), @sizeOf(u32));
-                                        const ptr = try helpers.robustU32Pointer(allocator, &v[idx], lane_window, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
+                                        const ptr = try helpers.robustU32Pointer(allocator, &@as(*[3]u32, @ptrCast(v))[idx], lane_window, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
                                         break :blk .{ .Pointer = .{ .ptr = .{ .u32_ptr = ptr.ptr }, .uniform_slice_window = lane_window, .uniform_backing_value = ptr.backing, .owns_uniform_backing_value = ptr.owns_backing, .matrix_stride = null } };
                                     },
                                     else => {
@@ -4171,7 +4171,7 @@ fn opAccessChain(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime
                                 .Vector2u32 => |*v| switch (component_index_value) {
                                     inline 0...1 => |idx| {
                                         const lane_window = try helpers.advanceWindowSized(uniform_slice_window, helpers.laneOffset(matrix_stride, matrix_row_major, idx, @sizeOf(u32)), @sizeOf(u32));
-                                        const ptr = try helpers.robustU32Pointer(allocator, &v[idx], lane_window, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
+                                        const ptr = try helpers.robustU32Pointer(allocator, &@as(*[2]u32, @ptrCast(v))[idx], lane_window, descriptor_backed, uniform_backing_value, owns_uniform_backing_value);
                                         break :blk .{ .Pointer = .{ .ptr = .{ .u32_ptr = ptr.ptr }, .uniform_slice_window = lane_window, .uniform_backing_value = ptr.backing, .owns_uniform_backing_value = ptr.owns_backing, .matrix_stride = null } };
                                     },
                                     else => {
@@ -4894,12 +4894,12 @@ fn opMulExtended(comptime is_signed: bool, rt: *Runtime) RuntimeError!void {
     switch (lane_bits) {
         inline 8, 16, 32, 64 => |bits| {
             const UIntT = Value.getPrimitiveFieldType(.UInt, bits);
-            const WideUIntT = std.meta.Int(.unsigned, bits * 2);
+            const WideUIntT = @Int(.unsigned, bits * 2);
 
             for (0..lane_count) |lane_index| {
                 const product_bits: WideUIntT = if (is_signed) blk: {
                     const SIntT = Value.getPrimitiveFieldType(.SInt, bits);
-                    const WideSIntT = std.meta.Int(.signed, bits * 2);
+                    const WideSIntT = @Int(.signed, bits * 2);
                     const l: SIntT = try Value.readLane(.SInt, bits, lhs, lane_index);
                     const r: SIntT = try Value.readLane(.SInt, bits, rhs, lane_index);
                     const product: WideSIntT = @as(WideSIntT, l) * @as(WideSIntT, r);
@@ -5182,8 +5182,8 @@ fn opSpecConstantOp(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runt
 
             return switch (bit_count) {
                 inline 8, 16, 32, 64 => |bits| blk: {
-                    const SInt = std.meta.Int(.signed, bits);
-                    const UInt = std.meta.Int(.unsigned, bits);
+                    const SInt = @Int(.signed, bits);
+                    const UInt = @Int(.unsigned, bits);
                     const lhs: SInt = @bitCast(@as(UInt, @truncate(lhs_u)));
                     const rhs: SInt = @bitCast(@as(UInt, @truncate(rhs_u)));
 
@@ -5257,7 +5257,7 @@ fn opSpecConstantOp(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runt
                 inline 8, 16, 32, 64 => |bits| blk: {
                     if (amount >= bits) break :blk 0;
 
-                    const UInt = std.meta.Int(.unsigned, bits);
+                    const UInt = @Int(.unsigned, bits);
                     const shift: std.math.Log2Int(UInt) = @intCast(amount);
                     const result = @as(UInt, @truncate(value)) << shift;
                     break :blk @as(u64, result);
@@ -5271,7 +5271,7 @@ fn opSpecConstantOp(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runt
                 inline 8, 16, 32, 64 => |bits| blk: {
                     if (amount >= bits) break :blk 0;
 
-                    const UInt = std.meta.Int(.unsigned, bits);
+                    const UInt = @Int(.unsigned, bits);
                     const shift: std.math.Log2Int(UInt) = @intCast(amount);
                     const result = @as(UInt, @truncate(value)) >> shift;
                     break :blk @as(u64, result);
@@ -5283,8 +5283,8 @@ fn opSpecConstantOp(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runt
         fn shiftRightArithmetic(value: *const Value, amount: u64, bit_count: usize) RuntimeError!u64 {
             return switch (bit_count) {
                 inline 8, 16, 32, 64 => |bits| blk: {
-                    const SInt = std.meta.Int(.signed, bits);
-                    const UInt = std.meta.Int(.unsigned, bits);
+                    const SInt = @Int(.signed, bits);
+                    const UInt = @Int(.unsigned, bits);
                     const lhs: SInt = @bitCast(@as(UInt, @truncate(try readUInt(value))));
                     if (amount >= bits) {
                         break :blk @as(u64, @as(UInt, @bitCast(if (lhs < 0) @as(SInt, -1) else @as(SInt, 0))));
@@ -5300,7 +5300,7 @@ fn opSpecConstantOp(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runt
         fn bitNot(value: u64, bit_count: usize) RuntimeError!u64 {
             return switch (bit_count) {
                 inline 8, 16, 32, 64 => |bits| blk: {
-                    const UInt = std.meta.Int(.unsigned, bits);
+                    const UInt = @Int(.unsigned, bits);
                     break :blk @as(u64, ~@as(UInt, @truncate(value)));
                 },
                 else => return RuntimeError.InvalidSpirV,
@@ -5845,11 +5845,11 @@ fn opExecutionMode(_: std.mem.Allocator, _: SpvWord, rt: *Runtime) RuntimeError!
         .Triangles,
         .InputLinesAdjacency,
         .InputTrianglesAdjacency,
-        => rt.mod.reflection_infos.geometry_input = @intFromEnum(mode),
+        => rt.mod.reflection_infos.geometry_input = @backingInt(mode),
         .OutputPoints,
         .OutputLineStrip,
         .OutputTriangleStrip,
-        => rt.mod.reflection_infos.geometry_output = @intFromEnum(mode),
+        => rt.mod.reflection_infos.geometry_output = @backingInt(mode),
         .EarlyFragmentTests => rt.mod.reflection_infos.early_fragment_tests = true,
         else => {},
     }
@@ -6740,7 +6740,7 @@ fn opVariable(allocator: std.mem.Allocator, word_count: SpvWord, rt: *Runtime) R
         .Workgroup,
     };
 
-    const is_externally_visible = std.mem.containsAtLeastScalar(spv.SpvStorageClass, &externally_visible_data_storages, 1, storage_class);
+    const is_externally_visible = std.mem.containsAtLeastScalar(spv.SpvStorageClass, &externally_visible_data_storages, storage_class, 1);
     const use_external_storage = is_externally_visible and (storage_class == .Workgroup or resolved_type != .Array);
 
     var initial_value = try Value.init(allocator, rt.results, resolved_word, use_external_storage);

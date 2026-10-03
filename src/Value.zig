@@ -1331,8 +1331,8 @@ pub const Value = union(Type) {
         return switch (T) {
             .Bool => bool,
             .Float => std.meta.Float(BitCount),
-            .SInt => std.meta.Int(.signed, BitCount),
-            .UInt => std.meta.Int(.unsigned, BitCount),
+            .SInt => @Int(.signed, BitCount),
+            .UInt => @Int(.unsigned, BitCount),
         };
     }
 

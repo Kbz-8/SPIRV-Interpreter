@@ -33,9 +33,9 @@ test "SSBO read" {
     const code = try compileNzsl(allocator, shader);
     defer allocator.free(code);
 
-    var ssbo = [_]u32{0} ** 256;
+    var ssbo: [256]u32 = @splat(0);
 
-    var expected = [_]u32{0} ** 256;
+    var expected: [256]u32 = @splat(0);
     for (expected[0..], 0..) |*val, i| {
         val.* = @intCast(i);
     }

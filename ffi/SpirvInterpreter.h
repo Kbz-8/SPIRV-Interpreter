@@ -410,7 +410,7 @@ extern "C"
 
 typedef int SpvBool;
 typedef unsigned char SpvByte;
-typedef unsigned long SpvWord;
+typedef unsigned int SpvWord;
 typedef unsigned long SpvSize;
 
 typedef enum

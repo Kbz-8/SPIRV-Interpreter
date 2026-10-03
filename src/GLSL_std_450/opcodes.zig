@@ -982,12 +982,12 @@ fn PackNormEngine(comptime lanes: usize, comptime field_bits: u5, comptime kind:
                 const lane_bits = switch (kind) {
                     .Snorm => blk: {
                         const x = std.math.clamp(try Value.readLane(.Float, 32, v, lane_index), -1.0, 1.0);
-                        const signed_value: std.meta.Int(.signed, field_bits) = @intCast(@as(i32, @intFromFloat(@round(x * snormScale(field_bits)))));
+                        const signed_value: @Int(.signed, field_bits) = @intCast(@as(i32, @intFromFloat(@round(x * snormScale(field_bits)))));
                         break :blk @as(u32, @bitCast(@as(i32, signed_value))) & fieldMask(field_bits);
                     },
                     .Unorm => blk: {
                         const x = std.math.clamp(try Value.readLane(.Float, 32, v, lane_index), 0.0, 1.0);
-                        const unsigned_value: std.meta.Int(.unsigned, field_bits) = @intCast(@as(u32, @intFromFloat(@round(x * unormScale(field_bits)))));
+                        const unsigned_value: @Int(.unsigned, field_bits) = @intCast(@as(u32, @intFromFloat(@round(x * unormScale(field_bits)))));
                         break :blk @as(u32, unsigned_value);
                     },
                 };
@@ -1012,10 +1012,10 @@ fn UnpackNormEngine(comptime lanes: usize, comptime field_bits: u5, comptime kin
 
             inline for (0..lanes) |lane_index| {
                 const lane_shift: u5 = field_bits * @as(u5, @intCast(lane_index));
-                const raw: std.meta.Int(.unsigned, field_bits) = @truncate(p >> lane_shift);
+                const raw: @Int(.unsigned, field_bits) = @truncate(p >> lane_shift);
                 const value = switch (kind) {
                     .Snorm => blk: {
-                        const signed_value: std.meta.Int(.signed, field_bits) = @bitCast(raw);
+                        const signed_value: @Int(.signed, field_bits) = @bitCast(raw);
                         break :blk @max(@as(f32, @floatFromInt(signed_value)) / snormScale(field_bits), -1.0);
                     },
                     .Unorm => @as(f32, @floatFromInt(raw)) / unormScale(field_bits),
@@ -1297,7 +1297,7 @@ fn opInterpolateAt(_: std.mem.Allocator, target_type_id: SpvWord, id: SpvWord, o
     const dst = try rt.results[id].getValue();
     const interpolant = try getPointeeOrSelf(try rt.results[try rt.it.next()].getValue());
 
-    if (opcode == @intFromEnum(ext.GLSLOp.InterpolateAtSample) or opcode == @intFromEnum(ext.GLSLOp.InterpolateAtOffset)) {
+    if (opcode == @backingInt(ext.GLSLOp.InterpolateAtSample) or opcode == @backingInt(ext.GLSLOp.InterpolateAtOffset)) {
         _ = try rt.it.next();
     }
 

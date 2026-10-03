@@ -96,7 +96,6 @@ pub fn init(allocator: std.mem.Allocator, source: []const SpvWord, options: Modu
         .extensions = std.ArrayList([]const u8).empty,
         .entry_points = std.ArrayList(SpvEntryPoint).empty,
         .bindings = std.ArrayList(BindingEntry).empty,
-        .capabilities = std.EnumSet(spv.SpvCapability).initEmpty(),
     });
     errdefer allocator.free(self.code);
     errdefer self.bindings.deinit(allocator);

@@ -1,7 +1,7 @@
 pub const spv = @import("spv");
 
 pub const SpvCBool = c_int;
-pub const SpvCWord = c_ulong;
+pub const SpvCWord = c_uint;
 pub const SpvCSize = c_ulong;
 
 pub const Result = enum(c_int) {

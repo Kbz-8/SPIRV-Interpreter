@@ -3,7 +3,7 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const use_llvm = b.option(bool, "use-llvm", "Use LLVM backend") orelse (b.release_mode != .off);
+    const use_llvm = b.option(bool, "use-llvm", "Use LLVM backend") orelse false;
 
     const spv_mod = b.addModule("spv", .{
         .root_source_file = b.path("src/lib.zig"),
